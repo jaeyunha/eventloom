@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { type ClipboardEvent, type KeyboardEvent, useState } from "react";
 import styles from "./cfp-option-list-editor.module.css";
 
@@ -8,6 +9,8 @@ interface CfpOptionListEditorProps {
   readonly onChange: (values: string[]) => void;
   readonly required?: boolean;
   readonly values: readonly string[];
+  readonly availableValues?: readonly string[] | undefined;
+  readonly manageHref?: string | undefined;
 }
 
 function normalizedOptions(input: string): string[] {
@@ -24,8 +27,18 @@ export function CfpOptionListEditor({
   onChange,
   required = false,
   values,
+  availableValues,
+  manageHref,
 }: CfpOptionListEditorProps) {
   const [draft, setDraft] = useState("");
+  const selectedKeys = new Set(values.map((value) => value.toLocaleLowerCase()));
+  const canonicalOptions = availableValues?.filter(
+    (value, index, options) =>
+      options.findIndex(
+        (candidate) => candidate.toLocaleLowerCase() === value.toLocaleLowerCase(),
+      ) === index && !selectedKeys.has(value.toLocaleLowerCase()),
+  );
+  const usesCanonicalOptions = canonicalOptions !== undefined && canonicalOptions.length > 0;
 
   function addOptions(input: string): void {
     const next = [...values];
@@ -46,6 +59,10 @@ export function CfpOptionListEditor({
     onChange(values.filter((_, candidateIndex) => candidateIndex !== index));
   }
 
+  function toggleCanonicalOption(option: string): void {
+    onChange([...values, option]);
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
     if (event.key !== "Enter" && event.key !== ",") return;
     event.preventDefault();
@@ -62,7 +79,7 @@ export function CfpOptionListEditor({
   return (
     <div className={styles.editor}>
       <div className={styles.labelRow}>
-        <label htmlFor={id}>{label}</label>
+        {usesCanonicalOptions ? <span>{label}</span> : <label htmlFor={id}>{label}</label>}
         <span>
           {values.length} option{values.length === 1 ? "" : "s"}
         </span>
@@ -70,6 +87,17 @@ export function CfpOptionListEditor({
       <p id={`${id}-description`} className={styles.description}>
         {description}
       </p>
+      {canonicalOptions !== undefined && availableValues !== undefined ? (
+        <p className={styles.description}>
+          Using the Program settings classification library.
+          {manageHref ? (
+            <>
+              {" "}
+              <Link href={manageHref}>Manage classifications</Link>
+            </>
+          ) : null}
+        </p>
+      ) : null}
       <div className={styles.composer}>
         <div className={styles.options}>
           {values.map((value, index) => (
@@ -84,19 +112,31 @@ export function CfpOptionListEditor({
               </button>
             </span>
           ))}
-          <input
-            id={id}
-            value={draft}
-            required={required && values.length === 0}
-            aria-describedby={`${id}-description`}
-            placeholder={values.length === 0 ? "Type an option and press Enter" : "Add option"}
-            onBlur={() => {
-              if (draft.trim()) addOptions(draft);
-            }}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-          />
+          {canonicalOptions?.map((option) => (
+            <button
+              className={styles.option}
+              key={option}
+              type="button"
+              onClick={() => toggleCanonicalOption(option)}
+            >
+              Add {option}
+            </button>
+          ))}
+          {canonicalOptions === undefined || canonicalOptions.length === 0 ? (
+            <input
+              id={id}
+              value={draft}
+              required={required && values.length === 0}
+              aria-describedby={`${id}-description`}
+              placeholder={values.length === 0 ? "Type an option and press Enter" : "Add option"}
+              onBlur={() => {
+                if (draft.trim()) addOptions(draft);
+              }}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+            />
+          ) : null}
         </div>
       </div>
     </div>

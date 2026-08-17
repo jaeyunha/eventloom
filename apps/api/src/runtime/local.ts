@@ -5,11 +5,16 @@ import {
 } from "@eventloom/contracts";
 import type { ApiDependencies } from "../app";
 import { AgendaCatalogSynchronizer } from "../features/agenda/catalog-sync";
-import { AgendaEngine, AgendaError } from "../features/agenda/engine";
+import {
+  AgendaEngine,
+  AgendaError,
+  DeterministicAgendaSuggestionProvider,
+} from "../features/agenda/engine";
 import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
 } from "../features/agenda/infrastructure";
+import { neutralSpeakerDisplayName } from "../features/agenda/speaker-labels";
 import type {
   AgendaEntryInput,
   AgendaRepository,
@@ -110,6 +115,7 @@ import type {
   SpeakerAccessScope,
   SpeakerAccountWorkloadRepository,
   SpeakerAsset,
+  SpeakerAssetReviewCommand,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
   SpeakerOrganizerLifecycleRepository,
@@ -124,6 +130,7 @@ import type {
   UpdateSpeakerContentCommand,
   UpdateSpeakerProfileCommand,
 } from "../features/speaker/types";
+import { selectReleasedSpeakerHeadshot } from "../infrastructure/cloudflare/repositories/published-speakers";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import type { CalendarIntegrationOptions } from "../integrations/calendar";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
@@ -146,6 +153,7 @@ import type {
 import {
   invalidatePublishedSpeakerCache,
   type PublishedSpeakerProjection,
+  publishedSpeakerPhotoPath,
 } from "../routes/public-speakers";
 import { createLocalCfpService, seedLocalCfpForm } from "./cfp";
 import { createRuntimeEventRoleInvitationAdapters } from "./d1";
@@ -1251,6 +1259,30 @@ class LocalSpeakerRepository
     return { ok: true, value: clone(finalized) };
   }
 
+  async reviewAsset(command: SpeakerAssetReviewCommand): Promise<RepositoryResult<SpeakerAsset>> {
+    this.#ensureEvent(command.eventId);
+    const assets = this.#assets.get(command.eventId) ?? [];
+    const index = assets.findIndex(({ id }) => id === command.assetId);
+    const current = assets[index];
+    if (current === undefined) return { ok: false, reason: "not_found" };
+    const reviewVersion = current.reviewVersion ?? 0;
+    if (reviewVersion !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const reviewed: SpeakerAsset = {
+      ...current,
+      reviewState: command.state,
+      ...(command.note === undefined ? {} : { reviewNote: command.note }),
+      reviewedAt: command.reviewedAt,
+      reviewedBy: command.reviewedBy,
+      reviewVersion: reviewVersion + 1,
+      ...(command.state === "approved" ? { approvedVersionId: current.id } : {}),
+      ...(command.state === "approved" && command.release ? { releasedVersionId: current.id } : {}),
+    };
+    assets[index] = reviewed;
+    return { ok: true, value: clone(reviewed) };
+  }
+
   async getContent(eventId: string, entityType: "session" | "speaker", entityId: string) {
     this.#ensureEvent(eventId);
     return clone(this.#content.get(this.#contentKey(eventId, entityType, entityId)) ?? null);
@@ -1545,6 +1577,24 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
       contentType: object.contentType,
       sizeBytes: object.bytes.byteLength,
       fileName: binding.fileName,
+    };
+  }
+
+  readPublishedObject(
+    binding: Pick<PrivateAssetCapabilityBinding, "objectKey" | "contentType" | "sizeBytes">,
+  ) {
+    const object = this.#objects.get(binding.objectKey);
+    if (
+      object === undefined ||
+      object.bytes.byteLength !== binding.sizeBytes ||
+      object.contentType.trim().toLowerCase() !== binding.contentType.trim().toLowerCase()
+    ) {
+      return null;
+    }
+    return {
+      body: this.body(object.bytes),
+      contentType: object.contentType,
+      sizeBytes: object.bytes.byteLength,
     };
   }
 
@@ -2648,8 +2698,18 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const sessionRepository = new LocalSessionRepository(speakerRepository);
+
+  const deterministicAgendaSuggestions = new DeterministicAgendaSuggestionProvider();
   const agendaMutationLock = new InMemoryAgendaMutationLock();
-  const agendaEngine = localAgendaEngine(eventRepository, agendaMutationLock, aiProviders?.agenda);
+  const agendaEngine = localAgendaEngine(
+    eventRepository,
+    agendaMutationLock,
+    aiProviders?.agenda ?? {
+      suggest: (request) => ({
+        placements: deterministicAgendaSuggestions.suggest(request)?.placements?.slice(0, 1) ?? [],
+      }),
+    },
+  );
   let sessionService!: SessionService;
   let completeApprovedRevision:
     | ((eventId: string, revision: PublishedAgendaRevision) => Promise<void>)
@@ -3422,6 +3482,64 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     const scheduledSessions = [featured, second].filter(
       (session): session is Session => session !== undefined,
     );
+    const profiles = await speakerRepository.listProfiles(
+      "demo-event",
+      acceptedSessions.flatMap(({ speakerIds }) => speakerIds),
+    );
+    const headshotProfile = profiles.find(
+      ({ participantId }) => participantId === "local-participant",
+    );
+    if (headshotProfile !== undefined) {
+      const headshotBytes = Uint8Array.from(
+        atob(
+          "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",
+        ),
+        (character) => character.charCodeAt(0),
+      );
+      const authorization = await speakerService.issueUploadGrant({
+        eventId: "demo-event",
+        accountId: LOCAL_SPEAKER_ACCOUNT_ID,
+        participantId: headshotProfile.participantId,
+        kind: "headshot",
+        fileName: "local-public-headshot.png",
+        contentType: "image/png",
+        sizeBytes: headshotBytes.byteLength,
+      });
+      const capabilitySegments = new URL(authorization.grant.url, "http://127.0.0.1").pathname
+        .split("/")
+        .filter((segment) => segment.length > 0);
+      const capabilityId = capabilitySegments.at(-2);
+      const capabilityToken = capabilitySegments.at(-1);
+      if (capabilityId === undefined || capabilityToken === undefined) {
+        throw new Error("Expected the local headshot upload capability.");
+      }
+      await speakerService.consumeUploadCapability(
+        decodeURIComponent(capabilityId),
+        decodeURIComponent(capabilityToken),
+        new Request("http://127.0.0.1/api/speaker/assets/capabilities/upload", {
+          method: "PUT",
+          headers: {
+            "content-length": String(headshotBytes.byteLength),
+            "content-type": "image/png",
+          },
+          body: headshotBytes,
+        }),
+      );
+      const headshotAsset = await speakerService.finalizeUpload({
+        eventId: "demo-event",
+        accountId: LOCAL_SPEAKER_ACCOUNT_ID,
+        assetId: authorization.asset.id,
+        state: "ready",
+      });
+      await speakerService.reviewAsset({
+        eventId: "demo-event",
+        accountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        assetId: headshotAsset.id,
+        state: "approved",
+        release: true,
+        expectedVersion: 0,
+      });
+    }
     const draft = await agendaEngine.getDraft("demo-event");
     const updated = await agendaEngine.updateDraft({
       eventId: "demo-event",
@@ -3438,15 +3556,16 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         }),
       ),
     });
+    await agendaEngine.validate({
+      eventId: "demo-event",
+      expectedVersion: updated.version,
+      actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+    });
     const revision = await agendaEngine.publish({
       eventId: "demo-event",
       actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
       expectedVersion: updated.version,
     });
-    const profiles = await speakerRepository.listProfiles(
-      "demo-event",
-      acceptedSessions.flatMap(({ speakerIds }) => speakerIds),
-    );
     publicRepository.replaceProjection(
       "events",
       events.map((event) => ({
@@ -3500,7 +3619,20 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     );
     integrationRepository.refresh();
   });
-  const speakerProjections = new Map<string, PublishedSpeakerProjection>();
+  const speakerProjections = new Map<string, Map<string, PublishedSpeakerProjection>>();
+  const speakerHeadshots = new Map<
+    string,
+    Map<
+      string,
+      Map<
+        string,
+        { assetId: string } & Pick<
+          PrivateAssetCapabilityBinding,
+          "objectKey" | "contentType" | "sizeBytes"
+        >
+      >
+    >
+  >();
   const manifestForSlug = async (eventSlug: string): Promise<ProgramPublicationManifest | null> => {
     await programGraphSeeded;
     const event = await eventRepository.findEventBySlug(LOCAL_ORGANIZATION_ID, eventSlug);
@@ -3529,8 +3661,44 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   };
   const publishedSpeakerRoutes = {
     getProgramPublicationManifest: manifestForSlug,
-    async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
-      return speakerProjections.get(eventSlug) ?? null;
+    async getPublishedSpeakers(
+      eventSlug: string,
+      speakerProjectionId?: string,
+      speakerRevisionNumber?: number,
+    ): Promise<PublishedSpeakerProjection | null> {
+      if (speakerProjectionId === undefined || speakerRevisionNumber === undefined) return null;
+      const projection = speakerProjections.get(eventSlug)?.get(speakerProjectionId) ?? null;
+      return projection?.revision.number === speakerRevisionNumber ? projection : null;
+    },
+    async getPublishedSpeakerHeadshot(
+      eventSlug: string,
+      speakerId: string,
+      _programRevision?: number,
+      speakerProjectionId?: string,
+      speakerRevisionNumber?: number,
+    ) {
+      if (speakerProjectionId === undefined || speakerRevisionNumber === undefined) return null;
+      const projection = speakerProjections.get(eventSlug)?.get(speakerProjectionId);
+      if (projection?.revision.number !== speakerRevisionNumber) return null;
+      const binding = speakerHeadshots.get(eventSlug)?.get(speakerProjectionId)?.get(speakerId);
+      if (binding === undefined) return null;
+      const published = privateAssetGateway.readPublishedObject(binding);
+      if (published === null) return null;
+      let contentType: "image/jpeg" | "image/png" | "image/webp";
+      switch (published.contentType) {
+        case "image/jpeg":
+        case "image/png":
+        case "image/webp":
+          contentType = published.contentType;
+          break;
+        default:
+          return null;
+      }
+      return {
+        body: await new Response(published.body).arrayBuffer(),
+        contentType,
+        sizeBytes: published.sizeBytes,
+      };
     },
   };
   const materializePublication = async (
@@ -3568,14 +3736,57 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         const approvedSpeakerName =
           entry.metadata?.speakerNames[speakerIndex] ??
           session.speakerRoster.find((reference) => reference.id === participantId)?.displayName;
-        if (approvedSpeakerName !== undefined) {
+        if (typeof approvedSpeakerName === "string" && approvedSpeakerName.trim().length > 0) {
           approvedSpeakerNameById.set(participantId, approvedSpeakerName);
         }
       }
     }
-    const profiles = await speakerRepository.listProfiles(event.id, [...speakerSessions.keys()]);
+    const participantIds = [...speakerSessions.keys()];
+    const [profiles, assets] = await Promise.all([
+      speakerRepository.listProfiles(event.id, participantIds),
+      speakerRepository.listAssets(event.id, participantIds),
+    ]);
     const profileById = new Map(profiles.map((profile) => [profile.participantId, profile]));
-    const servedSpeakers = speakerProjections.get(event.slug)?.speakers;
+    const selectedHeadshots = new Map(
+      profiles.flatMap((profile) => {
+        const asset = selectReleasedSpeakerHeadshot(assets, {
+          tenantId: event.organizationId,
+          eventId: event.id,
+          participantId: profile.participantId,
+          ...(profile.headshotAssetId === undefined
+            ? {}
+            : { selectedAssetId: profile.headshotAssetId }),
+        });
+        return asset === undefined
+          ? []
+          : [
+              [
+                profile.participantId,
+                {
+                  assetId: asset.id,
+                  objectKey: asset.objectKey,
+                  contentType: asset.contentType,
+                  sizeBytes: asset.sizeBytes,
+                },
+              ] as const,
+            ];
+      }),
+    );
+    const servedProjectionId = current?.servedManifest?.speakerProjectionId;
+    const servedSpeakers =
+      servedProjectionId === undefined
+        ? undefined
+        : speakerProjections.get(event.slug)?.get(servedProjectionId)?.speakers;
+    const servedHeadshots =
+      servedProjectionId === undefined
+        ? undefined
+        : speakerHeadshots.get(event.slug)?.get(servedProjectionId);
+    const headshots =
+      trigger === "approved-content-change" && servedHeadshots !== undefined
+        ? new Map(
+            [...servedHeadshots].filter(([participantId]) => speakerSessions.has(participantId)),
+          )
+        : selectedHeadshots;
     const speakers =
       trigger === "approved-content-change" && servedSpeakers !== undefined
         ? [...speakerSessions.entries()]
@@ -3589,7 +3800,10 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
               return served === undefined
                 ? {
                     id: participantId,
-                    displayName: approvedSpeakerNameById.get(participantId) ?? participantId,
+                    displayName: neutralSpeakerDisplayName(
+                      participantId,
+                      approvedSpeakerNameById.get(participantId),
+                    ),
                     pronouns: null,
                     jobTitle: null,
                     organization: null,
@@ -3611,13 +3825,18 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             const profile = profileById.get(participantId);
             return {
               id: participantId,
-              displayName:
-                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? participantId,
+              displayName: neutralSpeakerDisplayName(
+                participantId,
+                profile?.displayName,
+                approvedSpeakerNameById.get(participantId),
+              ),
               pronouns: null,
               jobTitle: profile?.jobTitle ?? null,
               organization: profile?.company ?? null,
               biography: profile?.biography ?? "",
-              photoUrl: null,
+              photoUrl: headshots.has(participantId)
+                ? publishedSpeakerPhotoPath(event.slug, participantId)
+                : null,
               sessionIds: speakerSessionList.map((session) => session.id),
               sessionTitles: speakerSessionList.map((session) => session.title),
               trackNames: [
@@ -3626,7 +3845,11 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             };
           });
     const agendaHash = await sourceHash(revision);
-    const speakerHash = await sourceHash(speakers);
+    const speakerHash = await sourceHash({
+      speakers,
+      headshots: Object.fromEntries(headshots),
+    });
+    const speakerProjectionId = `${revision.id}:${speakerHash}`;
     const nextSpeakerProjection: PublishedSpeakerProjection = {
       event: {
         slug: event.slug,
@@ -3637,7 +3860,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         venueName: event.venue,
       },
       revision: {
-        id: revision.id,
+        id: speakerProjectionId,
         number: revision.revisionNumber,
         publishedAt: revision.publishedAt,
       },
@@ -3661,7 +3884,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       agendaProjectionId: revision.id,
       agendaRevisionNumber: revision.revisionNumber,
       agendaSourceHash: agendaHash,
-      speakerProjectionId: revision.id,
+      speakerProjectionId,
       speakerRevisionNumber: revision.revisionNumber,
       speakerSourceHash: speakerHash,
       approvedContentRevision: revision.revisionNumber,
@@ -3681,9 +3904,17 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     if (releaseId === null || pendingRevision === null) {
       throw new Error("The reserved local publication is missing pending release metadata.");
     }
-    const previousSpeakerProjection = speakerProjections.get(event.slug);
+    const previousSpeakerProjections = speakerProjections.get(event.slug);
+    const previousSpeakerHeadshots = speakerHeadshots.get(event.slug);
     try {
-      speakerProjections.set(event.slug, nextSpeakerProjection);
+      speakerProjections.set(
+        event.slug,
+        new Map(previousSpeakerProjections).set(speakerProjectionId, nextSpeakerProjection),
+      );
+      speakerHeadshots.set(
+        event.slug,
+        new Map(previousSpeakerHeadshots).set(speakerProjectionId, headshots),
+      );
       await publicationService.completeRebuild({
         organizationId: event.organizationId,
         eventId: event.id,
@@ -3693,10 +3924,15 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         reservationOwnerId,
       });
     } catch (error) {
-      if (previousSpeakerProjection === undefined) {
+      if (previousSpeakerProjections === undefined) {
         speakerProjections.delete(event.slug);
       } else {
-        speakerProjections.set(event.slug, previousSpeakerProjection);
+        speakerProjections.set(event.slug, previousSpeakerProjections);
+      }
+      if (previousSpeakerHeadshots === undefined) {
+        speakerHeadshots.delete(event.slug);
+      } else {
+        speakerHeadshots.set(event.slug, previousSpeakerHeadshots);
       }
       try {
         await publicationService.failRebuild({

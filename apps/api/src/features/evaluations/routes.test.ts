@@ -74,6 +74,7 @@ function createTestHarness(
       id: "submission-1",
       tenantId: "tenant-1",
       eventId: "event-1",
+      status: "submitted",
       title: "Blind proposal",
       abstract: "Proposal details",
       answers: { identity: "Hidden", topic: "Visible" },
@@ -91,7 +92,9 @@ function createTestHarness(
   repositoryOverride?: InMemoryEvaluationRepository,
 ) {
   const repository = repositoryOverride ?? new InMemoryEvaluationRepository();
-  const source = new InMemorySubmissionReviewSource(submissionMaterials);
+  const source = new InMemorySubmissionReviewSource(
+    submissionMaterials.map((submission) => ({ status: "submitted", ...submission })),
+  );
   const service = new EvaluationService(
     repository,
     source,
@@ -153,10 +156,17 @@ async function jsonRequest(
   body: unknown,
   actor = "organizer",
 ) {
+  const requestBody =
+    body !== null &&
+    typeof body === "object" &&
+    /\/plans\/[^/]+\/(?:open|close)$/.test(path) &&
+    !("revisionSyncToken" in body)
+      ? { ...body, revisionSyncToken: crypto.randomUUID() }
+      : body;
   return app.request(path, {
     method,
     headers: { "content-type": "application/json", "x-test-actor": actor },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
   });
 }
 
@@ -356,6 +366,30 @@ describe("evaluation HTTP routes", () => {
     expect(body.submission.participants).toEqual([]);
     expect(body.submission.answers).toEqual({ topic: "Visible" });
   });
+
+  it("exposes organizer revision-family reconciliation", async () => {
+    const app = createTestApp();
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+
+    const reconciled = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/reconcile-revision-family",
+      "POST",
+      {
+        expectedVersion: 2,
+        revisionSyncToken: "11111111-1111-4111-8111-111111111111",
+      },
+    );
+
+    expect(reconciled.status).toBe(200);
+    await expect(reconciled.json()).resolves.toMatchObject({
+      id: "plan-1",
+      status: "open",
+      version: 2,
+    });
+  });
+
   it("previews deterministic distribution, rejects stale apply, and retains replacement evidence", async () => {
     const app = createTestApp();
     await jsonRequest(app, "/evaluations/plans", "POST", {
@@ -1783,5 +1817,71 @@ describe("evaluation HTTP routes", () => {
       },
     ]);
     expect(unavailable.status).toBe(503);
+  });
+
+  it("filters non-reviewable lifecycle statuses and denies their decision APIs", async () => {
+    const material = (id: string, status: string): SubmissionReviewMaterial => ({
+      id,
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      status,
+      title: `Proposal ${id}`,
+      abstract: `Abstract for ${id}.`,
+      answers: {},
+      identityFieldIds: [],
+      participants: [
+        {
+          id: `participant-${id}`,
+          displayName: `Speaker ${id}`,
+          email: `${id}@example.test`,
+          biography: `Biography for ${id}.`,
+        },
+      ],
+    });
+    const app = createTestApp(undefined, {}, [
+      material("submission-submitted", "submitted"),
+      material("submission-reopened", "reopened"),
+      material("submission-draft", "draft"),
+      material("submission-withdrawn", "withdrawn"),
+      material("submission-unknown", "legacy_review"),
+    ]);
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
+      expectedVersion: 1,
+    });
+
+    const organizerList = await app.request("/evaluations/events/event-1/submissions");
+    expect(organizerList.status).toBe(200);
+    expect(
+      ((await organizerList.json()) as Array<{ readonly id: string }>).map(({ id }) => id).sort(),
+    ).toEqual(["submission-reopened", "submission-submitted"]);
+
+    for (const submissionId of ["submission-draft", "submission-withdrawn", "submission-unknown"]) {
+      const decisionPath = `/evaluations/plans/plan-1/submissions/${submissionId}/decision`;
+      expect((await app.request(decisionPath)).status).toBe(404);
+      expect(
+        (
+          await jsonRequest(app, decisionPath, "PUT", {
+            status: "rejected",
+            reason: "This decision must not be recorded.",
+            idempotencyKey: `deny-${submissionId}`,
+          })
+        ).status,
+      ).toBe(404);
+    }
+
+    for (const submissionId of ["submission-submitted", "submission-reopened"]) {
+      const decisionPath = `/evaluations/plans/plan-1/submissions/${submissionId}/decision`;
+      expect(
+        (
+          await jsonRequest(app, decisionPath, "PUT", {
+            status: "rejected",
+            reason: "The committee completed its review.",
+            idempotencyKey: `allow-${submissionId}`,
+          })
+        ).status,
+      ).toBe(200);
+      expect((await app.request(decisionPath)).status).toBe(200);
+    }
   });
 });

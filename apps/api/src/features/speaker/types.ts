@@ -557,10 +557,17 @@ export interface SpeakerTaskUpdateInput {
   status?: SpeakerTaskStatus;
 }
 
+export interface SpeakerTaskRepositoryAudit {
+  id: string;
+  action: "speaker_task.reminder_offsets_updated";
+  previousReminderOffsetsMinutes: readonly number[];
+}
+
 export interface SpeakerTaskRepositoryCommand {
   task: SpeakerTask;
   expectedVersion: number | null;
   actorAccountId: string;
+  audit?: SpeakerTaskRepositoryAudit;
 }
 
 export type SpeakerDeliverableStatus = SpeakerTaskStatus | "pending" | "uploaded";
@@ -738,6 +745,12 @@ export interface SpeakerReminderTask {
   title: string;
   dueAt?: string;
   participantId: string;
+  /**
+   * The scheduler cadence window captured when the organizer preview was
+   * reserved. It lets transactional reminders share the scheduler's
+   * idempotency identity without recomputing mutable task state on retry.
+   */
+  cadenceWindow?: string;
 }
 
 export interface SpeakerReminderRecipient {

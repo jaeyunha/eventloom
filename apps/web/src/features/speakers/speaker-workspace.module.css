@@ -650,6 +650,20 @@
   border-bottom: 0;
 }
 
+.reminderEditor {
+  display: grid;
+  flex: 1 0 100%;
+  gap: 0.55rem;
+  width: 100%;
+  padding-top: 0.35rem;
+}
+
+.reminderDiagnostic {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.55rem 0;
+}
+
 .empty {
   min-height: 8rem;
 }

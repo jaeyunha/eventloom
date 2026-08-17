@@ -9,6 +9,8 @@ import {
   InMemoryReviewerPoolRepository,
   MemberService,
 } from "./service";
+import { InMemoryOrganizationEntitlementRepository } from "../organizations/policy";
+import type { OrganizationEntitlement } from "@eventloom/contracts";
 import type {
   MemberActor,
   MemberAuthBoundary,
@@ -120,7 +122,7 @@ function invitationLifecycle() {
   return { lifecycle, created, revokedIfUnpooled, revokedForMembers };
 }
 
-function fixture() {
+function fixture(organizationEntitlement?: OrganizationEntitlement) {
   let id = 0;
   const identity = new InMemoryMemberIdentityRepository(seed());
   const auth = new InMemoryMemberAuthBoundary({
@@ -131,9 +133,14 @@ function fixture() {
   const delivery = new InMemoryMemberInvitationDelivery();
   const pools = new InMemoryReviewerPoolRepository();
   const reviewerEventInvitations = invitationLifecycle();
+  const organizationEntitlements =
+    organizationEntitlement === undefined
+      ? undefined
+      : new InMemoryOrganizationEntitlementRepository([organizationEntitlement]);
   const service = new MemberService(
     {
       identity,
+      ...(organizationEntitlements === undefined ? {} : { organizationEntitlements }),
       auth,
       invitationDelivery: delivery,
       reviewerPools: pools,
@@ -172,6 +179,51 @@ async function error(response: Response): Promise<{ code: string; message: strin
 }
 
 describe("member provisioning service", () => {
+  it("enforces managed organizer seat limits for invitations and promotions", async () => {
+    const { identity, service } = fixture({
+      schemaVersion: 1,
+      organizationId: "org-a",
+      revision: 1,
+      state: "active",
+      capabilities: ["events.create"],
+      limits: { activeEvents: null, organizerSeats: 1 },
+      notBefore: initialNow.toISOString(),
+      expiresAt: null,
+    });
+
+    await expect(
+      service.inviteMember(actor(), {
+        organizationId: "org-a",
+        email: "new-admin@example.test",
+        role: "admin",
+        idempotencyKey: "admin-seat",
+      }),
+    ).rejects.toMatchObject({ code: "ORGANIZER_SEAT_LIMIT", status: 409 });
+
+    await identity.createUser({
+      userId: "existing-reviewer",
+      email: "existing-reviewer@example.test",
+      name: "Existing Reviewer",
+      emailVerified: true,
+      createdAt: initialNow.toISOString(),
+      updatedAt: initialNow.toISOString(),
+    });
+    await identity.createMembership({
+      organizationId: "org-a",
+      userId: "existing-reviewer",
+      role: "reviewer",
+      createdAt: initialNow.toISOString(),
+      updatedAt: initialNow.toISOString(),
+    });
+    await expect(
+      service.updateMemberRole(actor(), {
+        organizationId: "org-a",
+        userId: "existing-reviewer",
+        role: "admin",
+      }),
+    ).rejects.toMatchObject({ code: "ORGANIZER_SEAT_LIMIT", status: 409 });
+  });
+
   it("issues one idempotent setup link without retaining the plaintext token", async () => {
     const { service, auth, delivery, identity } = fixture();
     const first = await service.inviteMember(actor(), {
@@ -1030,7 +1082,7 @@ describe("member provisioning routes", () => {
     expect(replay.status).toBe(400);
   });
 
-  it("allows an authenticated user to create their first organization", async () => {
+  it("does not let the public member route bootstrap a first organization", async () => {
     const { service } = fixture();
     const currentPrincipal = principal();
     if (currentPrincipal.kind !== "user") throw new Error("Expected a user principal.");
@@ -1051,18 +1103,18 @@ describe("member provisioning routes", () => {
       },
     );
 
-    const responseBody = (await response.json()) as {
-      data?: { organizationId?: string };
-      error?: { message?: string };
-    };
-    expect(response.status, responseBody.error?.message).toBe(201);
-    expect(responseBody.data).toMatchObject({
-      organizationId: "org-first",
-    });
+    expect(response.status).toBe(404);
   });
 
-  it("creates, lists, switches, and updates a member-owned tenant context", async () => {
+  it("lists, switches, and updates a provisioned member-owned tenant context", async () => {
     const { service } = fixture();
+    await service.createOrganization(actor(), {
+      organizationId: "org-route-secondary",
+      slug: "route-secondary",
+      name: "Route Secondary",
+      config: { theme: "dark" },
+      idempotencyKey: "route-org-create",
+    });
     const app = appFor(service);
     const targetPrincipal = principal();
     if (targetPrincipal.kind !== "user") throw new Error("Expected a user principal.");
@@ -1074,21 +1126,6 @@ describe("member provisioning routes", () => {
       ],
     });
     const base = "http://localhost/api/admin/organizations/org-a/members/organizations";
-    const created = await app.request(base, {
-      method: "POST",
-      headers: { "content-type": "application/json", "idempotency-key": "route-org-create" },
-      body: JSON.stringify({
-        organizationId: "org-route-secondary",
-        slug: "route-secondary",
-        name: "Route Secondary",
-        config: { theme: "dark" },
-      }),
-    });
-    expect(created.status).toBe(201);
-    expect(await data<{ organizationId: string }>(created)).toMatchObject({
-      organizationId: "org-route-secondary",
-    });
-
     const listed = await app.request(base);
     expect(listed.status).toBe(200);
     expect(await data<readonly { organizationId: string }[]>(listed)).toEqual(
@@ -1133,8 +1170,7 @@ describe("member provisioning routes", () => {
         }),
       },
     );
-    expect(nonOwnerCreate.status).toBe(403);
-    expect(await error(nonOwnerCreate)).toMatchObject({ code: "ACCESS_DENIED" });
+    expect(nonOwnerCreate.status).toBe(404);
     const crossTenant = await appFor(service, principal("org-b", "owner", "owner-other")).request(
       base,
     );

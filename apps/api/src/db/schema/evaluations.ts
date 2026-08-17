@@ -18,8 +18,13 @@ export const reviewPlans = sqliteTable(
     id: text("id").primaryKey().notNull(),
     organizationId: text("organization_id").notNull(),
     eventId: text("event_id").notNull(),
+    predecessorPlanId: text("predecessor_plan_id"),
     name: text("name").notNull(),
     status: text("status", { enum: ["draft", "open", "closed"] }).notNull(),
+    revisionSyncPending: integer("revision_sync_pending", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    revisionSyncToken: text("revision_sync_token"),
     blindReview: integer("blind_review", { mode: "boolean" }).notNull(),
     closesAt: text("closes_at"),
     reviewsPerSubmission: integer("reviews_per_submission").notNull(),
@@ -41,6 +46,9 @@ export const reviewPlans = sqliteTable(
       table.eventId,
       table.id,
     ),
+    uniqueIndex("uq_review_plans_predecessor")
+      .on(table.organizationId, table.eventId, table.predecessorPlanId)
+      .where(sql`${table.predecessorPlanId} IS NOT NULL`),
     index("review_plans_event_status_idx").on(
       table.organizationId,
       table.eventId,
@@ -78,6 +86,7 @@ export const reviewRounds = sqliteTable(
     organizationId: text("organization_id").notNull(),
     eventId: text("event_id").notNull(),
     planId: text("plan_id").notNull(),
+    predecessorRoundId: text("predecessor_round_id"),
     name: text("name").notNull(),
     sequence: integer("sequence").notNull(),
     revision: integer("revision").notNull(),

@@ -129,7 +129,7 @@ const createPlanSchema = z.object({
   blindReview: z.boolean(),
   closesAt: evaluationInstantSchema.nullable().default(null),
   assignmentRule: assignmentRuleSchema,
-  rounds: z.array(roundSchema),
+  rounds: z.array(roundSchema).max(50),
   reviewerProjection: projectionSchema.optional(),
   evaluatorProjection: projectionSchema.optional(),
   projection: projectionSchema.optional(),
@@ -140,17 +140,22 @@ const updatePlanSchema = z.object({
   blindReview: z.boolean().optional(),
   closesAt: evaluationInstantSchema.nullable().optional(),
   assignmentRule: assignmentRuleSchema.optional(),
-  rounds: z.array(roundSchema).optional(),
+  rounds: z.array(roundSchema).max(50).optional(),
   reviewerProjection: projectionSchema.optional(),
   evaluatorProjection: projectionSchema.optional(),
   projection: projectionSchema.optional(),
 });
 
 const versionSchema = z.object({ expectedVersion: z.number().int().positive() });
+const lifecycleVersionSchema = versionSchema.extend({
+  revisionSyncToken: z.string().uuid(),
+});
+const reconciliationSchema = lifecycleVersionSchema;
 const updatePlanScheduleSchema = z
   .object({
     expectedVersion: z.number().int().positive(),
     closesAt: evaluationInstantSchema.nullable(),
+    revisionSyncToken: z.string().uuid(),
   })
   .strict();
 const distributionPreviewSchema = z.object({
@@ -791,16 +796,26 @@ export function createEvaluationRoutes(
   });
 
   routes.post("/plans/:planId/open", async (context) => {
-    const body = versionSchema.parse(await context.req.json());
+    const body = lifecycleVersionSchema.parse(await context.req.json());
     return context.json(
-      await service.openPlan(actor(context), context.req.param("planId"), body.expectedVersion),
+      await service.openPlan(
+        actor(context),
+        context.req.param("planId"),
+        body.expectedVersion,
+        body.revisionSyncToken,
+      ),
     );
   });
 
   routes.post("/plans/:planId/close", async (context) => {
-    const body = versionSchema.parse(await context.req.json());
+    const body = lifecycleVersionSchema.parse(await context.req.json());
     return context.json(
-      await service.closePlan(actor(context), context.req.param("planId"), body.expectedVersion),
+      await service.closePlan(
+        actor(context),
+        context.req.param("planId"),
+        body.expectedVersion,
+        body.revisionSyncToken,
+      ),
     );
   });
 
@@ -808,6 +823,18 @@ export function createEvaluationRoutes(
     const body = updatePlanScheduleSchema.parse(await context.req.json());
     return context.json(
       await service.updatePlanSchedule(actor(context), context.req.param("planId"), body),
+    );
+  });
+
+  routes.post("/plans/:planId/reconcile-revision-family", async (context) => {
+    const body = reconciliationSchema.parse(await context.req.json());
+    return context.json(
+      await service.reconcilePlanRevisionFamily(
+        actor(context),
+        context.req.param("planId"),
+        body.expectedVersion,
+        body.revisionSyncToken,
+      ),
     );
   });
 

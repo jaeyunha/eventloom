@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { getInvalidEnvironmentFields, readWebEnvironment } from "./env";
+import {
+  getInvalidEnvironmentFields,
+  isManagedWebDeployment,
+  organizationRequestUrl,
+  readWebEnvironment,
+  resolveWebDeploymentMode,
+} from "./env";
 
 const validEnvironment = {
   APP_ENV: "local",
@@ -21,5 +27,33 @@ describe("web environment", () => {
 
     expect(fields).toEqual(["NEXT_PUBLIC_APP_URL"]);
     expect(JSON.stringify(fields)).not.toContain("secret-invalid-value");
+  });
+
+  it("treats local as self-hosted and production as managed unless overridden", () => {
+    expect(resolveWebDeploymentMode(validEnvironment)).toBe("self-hosted");
+    expect(isManagedWebDeployment(validEnvironment)).toBe(false);
+    expect(
+      isManagedWebDeployment({
+        ...validEnvironment,
+        APP_ENV: "production",
+      }),
+    ).toBe(true);
+    expect(
+      isManagedWebDeployment({
+        ...validEnvironment,
+        APP_ENV: "production",
+        DEPLOYMENT_MODE: "self-hosted",
+      }),
+    ).toBe(false);
+  });
+
+  it("exposes an optional hosted organization-request contact URL", () => {
+    expect(organizationRequestUrl(validEnvironment)).toBeNull();
+    expect(
+      organizationRequestUrl({
+        ...validEnvironment,
+        ORGANIZATION_REQUEST_URL: "mailto:hello@eventloom.example",
+      }),
+    ).toBe("mailto:hello@eventloom.example");
   });
 });

@@ -132,7 +132,7 @@ export async function seedLocalEvaluationWorkflow(
     rounds: planTemplate.rounds,
     reviewerProjection: planTemplate.reviewerProjection,
   });
-  const openPlan = await service.openPlan(actor, draft.id, draft.version);
+  const openPlan = await service.openPlan(actor, draft.id, draft.version, crypto.randomUUID());
   await seedAssignmentsAndReviews(service, openPlan, submissions);
   await seedDecisions(service, openPlan, submissions);
 }

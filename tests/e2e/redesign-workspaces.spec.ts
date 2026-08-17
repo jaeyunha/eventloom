@@ -323,11 +323,13 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
   const organizerCard = page.locator('[data-workspace="organizer"]');
   const reviewerCard = page.locator('[data-workspace="reviewer"]');
   const participantCard = page.locator('[data-workspace="participant"]');
-  const workspaceLink = organizerCard.getByRole("link", { name: "Manage events" });
+  const workspaceLink = organizerCard.getByRole("link", {
+    name: "Open Civic Design Guild organizer workspace",
+  });
   await expect(organizerCard).toBeVisible();
   await expect(reviewerCard.getByRole("link", { name: "Review assignments" })).toBeVisible();
   await expect(participantCard.getByRole("link", { name: "View my proposals" })).toBeVisible();
-  await expect(workspaceLink).toHaveAttribute("href", "/admin");
+  await expect(workspaceLink).toHaveAttribute("href", "/admin/organizations/org-a/events");
   expect(await workspaceLink.evaluate(buttonHeight)).toBeGreaterThanOrEqual(44);
   await page.screenshot({
     path: testInfo.outputPath("account-hub-desktop.png"),
@@ -348,11 +350,14 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
 test("keeps submission content legible in dark mode", async ({ page }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem("theme", "dark"));
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto(submissionDetailUrl);
+  await page.goto(submissionsUrl);
+  const firstSubmission = page.locator(`a[href^="${submissionsUrl}/"]`).first();
+  await expect(firstSubmission).toBeVisible();
+  await Promise.all([page.waitForURL(/\/submissions\/[^/]+$/u), firstSubmission.click()]);
 
   const readableSubmissionText = [
-    page.getByText("Submission content", { exact: true }),
-    page.locator('section[aria-labelledby="abstract-heading"] > p'),
+    page.getByText("Submission overview", { exact: true }),
+    page.locator('section[aria-labelledby="submission-overview-heading"] p').first(),
     page.locator('section[aria-labelledby="timeline-heading"] ol p').first(),
   ];
   await expect(page.locator("html")).toHaveClass(/dark/);
@@ -366,7 +371,9 @@ test("keeps submission content legible in dark mode", async ({ page }, testInfo)
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobileAbstract = page.locator('section[aria-labelledby="abstract-heading"] > p');
+  const mobileAbstract = page
+    .locator('section[aria-labelledby="submission-overview-heading"] p')
+    .first();
   await expect(mobileAbstract).toBeVisible();
   await mobileAbstract.scrollIntoViewIfNeeded();
   await page.screenshot({
@@ -1413,5 +1420,321 @@ test("reviewers renders a bounded assignment index with one replacement editor",
   expect(overviewKickerBox).not.toBeNull();
   expect(overviewKickerBox?.y ?? 0).toBeGreaterThanOrEqual(
     (tabListBox?.y ?? 0) + (tabListBox?.height ?? 0) + 4,
+  );
+});
+
+test("switching submissions resets decision state before the next human decision", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.goto(organizerReviewsUrl);
+  await page.getByRole("tab", { name: "Results" }).click();
+  await page.getByLabel("Decision status").selectOption("all");
+  await page.getByLabel("Rows shown").selectOption("300");
+
+  const acceptedRow = page
+    .locator("tbody tr")
+    .filter({ hasText: "Measuring product outcomes that earn trust without the hand-waving" });
+  const rejectedRow = page.locator("tbody tr").filter({
+    hasText: "Sustainable open-source communities with measurable outcomes without the hand-waving",
+  });
+  await expect(acceptedRow).toBeVisible();
+  await expect(rejectedRow).toBeVisible();
+
+  await acceptedRow.getByRole("button", { name: "Review" }).click();
+  const acceptedEditor = page.locator("#decision-editor-submission_local_250");
+  await acceptedEditor.getByRole("combobox", { name: "Decision" }).selectOption("accepted");
+  await acceptedEditor
+    .getByRole("textbox", { name: /Written reason/u })
+    .fill("Accepted first to reproduce the organizer decision sequence.");
+  await acceptedEditor
+    .getByRole("checkbox", { name: /I confirm this is a human organizer decision/u })
+    .check();
+  await acceptedEditor.getByRole("button", { name: "Confirm human decision" }).click();
+  await expect(acceptedEditor.getByRole("status")).toContainText("Decision saved.");
+
+  await rejectedRow.getByRole("button", { name: "Review" }).click();
+  const rejectedEditor = page.locator("#decision-editor-submission_local_260");
+  await expect(rejectedEditor.getByRole("combobox", { name: "Decision" })).toHaveValue("");
+  await expect(rejectedEditor.getByRole("textbox", { name: /Written reason/u })).toHaveValue("");
+  await expect(
+    rejectedEditor.getByRole("checkbox", {
+      name: /I confirm this is a human organizer decision/u,
+    }),
+  ).not.toBeChecked();
+  await expect(rejectedEditor).not.toContainText("Decision saved.");
+
+  await rejectedEditor.getByRole("combobox", { name: "Decision" }).selectOption("rejected");
+  await rejectedEditor
+    .getByRole("textbox", { name: /Written reason/u })
+    .fill("Rejected second after switching from the accepted proposal.");
+  await rejectedEditor
+    .getByRole("checkbox", { name: /I confirm this is a human organizer decision/u })
+    .check();
+  await rejectedEditor.getByRole("button", { name: "Confirm human decision" }).click();
+  await expect(rejectedEditor.getByRole("status")).toContainText("Decision saved.");
+
+  await page.reload();
+  await page.getByRole("tab", { name: "Results" }).click();
+  await page.getByLabel("Decision status").selectOption("all");
+  await page.getByLabel("Rows shown").selectOption("300");
+  await expect(acceptedRow).toContainText("Accepted");
+  await expect(rejectedRow).toContainText("Rejected");
+});
+
+test("returning to a saved submission preserves and amends its current decision", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.goto(organizerReviewsUrl);
+  await page.getByRole("tab", { name: "Results" }).click();
+  await page.getByLabel("Decision status").selectOption("all");
+  await page.getByLabel("Rows shown").selectOption("300");
+
+  const acceptedRow = page.locator("tbody tr").filter({
+    hasText: "Leading through organizational change for distributed teams without the hand-waving",
+  });
+  const otherRow = page.locator("tbody tr").filter({
+    hasText: "Practical AI governance without slowing delivery without the hand-waving",
+  });
+  await expect(acceptedRow).toBeVisible();
+  await expect(otherRow).toBeVisible();
+
+  await acceptedRow.getByRole("button", { name: "Review" }).click();
+  const initialEditor = page.locator("#decision-editor-submission_local_270");
+  await initialEditor.getByRole("combobox", { name: "Decision" }).selectOption("accepted");
+  await initialEditor
+    .getByRole("textbox", { name: /Written reason/u })
+    .fill("Accepted after the committee completed its first review.");
+  await initialEditor
+    .getByRole("checkbox", { name: /I confirm this is a human organizer decision/u })
+    .check();
+  const firstSaveResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      response.url().includes("/submissions/submission_local_270/decision"),
+  );
+  await initialEditor.getByRole("button", { name: "Confirm human decision" }).click();
+  const firstSavedDecision = (await (await firstSaveResponse).json()) as {
+    readonly version: number;
+  };
+  expect(firstSavedDecision.version).toBeGreaterThan(0);
+  await expect(acceptedRow).toContainText("Accepted");
+
+  await page.getByLabel("Decision status").selectOption("accepted");
+  await expect(acceptedRow).toBeVisible();
+  await expect(otherRow).toBeHidden();
+  await page.getByLabel("Decision status").selectOption("all");
+
+  await otherRow.getByRole("button", { name: "Review" }).click();
+  await expect(page.locator("#decision-editor-submission_local_280")).toBeVisible();
+  await acceptedRow.getByRole("button", { name: "Review" }).click();
+
+  const returnedEditor = page.locator("#decision-editor-submission_local_270");
+  await expect(returnedEditor.getByRole("combobox", { name: "Decision" })).toHaveValue("accepted");
+  await expect(returnedEditor.getByRole("textbox", { name: /Written reason/u })).toHaveValue(
+    "Accepted after the committee completed its first review.",
+  );
+  const returnedConfirmation = returnedEditor.getByRole("checkbox", {
+    name: /I confirm this is a human organizer decision/u,
+  });
+  await expect(returnedConfirmation).not.toBeChecked();
+  await returnedConfirmation.check();
+  await returnedEditor
+    .getByRole("textbox", { name: /Written reason/u })
+    .fill("Accepted after final committee confirmation.");
+  const amendmentResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      response.url().includes("/submissions/submission_local_270/decision"),
+  );
+  await returnedEditor.getByRole("button", { name: "Confirm human decision" }).click();
+  const amendedDecision = (await (await amendmentResponse).json()) as {
+    readonly status: string;
+    readonly version: number;
+  };
+  expect(amendedDecision).toMatchObject({
+    status: "accepted",
+    version: firstSavedDecision.version + 1,
+  });
+  await expect(returnedEditor.getByRole("status")).toContainText("Decision saved.");
+
+  await page.reload();
+  await page.getByRole("tab", { name: "Results" }).click();
+  await page.getByLabel("Decision status").selectOption("all");
+  await page.getByLabel("Rows shown").selectOption("300");
+  await expect(acceptedRow).toContainText("Accepted");
+  await acceptedRow.getByRole("button", { name: "Review" }).click();
+  const reloadedEditor = page.locator("#decision-editor-submission_local_270");
+  await expect(reloadedEditor.getByRole("combobox", { name: "Decision" })).toHaveValue("accepted");
+  await expect(reloadedEditor.getByRole("textbox", { name: /Written reason/u })).toHaveValue(
+    "Accepted after final committee confirmation.",
+  );
+});
+
+test("submission decisions remain usable when optional review details fail", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.route(
+    "**/api/admin/evaluations/organizer/workspace?eventId=demo-event",
+    async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { message: "Optional organizer review details are unavailable." },
+        }),
+      });
+    },
+  );
+
+  const fallbackPlanResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      response.url().includes("/api/admin/evaluations/plans?eventId=demo-event"),
+  );
+  const fallbackDecisionResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      response.url().includes("/submissions/submission_local_290/decision"),
+  );
+  await page.goto(
+    `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/submissions/submission_local_290`,
+  );
+  await Promise.all([fallbackPlanResponse, fallbackDecisionResponse]);
+  await page.waitForLoadState("networkidle");
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await expect(
+    page.getByRole("region", { name: "Review score summary" }).getByRole("alert"),
+  ).toContainText("Review data is unavailable");
+  const outcome = page.getByRole("combobox", { name: "Decision outcome" });
+  const reason = page.getByRole("textbox", { name: "Human-authored decision reason" });
+  await expect(outcome).toHaveValue("");
+  await expect(reason).toHaveValue("");
+  await expect(outcome).toBeEnabled();
+  await expect(reason).toBeEnabled();
+  await outcome.selectOption("waitlisted");
+  await reason.fill("Waitlisted while the final program capacity is confirmed.");
+  await expect(
+    outcome.locator("xpath=ancestor::form").locator('button[type="submit"]'),
+  ).toBeEnabled();
+  await expect(
+    outcome
+      .locator("xpath=ancestor::form")
+      .evaluate((form) => (form as HTMLFormElement).checkValidity()),
+  ).resolves.toBe(true);
+  const savedDecisionResponse = await page.request.put(
+    "/api/admin/evaluations/plans/local-evaluation-plan/submissions/submission_local_290/decision",
+    {
+      data: {
+        status: "waitlisted",
+        reason: "Waitlisted while the final program capacity is confirmed.",
+        idempotencyKey: "degraded-create-decision-v1",
+      },
+    },
+  );
+  expect(savedDecisionResponse.ok()).toBe(true);
+  const savedDecision = (await savedDecisionResponse.json()) as {
+    readonly status: string;
+    readonly version: number;
+  };
+  expect(savedDecision).toMatchObject({ status: "waitlisted", version: 1 });
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "Decision outcome" })).toHaveValue("waitlisted");
+  await expect(page.getByRole("textbox", { name: "Human-authored decision reason" })).toHaveValue(
+    "Waitlisted while the final program capacity is confirmed.",
+  );
+});
+
+test("existing decisions remain amendable when optional review details fail", async ({ page }) => {
+  test.setTimeout(90_000);
+  const initialResponse = await page.request.put(
+    `/api/admin/evaluations/plans/local-evaluation-plan/submissions/submission_local_300/decision`,
+    {
+      data: {
+        status: "accepted",
+        reason: "Accepted before optional review details became unavailable.",
+        confirmedByHuman: true,
+        idempotencyKey: "degraded-existing-decision-v1",
+      },
+    },
+  );
+  expect(initialResponse.ok()).toBe(true);
+  expect(await initialResponse.json()).toMatchObject({ status: "accepted", version: 1 });
+  const persistedResponse = await page.request.get(
+    `/api/admin/evaluations/plans/local-evaluation-plan/submissions/submission_local_300/decision`,
+  );
+  expect(persistedResponse.ok()).toBe(true);
+  expect(await persistedResponse.json()).toMatchObject({
+    status: "accepted",
+    version: 1,
+    history: [
+      expect.objectContaining({
+        reason: "Accepted before optional review details became unavailable.",
+      }),
+    ],
+  });
+  let resolveDegradedDecisionLoad: (() => void) | undefined;
+  const degradedDecisionLoaded = new Promise<void>((resolve) => {
+    resolveDegradedDecisionLoad = resolve;
+  });
+  await page.route(
+    "**/api/admin/evaluations/plans/*/submissions/submission_local_300/decision",
+    async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      expect(await response.json()).toMatchObject({
+        status: "accepted",
+        version: 1,
+        history: [
+          expect.objectContaining({
+            reason: "Accepted before optional review details became unavailable.",
+          }),
+        ],
+      });
+      await route.fulfill({ response });
+      resolveDegradedDecisionLoad?.();
+    },
+  );
+  await page.route(
+    "**/api/admin/evaluations/organizer/workspace?eventId=demo-event",
+    async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { message: "Optional organizer review details are unavailable." },
+        }),
+      });
+    },
+  );
+  await page.goto(
+    `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/submissions/submission_local_300`,
+  );
+  await degradedDecisionLoaded;
+
+  const outcome = page.getByRole("combobox", { name: "Decision outcome" });
+  const reason = page.getByRole("textbox", { name: "Human-authored decision reason" });
+  await expect(outcome).toHaveValue("accepted");
+  await expect(reason).toHaveValue("Accepted before optional review details became unavailable.");
+  await expect(outcome).toBeEnabled();
+  await reason.fill("Accepted after the organizer confirmed the degraded-path amendment.");
+  const [amendmentResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().includes("/submissions/submission_local_300/decision"),
+    ),
+    page.getByRole("button", { name: "Save accept decision and queue notifications" }).click(),
+  ]);
+  expect(await amendmentResponse.json()).toMatchObject({
+    status: "accepted",
+    version: 2,
+  });
+  await expect(reason).toHaveValue(
+    "Accepted after the organizer confirmed the degraded-path amendment.",
   );
 });

@@ -39,6 +39,8 @@ import type {
   SpeakerReminderEligibilityEnvelope,
   SpeakerRosterEnvelope,
   SpeakerSession,
+  SpeakerTask,
+  SpeakerTaskReminderOffsetsResult,
 } from "./api";
 import type { DuplicateEmailConflict } from "./speaker-data-logic";
 import type { SpeakerAttentionFilter } from "./speaker-roster-logic";
@@ -357,6 +359,12 @@ function SpeakerTasksView({
     reminderEligibility: SpeakerReminderEligibilityEnvelope | null;
     eligibleItems: readonly SpeakerReminderEligibilityEnvelope["items"][number][];
     ineligibleItems: readonly SpeakerReminderEligibilityEnvelope["items"][number][];
+    tasks: readonly SpeakerTask[];
+    onSaveOffsets: (
+      taskId: string,
+      expectedVersion: number,
+      reminderOffsetsMinutes: readonly number[],
+    ) => Promise<SpeakerTaskReminderOffsetsResult>;
   }>;
   reminderSectionRef: RefObject<HTMLDivElement | null>;
 }>) {

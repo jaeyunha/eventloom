@@ -26,6 +26,8 @@ const configuration = {
   AIRTABLE_OAUTH_CLIENT_SECRET: "airtable-oauth-secret",
   AIRTABLE_CREDENTIAL_ENCRYPTION_KEY: "airtable-encryption-secret",
   CACHE_INVALIDATION_TOKEN: "cache-invalidation-secret",
+  ORGANIZATION_PROVISIONING_TOKEN: "organization-provisioning-secret",
+  ORGANIZATION_BOOTSTRAP_TOKEN: "organization-bootstrap-secret",
 };
 
 test("defines separate fixed staging and production entrypoints", () => {
@@ -43,6 +45,8 @@ test("targets every application Worker secret without deployment credentials", (
     "AIRTABLE_OAUTH_CLIENT_SECRET",
     "AIRTABLE_CREDENTIAL_ENCRYPTION_KEY",
     "CACHE_INVALIDATION_TOKEN",
+    "ORGANIZATION_PROVISIONING_TOKEN",
+    "ORGANIZATION_BOOTSTRAP_TOKEN",
   ]);
   assert.deepEqual(WEB_SECRET_NAMES, ["CACHE_INVALIDATION_TOKEN"]);
 

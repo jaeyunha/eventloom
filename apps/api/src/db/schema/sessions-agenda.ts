@@ -257,6 +257,8 @@ export const agendaStates = sqliteTable(
     stateVersion: integer("state_version").notNull(),
     timeZone: text("time_zone").notNull(),
     minimumTravelMinutes: integer("minimum_travel_minutes").notNull(),
+    validatedDraftVersion: integer("validated_draft_version"),
+    validatedAt: text("validated_at"),
     currentPublishedRevisionId: text("current_published_revision_id"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -266,6 +268,10 @@ export const agendaStates = sqliteTable(
     check(
       "agenda_states_versions_check",
       sql`${table.stateVersion} > 0 AND ${table.minimumTravelMinutes} >= 0`,
+    ),
+    check(
+      "agenda_states_validation_marker_check",
+      sql`(${table.validatedDraftVersion} IS NULL AND ${table.validatedAt} IS NULL) OR (${table.validatedDraftVersion} > 0 AND length(trim(${table.validatedAt})) > 0)`,
     ),
   ],
 );

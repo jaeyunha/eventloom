@@ -16,6 +16,7 @@ import {
   isCfpCloseDatePast,
   loadCfpEditorConfiguration,
   persistCfpConfiguration,
+  removeCfpEditorField,
   resolveCfpEditorStepIndex,
   selectEditorForm,
   summarizeRule,
@@ -23,6 +24,7 @@ import {
   updateCfpEditorField,
   updateCfpShowWhenCondition,
   validateCfpDateRange,
+  withCoreProposalFields,
 } from "./cfp-editor-model";
 
 describe("CFP editor", () => {
@@ -917,5 +919,79 @@ describe("CFP editor", () => {
     const form = toFormConfiguration(configuration, "ai-engineer", "devflow-conf-2027");
     expect(form.submissionFields.map((field) => field.key)).not.toContain("tags");
     expect(form.submissionFields.map((field) => field.key)).not.toContain("level");
+  });
+
+  it("locks the canonical session title field key and prevents removal", () => {
+    const configuration = withCoreProposalFields(
+      createTestCfpConfiguration("devflow-conf-2027").fields,
+    );
+    const base = {
+      ...createTestCfpConfiguration("devflow-conf-2027"),
+      fields: configuration,
+    };
+    const title = base.fields.find((field) => field.key === "title");
+    expect(title).toMatchObject({
+      key: "title",
+      system: true,
+      keyLocked: true,
+      required: true,
+    });
+    expect(title?.id).toBeTruthy();
+    if (title === undefined) throw new Error("The test CFP title field is missing.");
+
+    const renamed = updateCfpEditorField(base, title.id, {
+      key: "title1",
+      label: "Session title 1",
+      required: false,
+    });
+    const renamedTitle = renamed.fields.find((field) => field.id === title.id);
+    expect(renamedTitle).toMatchObject({
+      key: "title",
+      label: "Session title 1",
+      required: true,
+      system: true,
+      keyLocked: true,
+    });
+
+    const withoutTitle = removeCfpEditorField(renamed, title.id);
+    expect(withoutTitle.fields.some((field) => field.key === "title")).toBe(true);
+
+    const customClaim = updateCfpEditorField(renamed, "abstract", { key: "title" });
+    expect(customClaim.fields.find((field) => field.id === "abstract")?.key).toBe("abstract");
+  });
+
+  it("repairs a mis-keyed title field when loading core proposal fields", () => {
+    const repaired = withCoreProposalFields([
+      {
+        id: "title",
+        key: "title1",
+        label: "Session title 1",
+        type: "text",
+        required: true,
+        visible: true,
+        placeholder: "",
+        options: [],
+      },
+      {
+        id: "abstract",
+        key: "abstract",
+        label: "Abstract",
+        type: "textarea",
+        required: false,
+        visible: true,
+        placeholder: "",
+        options: [],
+      },
+    ]);
+
+    const title = repaired.find((field) => field.id === "title");
+    expect(title).toMatchObject({
+      key: "title",
+      label: "Session title 1",
+      system: true,
+      keyLocked: true,
+      required: true,
+    });
+    expect(repaired.filter((field) => field.key === "title")).toHaveLength(1);
   });
 });

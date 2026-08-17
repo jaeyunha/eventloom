@@ -61,6 +61,7 @@ Use loopback addresses consistently for local browser, callback, and API configu
 
 ```dotenv
 APP_ENV=local
+DEPLOYMENT_MODE=self-hosted
 WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
@@ -68,6 +69,7 @@ API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 BETTER_AUTH_URL=http://127.0.0.1:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
+ORGANIZATION_PROVISIONING_TOKEN=<backend-only-operator-token>
 OPENSEND_API_URL=http://127.0.0.1:8026
 OPENSEND_API_KEY=local-development
 AUTH_FROM_EMAIL=login@local.example.test
@@ -93,12 +95,86 @@ administration is composed only when its organization-scoped integration
 configuration is enabled; manual PAT mode must also be explicitly enabled and
 is not the hosted-production default.
 
-Apply local D1 migrations and start both services from the repository root:
+### Organization provisioning modes
 
-```bash
-bunx wrangler d1 migrations apply DB --cwd apps/api --local
-make dev
+`DEPLOYMENT_MODE` is independent from `APP_ENV`:
+
+- `self-hosted` can expose the first-organization bootstrap route when
+  `ORGANIZATION_BOOTSTRAP_TOKEN` is configured.
+- Both modes keep organization creation outside existing organization
+  workspaces. Operators provision organizations through the authenticated
+  internal route using `ORGANIZATION_PROVISIONING_TOKEN`.
+
+`/work` is the account-level workspace chooser. A person who belongs to multiple
+organizations sees each authorized organization there with its own destination
+action. Creating another organization never happens from inside an existing
+organization Settings page.
+
+Use separate backend-only credentials:
+
+- `ORGANIZATION_BOOTSTRAP_TOKEN` authorizes only
+  `POST /api/setup/organizations/bootstrap` via `X-Eventloom-Bootstrap-Token`
+  for an authenticated verified user without memberships.
+- `ORGANIZATION_PROVISIONING_TOKEN` authorizes
+  `POST /api/internal/organizations` and
+  `PUT /api/internal/organizations/:organizationId/entitlement` via
+  `Authorization: Bearer <token>`. The request supplies the stable owner user ID
+  and a provider-neutral organization entitlement. Managed event creation
+  requires the `events.create` capability; `limits.activeEvents` and
+  `limits.organizerSeats` bound non-retired events and owner/admin seats,
+  respectively. Reusing the same
+  `Idempotency-Key` with the same payload returns the original result.
+
+Local development defaults to `self-hosted`. Staging and production Wrangler
+configuration defaults to `managed`. Leaving a token unset keeps the matching
+routes unmounted.
+
+On managed/hosted deployments, `/work` shows a contact message when the account
+has no organization workspace yet. Set optional `ORGANIZATION_REQUEST_URL`
+(for example `mailto:hello@example.com` or a scheduling link) to attach a CTA.
+Self-hosted deployments do not show that hosted contact prompt. Install the secrets with the Cloudflare Worker secret sync for
+any environment that must provision organizations.
+
+Managed multi-organization hosting for third parties is a licensor/hosted-service
+concern under Elastic License 2.0. Self-hosters may run Eventloom for their own
+organizations; using managed mode to offer Eventloom as a hosted service to
+third parties is outside the permitted licensee use.
+
+
+Concurrent worktrees must use distinct listeners, browser hostnames, local persistence, caches,
+and Docker Compose projects. A dedicated `*.localhost` web hostname is required because browser
+cookies are scoped by hostname rather than port. For example:
+
+```dotenv
+WEB_PORT=3045
+WEB_ORIGIN=http://product-evaluation-loop.localhost:3045
+NEXT_PUBLIC_APP_URL=http://product-evaluation-loop.localhost:3045
+NEXT_DIST_DIR=.next-product-evaluation-loop
+
+API_PORT=8987
+API_INSPECTOR_PORT=9287
+API_URL=http://127.0.0.1:8987
+API_ORIGIN=http://127.0.0.1:8987
+API_UPSTREAM_ORIGIN=http://127.0.0.1:8987
+BETTER_AUTH_URL=http://product-evaluation-loop.localhost:3045
+WRANGLER_PERSIST_TO=.wrangler/state-product-evaluation-loop
+
+COMPOSE_PROJECT_NAME=open-sessionboard-product-evaluation-loop
+MAILPIT_SMTP_PORT=1125
+MAILPIT_HTTP_PORT=8125
+OPENSEND_BRIDGE_PORT=8126
+OPENSEND_API_URL=http://127.0.0.1:8126
+
+PLAYWRIGHT_WEB_PORT=3046
+PLAYWRIGHT_API_PORT=8988
+PLAYWRIGHT_API_INSPECTOR_PORT=9288
+PLAYWRIGHT_NEXT_DIST_DIR=.next-playwright-product-evaluation-loop
 ```
+
+`WRANGLER_PERSIST_TO` contains local D1, Durable Object, R2, and Queue state. `NEXT_DIST_DIR`
+contains the Next.js development build and data cache. Playwright uses a separate Next
+distribution directory and an ephemeral Wrangler persistence directory, so end-to-end tests can
+run without reading or mutating the integrated development state.
 
 ### Integrated local accounts
 
@@ -148,6 +224,9 @@ Run the web app separately with `NEXT_PUBLIC_RUNTIME_PROFILE=fixture`. Use organ
 - Inbox/API: `http://127.0.0.1:8025`
 - SMTP: `127.0.0.1:1025`
 - OpenSend-compatible bridge: `http://127.0.0.1:8026`
+
+These are defaults. Concurrent worktrees should override `MAILPIT_HTTP_PORT`,
+`MAILPIT_SMTP_PORT`, and `OPENSEND_BRIDGE_PORT` as shown above.
 
 Check each service independently:
 
@@ -331,7 +410,7 @@ generation/checking; Wrangler is the only supported numbered migration applicati
 ```bash
 bun run --cwd apps/api db:generate
 bun run --cwd apps/api db:check
-bunx wrangler d1 migrations apply DB --cwd apps/api --local
+make db-local
 ```
 
 Do not mix `drizzle-kit migrate` with Wrangler's `d1_migrations` history. Airtable is

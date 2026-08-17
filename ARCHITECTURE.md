@@ -37,6 +37,19 @@ The exported runtime composes D1 repositories for supported product domains. Air
 
 ## Data and coordination boundaries
 
+Managed versus self-hosted composition is selected server-side by
+`DEPLOYMENT_MODE`. The product API enforces provider-neutral organization
+entitlements stored in D1 (`organization_entitlements`) and never reads billing
+provider state. Organization creation is not a public member mutation: operators
+call authenticated internal provisioning routes, while self-hosted
+first-organization bootstrap uses a distinct operator credential. `/work`
+remains the account-level chooser that lists each authorized organization
+destination. Event creation reserves entitlement event capacity in the same
+authoritative D1 transaction as the event write. High-privilege idempotent
+mutations fence D1 idempotency leases so expired in-flight operations cannot
+complete after a newer claim.
+
+
 ### D1 business and operational authority
 
 Cloudflare D1 is the authoritative store for tenant, program, identity, and operational state: organizations and memberships; events, CFP, submissions, speakers, evaluations, sessions, and agenda; communications, reports, CRM, remix, and publication; authentication, API credentials, audit, idempotency, customer webhooks, integration state, and delivery coordination. Supported runtime repositories resolve these records from D1, and ordinary product traffic does not read Airtable or wait for it.

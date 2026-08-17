@@ -8,10 +8,19 @@ import type { WorkHubModel } from "./work-hub-model";
 const fullModel: WorkHubModel = {
   identity: { id: "user-1", email: "casey@example.com", name: "Casey Morgan" },
   organizer: {
-    organizationCount: 1,
-    organizationNames: ["Civic Design Guild"],
-    continueHref: "/admin/organizations/org-a/events",
-    continueLabel: "Continue with Civic Design Guild",
+    organizationCount: 2,
+    organizations: [
+      {
+        organizationId: "org-a",
+        name: "Civic Design Guild",
+        href: "/admin/organizations/org-a/events",
+      },
+      {
+        organizationId: "org-b",
+        name: "Open Research Network",
+        href: "/admin/organizations/org-b/events",
+      },
+    ],
   },
   reviewer: {
     assignmentCount: 3,
@@ -29,14 +38,44 @@ const fullModel: WorkHubModel = {
 };
 
 describe("WorkHubView", () => {
+  it("shows a hosted organization-request message only for managed empty accounts", () => {
+    const emptyModel: WorkHubModel = {
+      identity: { id: "user-1", email: "casey@example.com", name: "Casey Morgan" },
+      organizer: null,
+      reviewer: null,
+      participant: null,
+    };
+
+    const managed = renderToStaticMarkup(
+      createElement(WorkHubView, {
+        model: emptyModel,
+        organizationRequest: { contactUrl: "mailto:hello@eventloom.example" },
+      }),
+    );
+    const selfHosted = renderToStaticMarkup(createElement(WorkHubView, { model: emptyModel }));
+
+    expect(managed).toContain("No organization workspace yet");
+    expect(managed).toContain("Contact Eventloom");
+    expect(managed).toContain("mailto:hello@eventloom.example");
+    expect(managed).not.toContain("deployment operator");
+
+    expect(selfHosted).toContain("No assigned work yet");
+    expect(selfHosted).toContain("deployment operator");
+    expect(selfHosted).not.toContain("Contact Eventloom");
+  });
+
   it("renders every authorized workspace with destination-specific calls to action", () => {
     const markup = renderToStaticMarkup(createElement(WorkHubView, { model: fullModel }));
 
     expect(markup).toContain("Organizer workspace");
+    expect(markup).toContain("One account · 4 workspaces");
     expect(markup).toContain("Reviewer workspace");
     expect(markup).toContain("Participant workspace");
-    expect(markup).toContain("Manage events");
-    expect(markup).toContain("Continue with Civic Design Guild");
+    expect(markup).toContain("Civic Design Guild");
+    expect(markup).toContain("Open Research Network");
+    expect(markup).toContain("/admin/organizations/org-a/events");
+    expect(markup).toContain("/admin/organizations/org-b/events");
+    expect(markup).toContain("Open organizer workspace");
     expect(markup).toContain("Continue reviews");
     expect(markup).toContain("View my proposals");
     expect(markup).toContain("Complete speaker tasks");
@@ -119,7 +158,7 @@ describe("WorkHubView", () => {
 
     expect(markup).toContain('href="/review?eventId=event%2Freview"');
     expect(markup).toContain('href="/portal?event=event%2Fspeaker"');
-    expect(markup).toContain("One account · 5 workspaces");
+    expect(markup).toContain("One account · 6 workspaces");
     expect(markup.match(/>Open workspace</g)).toHaveLength(2);
     expect(markup).not.toContain(">Accept<");
     expect(markup).not.toContain(">Decline<");
@@ -224,7 +263,13 @@ describe("loadWorkHubModel", () => {
 
     const model = await loadWorkHubModel(fetcher, undefined, "org-a");
 
-    expect(model?.organizer?.organizationNames).toEqual(["Civic Design Guild"]);
+    expect(model?.organizer?.organizations).toEqual([
+      {
+        organizationId: "org-a",
+        name: "Civic Design Guild",
+        href: "/admin/organizations/org-a/events",
+      },
+    ]);
     expect(model?.reviewer).toMatchObject({
       assignmentCount: 2,
       organizationNames: ["Civic Design Guild", "Open Research Network"],
@@ -282,8 +327,13 @@ describe("loadWorkHubModel", () => {
     const model = await loadWorkHubModel(fetcher, undefined, "org-a");
 
     expect(model?.organizer).toMatchObject({
-      organizationNames: ["Civic Design Guild"],
-      continueHref: "/admin/organizations/org-a/events",
+      organizations: [
+        {
+          organizationId: "org-a",
+          name: "Civic Design Guild",
+          href: "/admin/organizations/org-a/events",
+        },
+      ],
     });
     expect(model?.invitations).toEqual([]);
   });

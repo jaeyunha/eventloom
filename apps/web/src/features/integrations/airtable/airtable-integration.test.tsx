@@ -108,6 +108,8 @@ describe("airtable integration UI", () => {
     expect(markup).toContain("projection will stop");
     expect(markup).toContain('aria-label="Pause Airtable projection"');
     expect(markup).toContain('aria-label="Disconnect Airtable from this organization"');
+    expect(markup).toContain('for="airtable-confirm-disconnect"');
+    expect(markup).toContain('id="airtable-confirm-disconnect"');
     expect(markup).not.toContain(">Resume<");
     expect(markup).not.toContain(">Reauthorize<");
   });

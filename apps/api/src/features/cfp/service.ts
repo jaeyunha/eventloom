@@ -2,6 +2,7 @@ import { localDateInTimeZone } from "@eventloom/contracts";
 import {
   type AuditEntry,
   type CfpForm,
+  cfpFormSchema,
   type EventCfp,
   eventCfpSchema,
   type FormField,
@@ -474,6 +475,44 @@ function allowedMimeType(allowed: string, actual: string): boolean {
       normalizedActual.startsWith(normalizedAllowed.slice(0, -1)))
   );
 }
+function looksLikeTitleField(field: FormField): boolean {
+  const key = field.key.trim().toLocaleLowerCase();
+  const label = field.label.trim().toLocaleLowerCase();
+  if (key === "title" || field.id === "title") return true;
+  if (key === "title1" || key.startsWith("title-") || key.endsWith("-title")) return true;
+  return label === "title" || label === "session title" || label.startsWith("session title");
+}
+
+/**
+ * Normalize mis-keyed title fields before validation so broken organizer configs
+ * can be repaired instead of permanently blocking applicants.
+ */
+function normalizeCanonicalTitleFields(form: CfpForm): CfpForm {
+  const titleByKey = form.submissionFields.filter((field) => field.key === "title");
+  if (titleByKey.length >= 1) return form;
+
+  const titleById = form.submissionFields.find((field) => field.id === "title");
+  if (titleById) {
+    return {
+      ...form,
+      submissionFields: form.submissionFields.map((field) =>
+        field.id === titleById.id ? { ...field, key: "title" } : field,
+      ),
+    };
+  }
+
+  const titleLike = form.submissionFields.filter((field) => looksLikeTitleField(field));
+  if (titleLike.length !== 1) return form;
+  const target = titleLike[0];
+  if (target === undefined) return form;
+  return {
+    ...form,
+    submissionFields: form.submissionFields.map((field) =>
+      field.id === target.id ? { ...field, key: "title" } : field,
+    ),
+  };
+}
+
 function sanitizeDynamicForm(form: CfpForm): CfpForm {
   const sanitizeField = (field: FormField): FormField => ({
     ...field,
@@ -484,11 +523,11 @@ function sanitizeDynamicForm(form: CfpForm): CfpForm {
       ? {}
       : { placeholder: sanitizePlainText(field.placeholder) }),
   });
-  return {
+  return normalizeCanonicalTitleFields({
     ...form,
     submissionFields: form.submissionFields.map(sanitizeField),
     participantFields: form.participantFields.map(sanitizeField),
-  };
+  });
 }
 
 function publicFormRules(form: CfpForm): PublicFormRule[] {
@@ -1101,7 +1140,13 @@ export class CfpService {
   }
 
   async saveForm(input: unknown, expectedVersion: number | null): Promise<CfpForm> {
-    const validation = validateCfpForm(input);
+    // Repair unambiguous mis-keyed title fields before validation so organizers
+    // can save a previously broken form without a dead-end applicant flow.
+    const prevalidated = cfpFormSchema.safeParse(input);
+    const candidate = prevalidated.success
+      ? normalizeCanonicalTitleFields(prevalidated.data)
+      : input;
+    const validation = validateCfpForm(candidate);
     if (!validation.success) {
       throw new CfpError("VALIDATION_FAILED", "The CFP form configuration is invalid.", {
         issues: validation.issues,

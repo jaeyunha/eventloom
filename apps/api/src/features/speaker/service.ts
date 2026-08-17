@@ -63,6 +63,7 @@ import type {
   SpeakerReminderRecord,
   SpeakerReminderTask,
   SpeakerRepository,
+  SpeakerTaskRepositoryAudit,
   SpeakerRosterEntry,
   SpeakerRosterEnvelope,
   SpeakerRosterMember,
@@ -98,6 +99,7 @@ export type SpeakerServiceErrorCode =
   | "TASK_DEPENDENCY_INCOMPLETE"
   | "TASK_NOT_ACTIVE"
   | "TASK_ASSET_NOT_READY"
+  | "TASK_REMINDERS_NOT_EDITABLE"
   | "UPLOAD_POLICY_VIOLATION"
   | "ASSET_UPLOAD_RETRY_INVALID"
   | "ASSET_FINALIZATION_INVALID"
@@ -465,6 +467,53 @@ function isSpeakerTransitionAllowed(task: SpeakerTask, toStatus: SpeakerTaskStat
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
+
+const MAX_REMINDER_OFFSET_COUNT = 24;
+const MAX_REMINDER_OFFSET_MINUTES = 365 * 24 * 60;
+
+function normalizeReminderOffsets(values: readonly number[]): number[] {
+  if (
+    values.length > MAX_REMINDER_OFFSET_COUNT ||
+    values.some(
+      (value) =>
+        !Number.isSafeInteger(value) ||
+        value < 0 ||
+        value % 60 !== 0 ||
+        value > MAX_REMINDER_OFFSET_MINUTES,
+    ) ||
+    new Set(values).size !== values.length
+  ) {
+    throw new SpeakerServiceError(
+      "VALIDATION_ERROR",
+      400,
+      "Reminder offsets must be unique whole-hour increments (multiples of 60 minutes), at most 24 values, each within one year.",
+    );
+  }
+  return [...values].sort((left, right) => left - right);
+}
+
+function reminderCadenceWindow(
+  deadlineAt: string | null,
+  offsets: readonly number[],
+  referenceNow: Date,
+): string {
+  const dueTime = deadlineAt === null ? Number.NaN : Date.parse(deadlineAt);
+  if (!Number.isFinite(dueTime)) return "unscheduled";
+  const thresholds = [
+    ...new Set([
+      dueTime,
+      ...offsets
+        .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
+        .map((offset) => dueTime - offset * 60_000),
+    ]),
+  ].sort((left, right) => left - right);
+  const active = thresholds.filter((threshold) => threshold <= referenceNow.getTime()).at(-1);
+  const firstThreshold = thresholds[0] ?? dueTime;
+  return active === undefined
+    ? `before:${new Date(firstThreshold).toISOString()}`
+    : new Date(active).toISOString();
+}
+
 function exportArchiveComponent(value: string | undefined, fallback: string): string {
   const normalized = stripFileNameControls((value ?? "").normalize("NFC").replace(/[\\/]/gu, "-"))
     .replace(/\.\.+/gu, "-")
@@ -1885,13 +1934,19 @@ export class SpeakerService {
       this.repository.listEventResources === undefined
         ? Promise.resolve(undefined)
         : contextCapabilityAllows(scope, "resource-read", resourceParticipants)
-          ? this.repository.listEventResources(eventId)
+          ? this.repository.listEventResources(eventId).then(
+              (value) => value,
+              () => undefined,
+            )
           : Promise.resolve(undefined);
     const wikiPromise: Promise<readonly SpeakerWikiPage[] | undefined> =
       this.repository.listWikiPages === undefined
         ? Promise.resolve(undefined)
         : contextCapabilityAllows(scope, "resource-read", resourceParticipants)
-          ? this.repository.listWikiPages(eventId)
+          ? this.repository.listWikiPages(eventId).then(
+              (value) => value,
+              () => undefined,
+            )
           : Promise.resolve(undefined);
 
     const [
@@ -2601,7 +2656,10 @@ export class SpeakerService {
     return this.updateOrganizerTask(input);
   }
 
-  async updateOrganizerTask(input: SpeakerTaskUpdateInput): Promise<SpeakerTask> {
+  async updateOrganizerTask(
+    input: SpeakerTaskUpdateInput,
+    audit?: SpeakerTaskRepositoryAudit,
+  ): Promise<SpeakerTask> {
     const scope = await this.requireOrganizerScope(input.eventId, input.accountId);
     assertExpectedVersion(input.expectedVersion);
     const current = await this.repository.getTask(input.eventId, input.taskId);
@@ -2718,6 +2776,7 @@ export class SpeakerService {
       task: updated,
       expectedVersion: input.expectedVersion,
       actorAccountId: input.accountId,
+      ...(audit === undefined ? {} : { audit }),
     });
     if (!result.ok) {
       if (result.reason === "version_conflict" || result.reason === "invalid_state") {
@@ -2742,6 +2801,68 @@ export class SpeakerService {
       );
     }
     return persisted;
+  }
+
+  async updateOrganizerTaskReminderOffsets(input: {
+    organizationId: string;
+    eventId: string;
+    accountId: string;
+    taskId: string;
+    expectedVersion: number;
+    reminderOffsetsMinutes: readonly number[];
+  }): Promise<{
+    organizationId: string;
+    eventId: string;
+    taskId: string;
+    reminderOffsetsMinutes: readonly number[];
+    version: number;
+    updatedAt: string;
+  }> {
+    await this.requireOrganizerOrganizationScope(
+      input.organizationId,
+      input.eventId,
+      input.accountId,
+    );
+    assertExpectedVersion(input.expectedVersion);
+    const reminderOffsetsMinutes = normalizeReminderOffsets(input.reminderOffsetsMinutes);
+    const current = (await this.listOrganizerTasks(input.eventId, input.accountId)).find(
+      (task) => task.id === input.taskId,
+    );
+    if (current === undefined) throw notFound();
+    if (
+      current.owner !== "speaker" ||
+      current.type !== "upload" ||
+      (current.dueAt ?? current.dueDate) === undefined ||
+      ["completed", "submitted", "waived"].includes(current.status)
+    ) {
+      throw new SpeakerServiceError(
+        "TASK_REMINDERS_NOT_EDITABLE",
+        409,
+        "Reminder schedules can be changed only for incomplete speaker upload tasks with a due date.",
+      );
+    }
+    const updated = await this.updateOrganizerTask(
+      {
+        eventId: input.eventId,
+        accountId: input.accountId,
+        taskId: input.taskId,
+        expectedVersion: input.expectedVersion,
+        reminderOffsetsMinutes,
+      },
+      {
+        id: `audit:speaker-task-reminder-offsets:${input.taskId}:${input.expectedVersion + 1}`,
+        action: "speaker_task.reminder_offsets_updated",
+        previousReminderOffsetsMinutes: [...current.reminderOffsetsMinutes],
+      },
+    );
+    return {
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      taskId: input.taskId,
+      reminderOffsetsMinutes: [...updated.reminderOffsetsMinutes],
+      version: updated.version,
+      updatedAt: updated.updatedAt,
+    };
   }
 
   async listDeliverables(
@@ -4087,6 +4208,17 @@ export class SpeakerService {
     taskIds?: readonly string[];
     recipientIds?: readonly string[];
   }): Promise<SpeakerReminderPreview> {
+    const previewNow = this.now();
+    const eligibility = await this.previewReminderEligibility({
+      eventId: input.eventId,
+      accountId: input.accountId,
+      ...(input.taskIds === undefined ? {} : { taskIds: input.taskIds }),
+      ...(input.recipientIds === undefined ? {} : { recipientIds: input.recipientIds }),
+      now: previewNow,
+    });
+    const eligibilityByTask = new Map(
+      eligibility.items.map((item) => [item.taskId, item] as const),
+    );
     const matrix = await this.listDeliverables(input.eventId, input.accountId, {
       status: "incomplete",
     });
@@ -4112,6 +4244,15 @@ export class SpeakerService {
         title: row.task.title,
         ...(row.task.dueAt === undefined ? {} : { dueAt: row.task.dueAt }),
         participantId: row.participantId,
+        ...(eligibilityByTask.get(row.task.id) === undefined
+          ? {}
+          : {
+              cadenceWindow: reminderCadenceWindow(
+                eligibilityByTask.get(row.task.id)?.deadlineAt ?? null,
+                eligibilityByTask.get(row.task.id)?.reminderOffsetsMinutes ?? [],
+                previewNow,
+              ),
+            }),
       };
       if (existing === undefined) {
         byRecipient.set(row.participantId, {
@@ -4214,7 +4355,8 @@ export class SpeakerService {
           dueAt,
           deadlineAt: deadline?.instant ?? null,
           reminderOffsetsMinutes: offsets,
-          eligible: !complete && Number.isFinite(dueTime) && (due || inWindow),
+          eligible:
+            !complete && offsets.length > 0 && Number.isFinite(dueTime) && (due || inWindow),
           reason,
         };
       })
@@ -4279,7 +4421,7 @@ export class SpeakerService {
     templateId?: string;
     name: string;
     subject: string;
-    html: string;
+    html?: string;
     text: string;
     status?: "draft" | "approved";
   }): Promise<SpeakerEmailTemplate> {
@@ -4304,7 +4446,7 @@ export class SpeakerService {
     accountId: string;
     templateId: string;
     subject: string;
-    html: string;
+    html?: string;
     text: string;
     status?: "draft" | "approved";
   }): Promise<SpeakerEmailTemplate> {
@@ -7191,6 +7333,15 @@ export class SpeakerService {
         "The invitation idempotency key",
         300,
       );
+      const replay = await communications.findInvitationReplay({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        accountId: input.accountId,
+        participantIds,
+        idempotencyKey,
+      });
+      if (replay !== null) return replay;
+
       const recipients = await communications.previewInvitations({
         organizationId: input.organizationId,
         eventId: input.eventId,

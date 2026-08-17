@@ -34,6 +34,7 @@ import {
   type SpeakerRosterEnvelope,
   type SpeakerSession,
   type SpeakerTaskEnvelope,
+  type SpeakerTaskReminderOffsetsResult,
   type SpeakerUpdateInput,
 } from "./api";
 import {
@@ -135,6 +136,7 @@ type RosterScopeAction =
     }
   | { type: "progress-load-failed"; message: string }
   | { type: "reminder-loaded"; eligibility: SpeakerReminderEligibilityEnvelope }
+  | { type: "task-reminder-version-updated"; taskId: string; version: number }
   | {
       type: "roster-details-refreshed";
       participantId: string;
@@ -272,6 +274,22 @@ function rosterScopeReducer(state: RosterScopeState, action: RosterScopeAction):
       return { ...state, progress: null, progressError: action.message };
     case "reminder-loaded":
       return { ...state, reminderEligibility: action.eligibility };
+    case "task-reminder-version-updated":
+      return {
+        ...state,
+        progress:
+          state.progress === null
+            ? null
+            : {
+                ...state.progress,
+                rows: state.progress.rows.map((row) => ({
+                  ...row,
+                  tasks: row.tasks.map((task) =>
+                    task.taskId === action.taskId ? { ...task, version: action.version } : task,
+                  ),
+                })),
+              },
+      };
     case "roster-details-refreshed":
       return {
         ...state,
@@ -1225,6 +1243,7 @@ function useSpeakerWorkspaceController({
       api === null ||
       roster === null ||
       loading ||
+      roster.speakers.length === 0 ||
       !progressSectionVisible ||
       roster.organizationId !== organizationId ||
       roster.eventId !== eventId
@@ -1442,6 +1461,10 @@ function useSpeakerWorkspaceController({
     () => reminderEligibility?.items.filter((item) => !item.eligible) ?? [],
     [reminderEligibility],
   );
+  const reminderTasks = useMemo(
+    () => scopedProgress?.rows.flatMap((row) => row.tasks) ?? [],
+    [scopedProgress?.rows],
+  );
   const selectedInvitationPreview =
     selectedSpeaker === null
       ? []
@@ -1469,6 +1492,14 @@ function useSpeakerWorkspaceController({
   }, []);
   const allVisibleSelected =
     filteredSpeakers.length > 0 && selectedVisibleSpeakerIds.length === filteredSpeakers.length;
+  const selectedEmailTemplate =
+    emailTemplates.find(
+      (template) => template.id === emailTemplateId && template.version === emailTemplateVersion,
+    ) ?? null;
+  const emailDraftDirty =
+    selectedEmailTemplate === null ||
+    selectedEmailTemplate.subject !== emailSubject ||
+    selectedEmailTemplate.text !== emailText;
   const emailPreviewCurrent =
     emailPreview !== null &&
     emailPreview.organizationId === organizationId &&
@@ -2062,6 +2093,29 @@ function useSpeakerWorkspaceController({
       dispatchImportTaskInvitation({ type: "task-busy-changed", busy: false });
     }
   }
+  async function updateTaskReminderOffsets(
+    taskId: string,
+    expectedVersion: number,
+    reminderOffsetsMinutes: readonly number[],
+  ): Promise<SpeakerTaskReminderOffsetsResult> {
+    if (api === null) throw new Error("The organizer speaker API is unavailable.");
+    const result = await api.updateTaskReminderOffsets({
+      taskId,
+      expectedVersion,
+      reminderOffsetsMinutes,
+    });
+    dispatchRoster({
+      type: "task-reminder-version-updated",
+      taskId: result.taskId,
+      version: result.version,
+    });
+    void api
+      .getReminderEligibility()
+      .then((eligibility) => dispatchRoster({ type: "reminder-loaded", eligibility }))
+      .catch(() => undefined);
+    return result;
+  }
+
   async function refreshEmailHistory(): Promise<void> {
     if (api === null) {
       dispatchEmail({
@@ -2110,7 +2164,6 @@ function useSpeakerWorkspaceController({
                 {
                   templateId: emailTemplateId,
                   subject: emailSubject,
-                  html: emailHtml,
                   text: emailText,
                 },
                 signal,
@@ -2124,7 +2177,6 @@ function useSpeakerWorkspaceController({
                   templateId: newTemplateId,
                   name: emailTemplateName,
                   subject: emailSubject,
-                  html: emailHtml,
                   text: emailText,
                 },
                 signal,
@@ -2160,37 +2212,20 @@ function useSpeakerWorkspaceController({
       });
       return;
     }
+    let templateId = emailTemplateId;
+    let templateVersion = emailTemplateVersion;
+    if (emailDraftDirty) {
+      const saved = await saveEmailTemplate();
+      if (saved === null) return;
+      templateId = saved.id;
+      templateVersion = saved.version;
+    }
     invalidateEmailPreview();
     const requestId = emailPreviewRequestRef.current;
     dispatchEmail({ type: "email-preview-started" });
     dispatchEmail({ type: "email-notice-set", message: null });
     try {
       const recipientIds = [...selectedSpeakerIds];
-      let templateId = emailTemplateId;
-      let templateVersion = emailTemplateVersion;
-      const newTemplateId =
-        emailCreateTemplateIdRef.current ?? `speaker-email-draft:${crypto.randomUUID()}`;
-      if (templateId.length === 0) emailCreateTemplateIdRef.current = newTemplateId;
-      if (templateId.length === 0) {
-        const created = await withTimeout(
-          (signal) =>
-            api.createEmailTemplate(
-              {
-                templateId: newTemplateId,
-                name: emailTemplateName,
-                subject: emailSubject,
-                html: emailHtml,
-                text: emailText,
-              },
-              signal,
-            ),
-          "Email template preparation",
-        );
-        if (requestId !== emailPreviewRequestRef.current) return;
-        templateId = created.id;
-        templateVersion = created.version;
-        dispatchEmail({ type: "email-template-created", template: created });
-      }
       const preview = await withTimeout(
         (signal) =>
           api.previewEmails(
@@ -2683,6 +2718,8 @@ function useSpeakerWorkspaceController({
             reminderEligibility,
             eligibleItems: eligibleReminderItems,
             ineligibleItems: ineligibleReminderItems,
+            tasks: reminderTasks,
+            onSaveOffsets: updateTaskReminderOffsets,
           },
         }}
         email={{

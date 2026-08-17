@@ -11,6 +11,7 @@ import {
   AgendaRepositoryConflictError,
   type DurableObjectAgendaCoordinator,
 } from "../features/agenda/infrastructure";
+import { neutralSpeakerDisplayName } from "../features/agenda/speaker-labels";
 import { localDateInTimeZone } from "../features/agenda/timezone";
 import type { AgendaEntry, AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { RequestAuthenticator } from "../features/auth/authenticator";
@@ -71,7 +72,10 @@ import type {
 } from "../features/crm/types";
 import { conflict } from "../features/evaluations/errors";
 import type {
+  EvaluationPlanScheduleSync,
+  EvaluationPlanScheduleState,
   EvaluationRepository,
+  EvaluationReviewWriteAdmission,
   OrganizerWorkspaceRecords,
   ReviewerWorkspaceRecords,
   SubmissionReviewLookup,
@@ -90,6 +94,7 @@ import type {
   EvaluationSubmissionSource,
 } from "../features/evaluations/service";
 import { EvaluationService } from "../features/evaluations/service";
+import type { OrganizationPolicy } from "../features/organizations/policy";
 import type {
   EvaluationActor,
   EvaluationAssignment,
@@ -175,6 +180,7 @@ import type {
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
   SpeakerReminderDeliveryReceipt,
+  SpeakerReminderTask,
   SpeakerRepository,
   SpeakerTask,
   UpdateBiographyCommand,
@@ -201,6 +207,7 @@ import {
   D1PublishedSpeakerProjectionStore,
   type PublishedSpeakerProjectionRecord,
   publishedHeadshotContentType,
+  selectReleasedSpeakerHeadshot,
 } from "../infrastructure/cloudflare/repositories/published-speakers";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import {
@@ -1638,7 +1645,30 @@ export class AirtableCfpRepository implements CfpRepository {
   }
 }
 
+function assertAirtableAssignmentWriteAdmission(
+  plan: EvaluationPlan,
+  scope: EvaluationAssignmentScope,
+  authorizedAt: string,
+  requireRoundOpen: boolean,
+  allowClosed = false,
+): void {
+  if (allowClosed) return;
+  const round = plan.rounds.find((candidate) => candidate.id === scope.roundId);
+  const timestamp = Date.parse(authorizedAt);
+  if (
+    round === undefined ||
+    !Number.isFinite(timestamp) ||
+    plan.status !== "open" ||
+    (plan.closesAt !== null && Date.parse(plan.closesAt) <= timestamp) ||
+    (requireRoundOpen && round.opensAt != null && Date.parse(round.opensAt) > timestamp) ||
+    (round.closesAt != null && Date.parse(round.closesAt) <= timestamp)
+  ) {
+    throw conflict("The evaluation plan is closed.");
+  }
+}
+
 export class AirtableEvaluationRepository implements EvaluationRepository {
+  readonly supportsAtomicPlanRevisionSync = false;
   readonly #plans: AirtableJsonStore<AirtableEvaluationPlanRecord>;
   readonly #assignments: AirtableJsonStore<EvaluationAssignment>;
   readonly #reviews: AirtableJsonStore<EvaluationReview>;
@@ -1699,6 +1729,41 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     return plan !== undefined && plan.tenantId === tenantId ? publicEvaluationPlan(plan) : null;
   }
 
+  async getPlanScheduleState(
+    tenantId: string,
+    planId: string,
+  ): Promise<EvaluationPlanScheduleState | null> {
+    const plan = await this.getPlan(tenantId, planId);
+    return plan === null
+      ? null
+      : {
+          id: plan.id,
+          tenantId: plan.tenantId,
+          eventId: plan.eventId,
+          predecessorPlanId: plan.predecessorPlanId,
+          status: plan.status,
+          closesAt: plan.closesAt,
+          version: plan.version,
+          updatedAt: plan.updatedAt,
+          rounds: plan.rounds.map((round) => ({
+            id: round.id,
+            predecessorRoundId: round.predecessorRoundId,
+            revision: round.revision ?? 1,
+            opensAt: round.opensAt ?? null,
+            closesAt: round.closesAt,
+          })),
+        };
+  }
+
+  async getPlanSuccessor(
+    tenantId: string,
+    eventId: string,
+    predecessorPlanId: string,
+  ): Promise<EvaluationPlan | null> {
+    const plans = await this.listPlans(tenantId, eventId);
+    return plans.find((plan) => plan.predecessorPlanId === predecessorPlanId) ?? null;
+  }
+
   async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
     const plans = await this.#plans.list({
       filterByFormula: jsonContainsAllFormula(
@@ -1711,6 +1776,10 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
         (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
       )
       .map((plan) => clone(publicEvaluationPlan(plan)));
+  }
+
+  async hasPendingPlanLineageRepair(): Promise<boolean> {
+    return false;
   }
 
   async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
@@ -1730,6 +1799,48 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     };
     if (existingRecord === undefined) await this.#plans.create(stored);
     else await this.#plans.updateByRecordId(plan.id, existingRecord.recordId, stored);
+  }
+
+  async putPlanState(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncPending = false,
+    _revisionSyncToken?: string,
+  ): Promise<void> {
+    if (scheduleSyncs.length > 0 || revisionSyncPending) {
+      throw conflict("Atomic review plan revision synchronization requires D1.");
+    }
+    await this.putPlan(plan, expectedVersion);
+  }
+
+  async putPlanSchedule(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncPending = false,
+    _revisionSyncToken?: string,
+  ): Promise<void> {
+    if (scheduleSyncs.length > 0 || revisionSyncPending) {
+      throw conflict("Atomic review plan revision synchronization requires D1.");
+    }
+    await this.putPlan(plan, expectedVersion);
+  }
+
+  async reconcilePlanRevisionFamily(): Promise<void> {
+    throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+  }
+
+  async completePlanRevisionSync(): Promise<void> {
+    throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+  }
+
+  async beginPlanRevisionSync(): Promise<void> {
+    throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+  }
+
+  async resumePlanRevisionSync(): Promise<void> {
+    throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
   }
 
   async getAssignment(
@@ -1804,6 +1915,7 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     ) {
       throw conflict("Reviewer assignment replacement is outside its target scope.");
     }
+    assertAirtableAssignmentWriteAdmission(planRecord.entity, scope, input.authorizedAt, true);
     const assignmentRows = latestEvaluationAssignmentRows(
       records.map(({ entity }) => entity),
       scope.tenantId,
@@ -1922,6 +2034,13 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     ) {
       throw conflict("Reviewer assignment distribution is outside its target scope.");
     }
+    assertAirtableAssignmentWriteAdmission(
+      planRecord.entity,
+      scope,
+      input.authorizedAt,
+      false,
+      input.allowClosedCleanup === true,
+    );
     const assignmentRows = latestEvaluationAssignmentRows(
       records.map(({ entity }) => entity),
       scope.tenantId,
@@ -2137,132 +2256,23 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   }
 
   async putSuggestion(
-    suggestion: EvaluationSuggestion,
-    expectedVersion: number | null,
+    _suggestion: EvaluationSuggestion,
+    _expectedVersion: number | null,
+    _admission?: EvaluationReviewWriteAdmission,
   ): Promise<void> {
-    const existingRecord = await this.#evaluations.findWithRecordId(suggestion.id);
-    const existing =
-      existingRecord !== undefined && isEvaluationSuggestionRecord(existingRecord.entity)
-        ? untagged(existingRecord.entity)
-        : null;
-    if (
-      (existingRecord !== undefined && existing === null) ||
-      (existing !== null &&
-        (existing.tenantId !== suggestion.tenantId ||
-          existing.eventId !== suggestion.eventId ||
-          existing.planId !== suggestion.planId ||
-          existing.roundId !== suggestion.roundId ||
-          existing.assignmentId !== suggestion.assignmentId ||
-          existing.submissionId !== suggestion.submissionId ||
-          existing.reviewerId !== suggestion.reviewerId))
-    ) {
-      throw conflict("Suggestion changed since it was loaded.");
-    }
-    assertEvaluationVersion(existing?.version ?? null, expectedVersion, "Suggestion");
-    await this.#upsertEvaluationEntities([tagged(suggestion, "evaluation_suggestion")]);
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
 
   async resolveSuggestion(
-    suggestion: EvaluationSuggestion,
-    expectedSuggestionVersion: number,
-    assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number | null,
-    review: EvaluationReview | null,
-    expectedReviewVersion: number | null,
+    _suggestion: EvaluationSuggestion,
+    _expectedSuggestionVersion: number,
+    _assignment: EvaluationAssignment | null,
+    _expectedAssignmentVersion: number | null,
+    _review: EvaluationReview | null,
+    _expectedReviewVersion: number | null,
+    _admission: EvaluationReviewWriteAdmission,
   ): Promise<EvaluationSuggestionResolution> {
-    const [records, effectiveAssignment] = await Promise.all([
-      this.#evaluations.listWithRecordIds(),
-      assignment === null
-        ? Promise.resolve(null)
-        : this.getAssignment(assignment.tenantId, assignment.id),
-    ]);
-    const suggestionRecord = records.find(
-      ({ entity }) => entity.id === suggestion.id && isEvaluationSuggestionRecord(entity),
-    );
-    const currentSuggestion =
-      suggestionRecord === undefined
-        ? null
-        : untagged(suggestionRecord.entity as unknown as EvaluationSuggestion);
-    if (
-      currentSuggestion === null ||
-      currentSuggestion.tenantId !== suggestion.tenantId ||
-      currentSuggestion.eventId !== suggestion.eventId ||
-      currentSuggestion.planId !== suggestion.planId ||
-      currentSuggestion.roundId !== suggestion.roundId ||
-      currentSuggestion.assignmentId !== suggestion.assignmentId ||
-      currentSuggestion.submissionId !== suggestion.submissionId ||
-      currentSuggestion.reviewerId !== suggestion.reviewerId
-    ) {
-      throw conflict("Suggestion changed since it was loaded.");
-    }
-    assertEvaluationVersion(currentSuggestion.version, expectedSuggestionVersion, "Suggestion");
-
-    const entities: object[] = [
-      tagged(suggestion, "evaluation_suggestion") as unknown as JsonRecord,
-    ];
-    if (assignment !== null) {
-      if (
-        assignment.tenantId !== suggestion.tenantId ||
-        assignment.eventId !== suggestion.eventId ||
-        assignment.planId !== suggestion.planId ||
-        assignment.roundId !== suggestion.roundId ||
-        assignment.id !== suggestion.assignmentId ||
-        assignment.submissionId !== suggestion.submissionId ||
-        assignment.reviewerId !== suggestion.reviewerId
-      ) {
-        throw conflict("Suggestion resolution targeted another assignment.");
-      }
-      const currentAssignment = effectiveAssignment;
-      if (
-        currentAssignment !== null &&
-        (currentAssignment.tenantId !== suggestion.tenantId ||
-          currentAssignment.eventId !== suggestion.eventId ||
-          currentAssignment.planId !== suggestion.planId ||
-          currentAssignment.roundId !== suggestion.roundId ||
-          currentAssignment.submissionId !== suggestion.submissionId ||
-          currentAssignment.reviewerId !== suggestion.reviewerId)
-      ) {
-        throw conflict("Suggestion resolution targeted another assignment.");
-      }
-      assertEvaluationVersion(
-        currentAssignment?.version ?? null,
-        expectedAssignmentVersion,
-        "Assignment",
-      );
-      entities.push(tagged(assignment, "evaluation_assignment") as unknown as JsonRecord);
-    }
-
-    if (review !== null) {
-      if (
-        review.tenantId !== suggestion.tenantId ||
-        review.eventId !== suggestion.eventId ||
-        review.planId !== suggestion.planId ||
-        review.roundId !== suggestion.roundId ||
-        review.assignmentId !== suggestion.assignmentId ||
-        review.submissionId !== suggestion.submissionId ||
-        review.reviewerId !== suggestion.reviewerId
-      ) {
-        throw conflict("Suggestion resolution targeted another review.");
-      }
-      const currentReviewRecord = records.find(
-        ({ entity }) =>
-          isEvaluationReviewRecord(entity) &&
-          entity.tenantId === suggestion.tenantId &&
-          entity.assignmentId === suggestion.assignmentId,
-      );
-      const currentReview =
-        currentReviewRecord === undefined
-          ? null
-          : untagged(currentReviewRecord.entity as unknown as EvaluationReview);
-      assertEvaluationVersion(currentReview?.version ?? null, expectedReviewVersion, "Review");
-      entities.push(tagged(review, "evaluation_review") as unknown as JsonRecord);
-    }
-
-    await this.#upsertEvaluationEntities(entities);
-    return {
-      suggestion: clone(suggestion),
-      review: review === null ? null : clone(review),
-    };
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
   async listReviewerWorkspaceRecords(
     tenantId: string,
@@ -2405,40 +2415,22 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     };
   }
 
-  async putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void> {
-    const id = `review:${review.assignmentId}`;
-    const existing = await this.#reviews.find(id);
-    if (
-      (existing?.version ?? null) !== expectedVersion ||
-      (existing && existing.tenantId !== review.tenantId)
-    ) {
-      throw conflict("Review changed since it was loaded.");
-    }
-    const storedReview = tagged({ ...review, id }, "evaluation_review");
-    if (existing === undefined) await this.#reviews.create(storedReview);
-    else await this.#reviews.update(id, storedReview);
+  async putReview(
+    _review: EvaluationReview,
+    _expectedVersion: number | null,
+    _admission: EvaluationReviewWriteAdmission,
+  ): Promise<void> {
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
 
   async saveReviewDraft(
-    assignment: EvaluationAssignment,
-    expectedAssignmentVersion: number,
-    review: EvaluationReview,
-    expectedReviewVersion: number | null,
+    _assignment: EvaluationAssignment,
+    _expectedAssignmentVersion: number,
+    _review: EvaluationReview,
+    _expectedReviewVersion: number | null,
+    _authorizedAt: string,
   ): Promise<void> {
-    const [currentAssignment, currentReview] = await Promise.all([
-      this.getAssignment(assignment.tenantId, assignment.id),
-      this.getReview(review.tenantId, review.assignmentId),
-    ]);
-    assertEvaluationVersion(
-      currentAssignment?.version ?? null,
-      expectedAssignmentVersion,
-      "Assignment",
-    );
-    assertEvaluationVersion(currentReview?.version ?? null, expectedReviewVersion, "Review");
-    await this.#upsertEvaluationEntities([
-      tagged(assignment, "evaluation_assignment"),
-      tagged({ ...review, id: `review:${review.assignmentId}` }, "evaluation_review"),
-    ]);
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
 
   async getConflict(
@@ -2469,25 +2461,13 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   }
 
   async submitReview(
-    assignment: EvaluationAssignment,
-    expectedAssignmentVersion: number,
-    review: EvaluationReview,
-    expectedReviewVersion: number,
+    _assignment: EvaluationAssignment,
+    _expectedAssignmentVersion: number,
+    _review: EvaluationReview,
+    _expectedReviewVersion: number,
+    _authorizedAt: string,
   ): Promise<void> {
-    const [currentAssignment, currentReview] = await Promise.all([
-      this.getAssignment(assignment.tenantId, assignment.id),
-      this.getReview(review.tenantId, review.assignmentId),
-    ]);
-    assertEvaluationVersion(
-      currentAssignment?.version ?? null,
-      expectedAssignmentVersion,
-      "Assignment",
-    );
-    assertEvaluationVersion(currentReview?.version ?? null, expectedReviewVersion, "Review");
-    await this.#upsertEvaluationEntities([
-      tagged(assignment, "evaluation_assignment"),
-      tagged({ ...review, id: `review:${review.assignmentId}` }, "evaluation_review"),
-    ]);
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
 
   async getDecision(
@@ -2917,7 +2897,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   readonly #sessions: SessionRepository;
   readonly #sessionService: SessionService | undefined;
   readonly #queue: Queue<CloudflareOutboxMessage>;
-  readonly #senderAddresses: OpenSendSenderAddresses;
   readonly #invitationCreator: RuntimeEventRoleInvitationAdapters["speakerCreator"];
 
   constructor(options: {
@@ -2927,7 +2906,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     readonly database: D1Database;
     readonly sessionService?: SessionService;
     readonly queue: Queue<CloudflareOutboxMessage>;
-    readonly senderAddresses: OpenSendSenderAddresses;
     readonly invitationCreator?: RuntimeEventRoleInvitationAdapters["speakerCreator"];
   }) {
     this.#cfp = options.cfp;
@@ -2936,7 +2914,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     this.#queue = options.queue;
     this.#sessions = options.sessions;
     this.#sessionService = options.sessionService;
-    this.#senderAddresses = options.senderAddresses;
     this.#invitationCreator =
       options.invitationCreator ??
       createRuntimeEventRoleInvitationAdapters(
@@ -2974,9 +2951,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         },
       );
 
-      const recipients = submission.participants
-        .map((participant) => participant.email.trim())
-        .filter((email) => email.length > 0);
       await Promise.all([
         this.#database
           .prepare(
@@ -3002,24 +2976,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
             input.decidedAt,
           )
           .run(),
-        ...(recipients.length > 0
-          ? [
-              this.#enqueue(
-                input,
-                "communications",
-                `evaluation-accepted:${input.submissionId}:${transitionKey}`,
-                {
-                  from: this.#senderAddresses.speakers,
-                  senderPurpose: "speakers",
-                  to: recipients,
-                  subject: "Your session was accepted",
-                  html: "<p>Your session was accepted. Sign in to complete your speaker profile.</p>",
-                  text: "Your session was accepted. Sign in to complete your speaker profile.",
-                  idempotencyKey: `evaluation-accepted:${input.submissionId}:${transitionKey}`,
-                },
-              ),
-            ]
-          : []),
         this.#enqueue(
           input,
           "cache-invalidation",
@@ -3355,9 +3311,9 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   }
 }
 
-interface StoredAgendaState extends AgendaState {
+type StoredAgendaState = AgendaState & {
   id: string;
-}
+};
 interface StoredAgendaEntry {
   id: string;
   eventId: string;
@@ -3916,6 +3872,13 @@ export class CloudflareAgendaMutationLock implements DurableObjectAgendaCoordina
   }
 }
 
+export class IdempotencyLeaseLostError extends Error {
+  constructor() {
+    super("The idempotency lease was lost before the operation completed.");
+    this.name = "IdempotencyLeaseLostError";
+  }
+}
+
 export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoordinator {
   readonly #database: D1Database;
   readonly #leaseMs: number;
@@ -3934,7 +3897,7 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     const now = new Date();
     const existing = await this.#database
       .prepare(
-        `SELECT request_digest, state, response_status, response_json, expires_at
+        `SELECT request_digest, state, response_status, response_json, expires_at, lease_id
            FROM idempotency_records
           WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?`,
       )
@@ -3945,6 +3908,7 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         response_status: number | null;
         response_json: string | null;
         expires_at: string;
+        lease_id: string | null;
       }>();
     if (existing !== null && Date.parse(existing.expires_at) > now.getTime()) {
       if (existing.request_digest !== input.fingerprint) return { status: "conflict" };
@@ -3968,9 +3932,10 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       await this.#database
         .prepare(
           `DELETE FROM idempotency_records
-            WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?`,
+            WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+              AND expires_at <= ?`,
         )
-        .bind(tenantId, input.scope, input.key)
+        .bind(tenantId, input.scope, input.key, now.toISOString())
         .run();
     }
     const leaseId = crypto.randomUUID();
@@ -3978,26 +3943,21 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       await this.#database
         .prepare(
           `INSERT INTO idempotency_records
-             (tenant_id, scope, idempotency_key, request_digest, state, created_at, expires_at)
-           VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
+             (tenant_id, scope, idempotency_key, request_digest, state, lease_id, created_at, expires_at)
+           VALUES (?, ?, ?, ?, 'processing', ?, ?, ?)`,
         )
         .bind(
           tenantId,
           input.scope,
           input.key,
           input.fingerprint,
+          leaseId,
           now.toISOString(),
           new Date(now.getTime() + this.#leaseMs).toISOString(),
         )
         .run();
     } catch {
       const raced = await this.begin(input);
-      if (raced.status === "acquired") {
-        return {
-          status: "pending",
-          wait: () => this.waitForCompletion(tenantId, input),
-        };
-      }
       return raced;
     }
     return { status: "acquired", leaseId };
@@ -4011,11 +3971,12 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     response: IdempotencyStoredResponse;
   }): Promise<void> {
     const tenantId = tenantFromScope(input.scope);
-    await this.#database
+    const result = await this.#database
       .prepare(
         `UPDATE idempotency_records
             SET state = 'completed', response_status = ?, response_json = ?, expires_at = ?
-          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+            AND request_digest = ? AND lease_id = ?`,
       )
       .bind(
         input.response.status,
@@ -4025,8 +3986,12 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         input.scope,
         input.key,
         input.fingerprint,
+        input.leaseId ?? "",
       )
       .run();
+    if (Number(result.meta?.changes ?? 0) !== 1) {
+      throw new IdempotencyLeaseLostError();
+    }
   }
 
   async release(input: {
@@ -4038,9 +4003,16 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     await this.#database
       .prepare(
         `DELETE FROM idempotency_records
-          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+            AND request_digest = ? AND lease_id = ?`,
       )
-      .bind(tenantFromScope(input.scope), input.scope, input.key, input.fingerprint)
+      .bind(
+        tenantFromScope(input.scope),
+        input.scope,
+        input.key,
+        input.fingerprint,
+        input.leaseId ?? "",
+      )
       .run();
   }
 
@@ -4060,11 +4032,17 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         scope,
         key,
         fingerprint,
+        ...(claim.leaseId === undefined ? {} : { leaseId: claim.leaseId }),
         response: { status: 200, body: value },
       });
       return value;
     } catch (error) {
-      await this.release({ scope, key, fingerprint });
+      await this.release({
+        scope,
+        key,
+        fingerprint,
+        ...(claim.leaseId === undefined ? {} : { leaseId: claim.leaseId }),
+      });
       throw error;
     }
   }
@@ -6522,9 +6500,21 @@ async function enqueueCloudflareOutbox(input: {
   readonly deduplicationKey: string;
   readonly payload: unknown;
   readonly now?: string;
-}): Promise<{ readonly inserted: boolean; readonly queued: boolean }> {
+}): Promise<{
+  readonly jobId: string;
+  readonly inserted: boolean;
+  readonly queued: boolean;
+  readonly state: string | undefined;
+}> {
   const staged = await stageCloudflareOutbox(input);
-  if (staged.state !== "pending") return { inserted: staged.inserted, queued: false };
+  if (staged.state !== "pending") {
+    return {
+      jobId: staged.jobId,
+      inserted: staged.inserted,
+      queued: false,
+      state: staged.state,
+    };
+  }
   await input.queue.send({
     version: 1,
     jobId: staged.jobId,
@@ -6538,7 +6528,12 @@ async function enqueueCloudflareOutbox(input: {
     )
     .bind(staged.now, staged.jobId)
     .run();
-  return { inserted: staged.inserted, queued: true };
+  return {
+    jobId: staged.jobId,
+    inserted: staged.inserted,
+    queued: true,
+    state: "queued",
+  };
 }
 
 async function stageCloudflareOutbox(input: {
@@ -6718,6 +6713,12 @@ async function speakerDeliveryKey(
   );
 }
 
+function reminderTaskSummary(task: SpeakerReminderTask): string {
+  const title = task.title.trim();
+  const dueAt = task.dueAt?.trim() ?? "";
+  return dueAt.length === 0 ? title : `${title} (due ${dueAt})`;
+}
+
 export class CloudflareSpeakerDeliveryAdapter
   implements SpeakerReminderDelivery, SpeakerEmailDelivery
 {
@@ -6838,7 +6839,10 @@ export class CloudflareSpeakerDeliveryAdapter
     input: SpeakerReminderDeliveryInput,
   ): Promise<SpeakerReminderDeliveryReceipt> {
     const recipientEmail = await this.verifiedRecipientEmail(input.recipient.email);
-    if (recipientEmail === null) return { queued: false, duplicate: true };
+    if (recipientEmail === null) return { status: "failed", queued: false, duplicate: false };
+    if (await this.matchesScheduledReminder(input, recipientEmail)) {
+      return { queued: false, duplicate: true };
+    }
     const deliveryKey = await speakerDeliveryKey(
       "reminder",
       input.organizationId,
@@ -6847,12 +6851,7 @@ export class CloudflareSpeakerDeliveryAdapter
       input.recipient.participantId,
     );
     const taskSummaries = input.recipient.tasks
-      .map((task) => {
-        const title = task.title.trim();
-        if (title.length === 0) return "";
-        const dueAt = task.dueAt?.trim() ?? "";
-        return dueAt.length === 0 ? title : `${title} (due ${dueAt})`;
-      })
+      .map(reminderTaskSummary)
       .filter((summary) => summary.length > 0);
     const taskSummary =
       taskSummaries.length === 0 ? "your outstanding speaker tasks" : taskSummaries.join(", ");
@@ -6877,10 +6876,70 @@ export class CloudflareSpeakerDeliveryAdapter
         actorAccountId: input.actorAccountId,
       },
     });
+    if (result.queued) {
+      return { id: result.jobId, queued: true, duplicate: false };
+    }
+    if (["queued", "processing", "delivered"].includes(result.state ?? "")) {
+      return { id: result.jobId, queued: false, duplicate: true };
+    }
     return {
-      queued: result.queued,
-      duplicate: !result.inserted,
+      id: result.jobId,
+      status: "failed",
+      queued: false,
+      duplicate: false,
     };
+  }
+
+  private async matchesScheduledReminder(
+    input: SpeakerReminderDeliveryInput,
+    recipientEmail: string,
+  ): Promise<boolean> {
+    const task = input.recipient.tasks.length === 1 ? input.recipient.tasks[0] : undefined;
+    const cadenceWindow = task?.cadenceWindow?.trim() ?? "";
+    if (task === undefined || cadenceWindow.length === 0) return false;
+    const deduplicationKey = [
+      "reminder",
+      input.organizationId,
+      input.eventId,
+      "scheduled",
+      `task:${task.taskId}`,
+      task.participantId,
+      cadenceWindow,
+    ].join(":");
+    const row = await this.database
+      .prepare(
+        "SELECT state, payload_json FROM outbox_jobs WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ? LIMIT 1",
+      )
+      .bind(input.organizationId, deduplicationKey)
+      .first<{ state?: unknown; payload_json?: unknown }>();
+    if (row === null || row === undefined) return false;
+    const state = typeof row.state === "string" ? row.state : "";
+    if (!["pending", "queued", "processing", "delivered"].includes(state)) return false;
+    if (typeof row.payload_json !== "string") return false;
+    try {
+      const parsed: unknown = JSON.parse(row.payload_json);
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        !("payload" in parsed) ||
+        parsed.payload === null ||
+        typeof parsed.payload !== "object"
+      ) {
+        return false;
+      }
+      const payload = parsed.payload as Record<string, unknown>;
+      const summary = reminderTaskSummary(task);
+      const recipients = payload.to;
+      return (
+        payload.subject === `Reminder: ${summary}` &&
+        payload.text === `Please complete ${summary}.` &&
+        Array.isArray(recipients) &&
+        recipients.length === 1 &&
+        recipients[0] === recipientEmail
+      );
+    } catch {
+      return false;
+    }
   }
 
   private async verifiedRecipientEmail(candidate: string | undefined): Promise<string | null> {
@@ -7481,6 +7540,7 @@ export interface D1ApplicationRuntimeOptions {
   readonly eventRoleInvitationAdapters: RuntimeEventRoleInvitationAdapters;
   readonly senderAddresses: OpenSendSenderAddresses;
   readonly calendarIntegrationOptions: CalendarIntegrationOptions;
+  readonly organizationPolicy?: OrganizationPolicy;
 }
 
 export async function reconcilePublishedAgendaCalendarInvitations(input: {
@@ -7984,43 +8044,51 @@ export function createD1ApplicationDependencies(
 ): ApiDependencies {
   const cfpRepository = options.businessRepositories.cfp;
   const eventRepository = options.businessRepositories.events;
-  const eventService = new EventService(eventRepository, {
-    async reviewBoundaries(organizationId, eventId) {
-      const plans = await options.businessRepositories.evaluations.listPlans(
-        organizationId,
-        eventId,
-      );
-      return plans.flatMap((plan) => [
-        ...(plan.closesAt === null ? [] : [{ label: "Review deadline", occursAt: plan.closesAt }]),
-        ...plan.rounds.flatMap((round) => [
-          ...(round.opensAt == null
+  const eventService = new EventService(
+    eventRepository,
+    {
+      async reviewBoundaries(organizationId, eventId) {
+        const plans = await options.businessRepositories.evaluations.listPlans(
+          organizationId,
+          eventId,
+        );
+        return plans.flatMap((plan) => [
+          ...(plan.closesAt === null
             ? []
-            : [{ label: `Review round ${round.sequence} opening`, occursAt: round.opensAt }]),
-          ...(round.closesAt == null
-            ? []
-            : [{ label: `Review round ${round.sequence} deadline`, occursAt: round.closesAt }]),
-        ]),
-      ]);
+            : [{ label: "Review deadline", occursAt: plan.closesAt }]),
+          ...plan.rounds.flatMap((round) => [
+            ...(round.opensAt == null
+              ? []
+              : [{ label: `Review round ${round.sequence} opening`, occursAt: round.opensAt }]),
+            ...(round.closesAt == null
+              ? []
+              : [{ label: `Review round ${round.sequence} deadline`, occursAt: round.closesAt }]),
+          ]),
+        ]);
+      },
+      async agendaState(_organizationId, eventId) {
+        const state = await options.businessRepositories.agenda.load(eventId);
+        return state === null ? null : { timeZone: state.timeZone };
+      },
+      async agendaEntries(_organizationId, eventId) {
+        const state = await options.businessRepositories.agenda.load(eventId);
+        if (state === null) return [];
+        const published = state.revisions.find(
+          (revision) => revision.id === state.currentPublishedRevisionId,
+        );
+        return [...state.draft.entries, ...(published?.entries ?? [])].map((entry) => ({
+          label: `Agenda entry ${entry.id}`,
+          startsAt: entry.startsAt,
+          endsAt: entry.endsAt,
+          startsAtLocal: entry.startsAtLocal,
+          endsAtLocal: entry.endsAtLocal,
+        }));
+      },
     },
-    async agendaState(_organizationId, eventId) {
-      const state = await options.businessRepositories.agenda.load(eventId);
-      return state === null ? null : { timeZone: state.timeZone };
-    },
-    async agendaEntries(_organizationId, eventId) {
-      const state = await options.businessRepositories.agenda.load(eventId);
-      if (state === null) return [];
-      const published = state.revisions.find(
-        (revision) => revision.id === state.currentPublishedRevisionId,
-      );
-      return [...state.draft.entries, ...(published?.entries ?? [])].map((entry) => ({
-        label: `Agenda entry ${entry.id}`,
-        startsAt: entry.startsAt,
-        endsAt: entry.endsAt,
-        startsAtLocal: entry.startsAtLocal,
-        endsAtLocal: entry.endsAtLocal,
-      }));
-    },
-  });
+    options.organizationPolicy === undefined
+      ? {}
+      : { organizationPolicy: options.organizationPolicy },
+  );
   const publicationRepository = options.businessRepositories.programPublication;
   let publicationService!: ProgramPublicationService;
   publicationService = new ProgramPublicationService(publicationRepository, {
@@ -8272,7 +8340,6 @@ export function createD1ApplicationDependencies(
     sessionService,
     database: options.database,
     queue: options.outboxQueue,
-    senderAddresses: options.senderAddresses,
     invitationCreator: options.eventRoleInvitationAdapters.speakerCreator,
   });
   const evaluationService = new EvaluationService(
@@ -8664,7 +8731,7 @@ export function createD1ApplicationDependencies(
             values.push({ id: session.id, title: session.title, trackNames });
             sessionsByParticipantId.set(participantId, values);
             const approvedSpeakerName = entry.metadata?.speakerNames[speakerIndex];
-            if (approvedSpeakerName !== undefined) {
+            if (typeof approvedSpeakerName === "string" && approvedSpeakerName.trim().length > 0) {
               approvedSpeakerNameById.set(participantId, approvedSpeakerName);
             }
           }
@@ -8680,17 +8747,14 @@ export function createD1ApplicationDependencies(
           }
         >();
         for (const profile of profiles) {
-          if (profile.headshotAssetId === undefined) continue;
-          const asset = assets.find(
-            (candidate) =>
-              candidate.id === profile.headshotAssetId &&
-              candidate.tenantId === organizationId &&
-              candidate.eventId === eventId &&
-              candidate.participantId === profile.participantId &&
-              candidate.kind === "headshot" &&
-              candidate.state === "ready" &&
-              candidate.reviewState === "approved",
-          );
+          const asset = selectReleasedSpeakerHeadshot(assets, {
+            tenantId: organizationId,
+            eventId,
+            participantId: profile.participantId,
+            ...(profile.headshotAssetId === undefined
+              ? {}
+              : { selectedAssetId: profile.headshotAssetId }),
+          });
           if (asset === undefined) continue;
           const contentType = publishedHeadshotContentType(asset.contentType);
           if (
@@ -8724,7 +8788,10 @@ export function createD1ApplicationDependencies(
               return servedSpeaker === undefined
                 ? {
                     id: participantId,
-                    displayName: approvedSpeakerNameById.get(participantId) ?? participantId,
+                    displayName: neutralSpeakerDisplayName(
+                      participantId,
+                      approvedSpeakerNameById.get(participantId),
+                    ),
                     pronouns: null,
                     jobTitle: null,
                     organization: null,
@@ -8744,8 +8811,11 @@ export function createD1ApplicationDependencies(
             const profile = profileById.get(participantId);
             return {
               id: participantId,
-              displayName:
-                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? participantId,
+              displayName: neutralSpeakerDisplayName(
+                participantId,
+                profile?.displayName,
+                approvedSpeakerNameById.get(participantId),
+              ),
               pronouns: null,
               jobTitle: profile?.jobTitle ?? null,
               organization: profile?.company ?? null,
@@ -8769,8 +8839,9 @@ export function createD1ApplicationDependencies(
               )
             : Object.fromEntries(publishedHeadshots);
         const speakerHash = await publicationSourceHash({ speakers, headshots });
+        const speakerProjectionId = `${revision.id}:${speakerHash}`;
         const publishedSpeakerProjection: PublishedSpeakerProjectionRecord = {
-          id: revision.id,
+          id: speakerProjectionId,
           organizationId,
           eventId,
           event: {
@@ -8816,6 +8887,12 @@ export function createD1ApplicationDependencies(
           }
           return;
         }
+        await agendaMutationLock.renew(eventId);
+        await publishedSpeakerProjections.putPublishedSpeakers(
+          publishedSpeakerProjection,
+          revision,
+          agendaHash,
+        );
         const pending = await publicationService.reserveRebuild(actor, {
           organizationId,
           eventId,
@@ -8849,26 +8926,14 @@ export function createD1ApplicationDependencies(
         if (releaseId === null || pendingRevision === null) {
           throw new Error("The reserved D1 publication is missing pending release metadata.");
         }
+        const pendingManifest = pending.releases.find(
+          (release) => release.id === releaseId && release.revision === pendingRevision,
+        );
         try {
           await agendaMutationLock.renew(eventId);
-          await publishedSpeakerProjections.putPublishedSpeakers(
-            publishedSpeakerProjection,
-            revision,
-            agendaHash,
-          );
-          const pendingManifest = pending.releases.find(
-            (release) => release.id === releaseId && release.revision === pendingRevision,
-          );
           if (pendingManifest === undefined) {
             throw new Error("The reserved D1 publication manifest could not be resolved.");
           }
-          await invalidatePublishedSpeakerCache(
-            publishedSpeakerProjections,
-            event.slug,
-            pendingRevision,
-            pendingManifest.cacheRevision,
-          );
-          await invalidatePublishedAgendaCache(agendaEngine, eventId, revision);
           await agendaMutationLock.renew(eventId);
           await publicationService.completeRebuild({
             organizationId,
@@ -8893,6 +8958,30 @@ export function createD1ApplicationDependencies(
             throw new AggregateError([error, failure], "D1 publication handoff cleanup failed.");
           }
           throw error;
+        }
+        try {
+          await invalidatePublishedSpeakerCache(
+            publishedSpeakerProjections,
+            event.slug,
+            pendingRevision,
+            pendingManifest.cacheRevision,
+          );
+          await invalidatePublishedAgendaCache(
+            agendaEngine,
+            eventId,
+            revision,
+            pendingManifest.cacheRevision,
+          );
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              level: "error",
+              event: "program_publication_cache_invalidation_failed",
+              eventId,
+              releaseId,
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            }),
+          );
         }
         await agendaMutationLock.renew(eventId);
         const served = await publicationRepository.getState(organizationId, eventId);

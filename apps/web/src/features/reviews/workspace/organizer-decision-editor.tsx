@@ -14,6 +14,7 @@ export function DecisionEditor({
   baseUrl,
   planId,
   decision,
+  onSaved,
 }: Readonly<{
   aggregate: AggregateRow;
   baseUrl: string;
@@ -25,6 +26,11 @@ export function DecisionEditor({
         readonly version: number;
       }
     | undefined;
+  onSaved: (decision: {
+    readonly status: DecisionStatus;
+    readonly reason: string;
+    readonly version: number;
+  }) => void;
 }>) {
   const [status, setStatus] = useState<DecisionStatus | "">(decision?.status ?? "");
   const [reason, setReason] = useState(decision?.reason ?? "");
@@ -52,7 +58,11 @@ export function DecisionEditor({
     setBusy(true);
     const decisionKey = `web-${crypto.randomUUID()}`;
     try {
-      const savedDecision = await evaluationRequest<{ version: number }>(
+      const savedDecision = await evaluationRequest<{
+        readonly status: DecisionStatus;
+        readonly version: number;
+        readonly history: readonly { readonly reason: string }[];
+      }>(
         baseUrl,
         `/plans/${encodeURIComponent(planId)}/submissions/${encodeURIComponent(aggregate.id)}/decision`,
         {
@@ -68,8 +78,16 @@ export function DecisionEditor({
           }),
         },
       );
+      const savedReason = savedDecision.history.at(-1)?.reason ?? reason.trim();
       decisionVersionRef.current = savedDecision.version;
+      setStatus(savedDecision.status);
+      setReason(savedReason);
       setSaved(true);
+      onSaved({
+        status: savedDecision.status,
+        reason: savedReason,
+        version: savedDecision.version,
+      });
     } catch (requestError) {
       setError(
         requestError instanceof Error ? requestError.message : "The decision could not be saved.",

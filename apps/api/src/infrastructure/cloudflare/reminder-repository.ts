@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ReminderDispatch,
   ReminderOutboxDelivery,
@@ -7,6 +8,11 @@ import type {
   ReminderSubject,
 } from "../../features/communications/types";
 import type { CloudflareOutboxMessage } from "./bindings";
+
+function providerIdempotencyKey(domainKey: string): string {
+  if (domainKey.length <= 128) return domainKey;
+  return `rmd:${createHash("sha256").update(domainKey).digest("hex")}`;
+}
 
 type ReminderRunRow = {
   id: string;
@@ -373,12 +379,51 @@ export class D1ReminderRepository implements ReminderRepository {
 }
 
 type OutboxStateRow = { id: string; state: string };
+type PendingOutboxRow = { id: string };
 
 export class CloudflareReminderOutbox implements ReminderOutboxDelivery {
   constructor(
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
   ) {}
+
+  async requeuePending(input: {
+    organizationId: string;
+    eventId?: string;
+  }): Promise<{ requeued: number }> {
+    const rows = await this.database
+      .prepare(
+        `SELECT id
+           FROM outbox_jobs
+          WHERE tenant_id = ?
+            AND topic = 'communications'
+            AND state = 'pending'
+            AND json_extract(payload_json, '$.effect') = 'send_reminder'
+            AND (? IS NULL OR json_extract(payload_json, '$.eventId') = ?)
+          ORDER BY created_at, id`,
+      )
+      .bind(input.organizationId, input.eventId ?? null, input.eventId ?? null)
+      .all<PendingOutboxRow>();
+    let requeued = 0;
+    for (const row of rows.results) {
+      const now = new Date().toISOString();
+      await this.queue.send({
+        version: 1,
+        jobId: row.id,
+        tenantId: input.organizationId,
+        topic: "communications",
+        enqueuedAt: now,
+      });
+      const result = await this.database
+        .prepare(
+          "UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND tenant_id = ? AND topic = 'communications' AND state = 'pending'",
+        )
+        .bind(now, row.id, input.organizationId)
+        .run();
+      requeued += result.meta.changes ?? 0;
+    }
+    return { requeued };
+  }
 
   async enqueue(input: ReminderOutboxEnqueueInput): Promise<{ outboxJobId: string }> {
     const now = new Date().toISOString();
@@ -403,7 +448,8 @@ export class CloudflareReminderOutbox implements ReminderOutboxDelivery {
             subject: input.subject,
             html: input.html,
             text: input.text,
-            idempotencyKey: input.idempotencyKey,
+            // OpenSend caps provider keys at 128 chars; keep the full domain key as D1 dedupe.
+            idempotencyKey: providerIdempotencyKey(input.idempotencyKey),
           },
         }),
         now,

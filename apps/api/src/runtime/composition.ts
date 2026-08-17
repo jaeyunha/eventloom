@@ -305,13 +305,14 @@ function taskCadence(
   if (!Number.isFinite(dueTime)) {
     return { cadenceWindow: "unscheduled", nextEligibleAt: null };
   }
+  const normalizedOffsets = offsets.filter(
+    (offset) => Number.isSafeInteger(offset) && offset >= 0 && offset % 60 === 0,
+  );
+  if (normalizedOffsets.length === 0) {
+    return { cadenceWindow: "disabled", nextEligibleAt: null };
+  }
   const thresholds = [
-    ...new Set([
-      dueTime,
-      ...offsets
-        .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
-        .map((offset) => dueTime - offset * 60_000),
-    ]),
+    ...new Set(normalizedOffsets.map((offset) => dueTime - offset * 60_000)),
   ].sort((left, right) => left - right);
   const active = thresholds.filter((threshold) => threshold <= scheduledAt.getTime()).at(-1);
   const next = thresholds.find((threshold) => threshold > scheduledAt.getTime());
@@ -575,19 +576,22 @@ export async function runScheduledReminders(
       .map((event) => event.id)
       .sort((left, right) => left.localeCompare(right));
     for (const eventId of eventIds) {
-      await communications.runAutomaticReminders(
-        {
-          tenantId: organizationId,
-          userId: "scheduled-reminder-dispatcher",
-          kind: "automation",
-          grants: [{ eventId, role: "delivery" }],
-        },
-        {
-          organizationId,
-          eventId,
-          scheduledAt: scheduledAt.toISOString(),
-        },
-      );
+      const actor = {
+        tenantId: organizationId,
+        userId: "scheduled-reminder-dispatcher",
+        kind: "automation" as const,
+        grants: [{ eventId, role: "delivery" as const }],
+      };
+      try {
+        await communications.requeuePendingReminders(actor, { organizationId, eventId });
+      } catch {
+        // The run performs candidate-level recovery even when a pending wakeup still fails.
+      }
+      await communications.runAutomaticReminders(actor, {
+        organizationId,
+        eventId,
+        scheduledAt: scheduledAt.toISOString(),
+      });
     }
   }
 }
@@ -652,6 +656,7 @@ function createOutboxDeliveryStatusRecorder(
           {
             organizationId: input.tenantId,
             eventId: input.target.eventId,
+            runId: input.target.runId,
             dispatchId: input.target.dispatchId,
             status: input.status,
             ...(input.providerMessageId === undefined

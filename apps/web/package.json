@@ -5,12 +5,12 @@
   "license": "Elastic-2.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1 --port 3015",
+    "dev": "bun --env-file=../../.env ../../scripts/dev/run-local-service.ts web-dev",
     "dev:playwright": "next dev --hostname 127.0.0.1 --port $PLAYWRIGHT_WEB_PORT",
     "build": "next build",
     "cloudflare:build": "opennextjs-cloudflare build",
     "cloudflare:preview": "opennextjs-cloudflare preview",
-    "start": "next start --hostname 127.0.0.1 --port 3015",
+    "start": "bun --env-file=../../.env ../../scripts/dev/run-local-service.ts web-start",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

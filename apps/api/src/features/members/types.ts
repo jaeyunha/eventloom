@@ -319,7 +319,8 @@ export type MemberServiceErrorCode =
   | "INVITATION_INVALID"
   | "INVITATION_EXPIRED"
   | "REVIEWER_NOT_ACTIVE"
-  | "ASSIGNMENT_CAP_REACHED";
+  | "ASSIGNMENT_CAP_REACHED"
+  | "ORGANIZER_SEAT_LIMIT";
 
 /** Kept as a named error contract so routes and callers can map failures without string matching. */
 export class MemberServiceError extends Error {

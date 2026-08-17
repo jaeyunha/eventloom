@@ -1,3 +1,10 @@
+import {
+  deploymentEnvironmentSchema,
+  deploymentModeSchema,
+  type OrganizationEntitlement,
+  organizationEntitlementSchema,
+  resolveDeploymentMode,
+} from "@eventloom/contracts";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
 import type { ApiBindings, ApiDependencies } from "../app";
 import { parseCommunicationIdentityEnvironment } from "../env";
@@ -19,6 +26,7 @@ import type {
 } from "../features/auth/types";
 import { apiKeyScopes, organizationRoles } from "../features/auth/types";
 import type { EventRepository } from "../features/events/types";
+import { createOrganizationPolicy } from "../features/organizations/policy";
 import {
   type OrganizationMembership as MemberOrganizationMembership,
   MemberRepositoryConflictError,
@@ -41,6 +49,7 @@ import {
   type CloudflareOutboxMessage,
   inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
+import { D1OrganizationEntitlementRepository } from "../infrastructure/cloudflare/repositories/organization-entitlements";
 import {
   type AdvisoryAiReasoningEffort,
   type CloudflareAiBinding,
@@ -67,6 +76,7 @@ import { createD1RuntimeDependencies, createRuntimeEventRoleInvitationAdapters }
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
     readonly API_ORIGIN?: string;
+    readonly DEPLOYMENT_MODE?: string;
     readonly RUNTIME_PROFILE?: string;
     /** Legacy global Airtable bindings are ignored; each connection chooses its own credential and base. */
     readonly AIRTABLE_ACCESS_TOKEN?: string;
@@ -78,6 +88,7 @@ export type RuntimeBindings = ApiBindings &
     readonly OPENSEND_API_KEY?: string;
     readonly OPENSEND_SENDING_API_KEY?: string;
     readonly OPENSEND_API_URL?: string;
+    readonly ORGANIZATION_PROVISIONING_TOKEN?: string;
     readonly CACHE_INVALIDATION_URL?: string;
     readonly CACHE_INVALIDATION_TOKEN?: string;
     readonly AUTH_FROM_EMAIL?: string;
@@ -221,6 +232,28 @@ function isHttpsOrigin(value: unknown): value is string {
       parsed.pathname === "/" &&
       parsed.search === "" &&
       parsed.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackOrigin(value: unknown): value is string {
+  if (!nonEmpty(value)) return false;
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname === "/" &&
+      parsed.search === "" &&
+      parsed.hash === "" &&
+      (hostname === "127.0.0.1" ||
+        hostname === "localhost" ||
+        hostname.endsWith(".localhost") ||
+        hostname === "[::1]")
     );
   } catch {
     return false;
@@ -511,13 +544,18 @@ function organizationFromValue(value: unknown): OrganizationRecord | null {
   });
 }
 
-function organizationFingerprint(organization: OrganizationRecord, ownerUserId: string): string {
+function organizationFingerprint(
+  organization: OrganizationRecord,
+  ownerUserId: string,
+  entitlement: OrganizationEntitlement,
+): string {
   return JSON.stringify({
     organizationId: organization.organizationId,
     slug: organization.slug,
     name: organization.name,
     config: organization.config,
     ownerUserId,
+    entitlement,
   });
 }
 
@@ -693,6 +731,18 @@ function randomToken(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function secretEquals(candidate: string | null, expected: string): boolean {
+  if (candidate === null) return false;
+  const candidateBytes = new TextEncoder().encode(candidate);
+  const expectedBytes = new TextEncoder().encode(expected);
+  let difference = candidateBytes.length ^ expectedBytes.length;
+  const length = Math.max(candidateBytes.length, expectedBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (candidateBytes[index] ?? 0) ^ (expectedBytes[index] ?? 0);
+  }
+  return difference === 0;
+}
+
 function repositoryConflict(error: unknown): boolean {
   return error instanceof Error && /constraint|unique|duplicate/i.test(error.message);
 }
@@ -707,13 +757,16 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
   async createOrganizationWithOwner(input: {
     readonly organization: OrganizationRecord;
     readonly membership: MemberMembership;
+    readonly entitlement: OrganizationEntitlement;
     readonly idempotencyKey?: string;
   }): Promise<OrganizationRecord> {
     const organization = cloneValue(input.organization);
     const membership = cloneValue(input.membership);
+    const entitlement = organizationEntitlementSchema.parse(input.entitlement);
     if (
       membership.organizationId !== organization.organizationId ||
       membership.role !== "owner" ||
+      entitlement.organizationId !== organization.organizationId ||
       !nonEmpty(membership.userId)
     ) {
       throw new MemberRepositoryConflictError("The organization owner membership is invalid.");
@@ -721,12 +774,12 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
 
     const allowExisting = input.idempotencyKey !== undefined;
     const operation = () =>
-      this.insertOrganizationWithOwner({ organization, membership, allowExisting });
+      this.insertOrganizationWithOwner({ organization, membership, entitlement, allowExisting });
     if (input.idempotencyKey === undefined) return operation();
 
     const scope = `${encodeURIComponent(membership.userId)}:organization-create`;
     const key = input.idempotencyKey;
-    const fingerprint = organizationFingerprint(organization, membership.userId);
+    const fingerprint = organizationFingerprint(organization, membership.userId, entitlement);
     const claim = await this.#idempotency.begin({ scope, key, fingerprint });
     if (claim.status === "conflict") {
       throw new MemberRepositoryConflictError(
@@ -852,6 +905,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
   private async insertOrganizationWithOwner(input: {
     readonly organization: OrganizationRecord;
     readonly membership: MemberMembership;
+    readonly entitlement: OrganizationEntitlement;
     readonly allowExisting: boolean;
   }): Promise<OrganizationRecord> {
     const existing = await this.readOrganization(input.organization.organizationId);
@@ -860,7 +914,21 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
         throw new MemberRepositoryConflictError("The organization ID already exists.");
       }
       const owners = await this.organizationOwnerIds(input.organization.organizationId);
-      if (owners.includes(input.membership.userId)) return cloneValue(existing);
+      const entitlement = await new D1OrganizationEntitlementRepository(
+        this.database,
+      ).getEntitlement(input.organization.organizationId);
+      if (
+        owners.includes(input.membership.userId) &&
+        entitlement !== null &&
+        JSON.stringify(entitlement) === JSON.stringify(input.entitlement)
+      ) {
+        return cloneValue(existing);
+      }
+      if (owners.includes(input.membership.userId)) {
+        throw new MemberRepositoryConflictError(
+          "The organization entitlement differs from the idempotent request.",
+        );
+      }
       if (owners.length > 0) {
         throw new MemberRepositoryConflictError("The organization already has another owner.");
       }
@@ -912,6 +980,27 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
             input.membership.createdAt,
             input.membership.updatedAt,
           ),
+        this.database
+          .prepare(
+            `INSERT INTO organization_entitlements (
+               organization_id, schema_version, revision, state, capabilities_json,
+               active_event_limit, organizer_seat_limit, not_before, expires_at,
+               created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            input.entitlement.organizationId,
+            input.entitlement.schemaVersion,
+            input.entitlement.revision,
+            input.entitlement.state,
+            JSON.stringify(input.entitlement.capabilities),
+            input.entitlement.limits.activeEvents,
+            input.entitlement.limits.organizerSeats,
+            input.entitlement.notBefore,
+            input.entitlement.expiresAt,
+            input.organization.createdAt,
+            input.organization.updatedAt,
+          ),
       ]);
     } catch (error) {
       if (repositoryConflict(error)) {
@@ -929,6 +1018,12 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     const owners = await this.organizationOwnerIds(input.organization.organizationId);
     if (!owners.includes(input.membership.userId)) {
       throw new MemberRepositoryConflictError("The organization owner membership was not created.");
+    }
+    const entitlement = await new D1OrganizationEntitlementRepository(this.database).getEntitlement(
+      input.organization.organizationId,
+    );
+    if (entitlement === null) {
+      throw new MemberRepositoryConflictError("The organization entitlement was not created.");
     }
     return cloneValue(created);
   }
@@ -1212,16 +1307,52 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
 
   async createMembership(input: MemberMembership): Promise<void> {
     try {
-      const result = await this.database
+      const guardedInsert = this.database
         .prepare(
           `INSERT INTO organization_memberships
              (organization_id, user_id, role, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?
+            WHERE ? NOT IN ('owner', 'admin')
+               OR NOT EXISTS (
+                    SELECT 1
+                      FROM organization_entitlements entitlement
+                     WHERE entitlement.organization_id = ?
+                       AND entitlement.state = 'active'
+                       AND entitlement.not_before <= ?
+                       AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                       AND entitlement.organizer_seat_limit IS NOT NULL
+                       AND (
+                         (SELECT COUNT(*)
+                            FROM organization_memberships member
+                           WHERE member.organization_id = ?
+                             AND member.role IN ('owner', 'admin'))
+                         +
+                         (SELECT COUNT(*)
+                            FROM auth_verifications invitation
+                           WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                             AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                             AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                             AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                         ) < entitlement.organizer_seat_limit
+                       )
+               )`,
         )
-        .bind(input.organizationId, input.userId, input.role, input.createdAt, input.updatedAt)
-        .run();
+        .bind(
+          input.organizationId,
+          input.userId,
+          input.role,
+          input.createdAt,
+          input.updatedAt,
+          input.role,
+          input.organizationId,
+          input.updatedAt,
+          input.updatedAt,
+          input.organizationId,
+          input.organizationId,
+        );
+      const result = await guardedInsert.run();
       if (Number(result.meta?.changes ?? 1) === 0) {
-        throw new MemberRepositoryConflictError("The membership already exists.");
+        throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
       }
     } catch (error) {
       if (error instanceof MemberRepositoryConflictError) throw error;
@@ -1238,14 +1369,55 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     role: MemberMembership["role"],
     updatedAt: string,
   ): Promise<void> {
-    await this.database
+    const guardedUpdate = await this.database
       .prepare(
         `UPDATE organization_memberships
-            SET role = ?, updated_at = ?
-          WHERE organization_id = ? AND user_id = ?`,
+              SET role = ?, updated_at = ?
+            WHERE organization_id = ? AND user_id = ?
+              AND (
+                ? NOT IN ('owner', 'admin')
+                OR role IN ('owner', 'admin')
+                OR NOT EXISTS (
+                  SELECT 1
+                    FROM organization_entitlements entitlement
+                   WHERE entitlement.organization_id = ?
+                     AND entitlement.state = 'active'
+                     AND entitlement.not_before <= ?
+                     AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                     AND entitlement.organizer_seat_limit IS NOT NULL
+                     AND (
+                       (SELECT COUNT(*)
+                          FROM organization_memberships member
+                         WHERE member.organization_id = ?
+                           AND member.role IN ('owner', 'admin'))
+                       +
+                       (SELECT COUNT(*)
+                          FROM auth_verifications invitation
+                         WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                           AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                           AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                           AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                       ) < entitlement.organizer_seat_limit
+                     )
+                )
+              )`,
       )
-      .bind(role, updatedAt, organizationId, userId)
+      .bind(
+        role,
+        updatedAt,
+        organizationId,
+        userId,
+        role,
+        organizationId,
+        updatedAt,
+        updatedAt,
+        organizationId,
+        organizationId,
+      )
       .run();
+    if (Number(guardedUpdate.meta?.changes ?? 1) === 0) {
+      throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
+    }
   }
 
   async removeMembership(organizationId: string, userId: string): Promise<void> {
@@ -1384,11 +1556,35 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     };
     const temporaryDigest = await sha256(randomToken());
     try {
-      await this.database
+      const guardedInsert = this.database
         .prepare(
           `INSERT INTO auth_verifications
              (id, identifier, token_digest, expires_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?, ?
+            WHERE ? NOT IN ('owner', 'admin')
+               OR NOT EXISTS (
+                    SELECT 1
+                      FROM organization_entitlements entitlement
+                     WHERE entitlement.organization_id = ?
+                       AND entitlement.state = 'active'
+                       AND entitlement.not_before <= ?
+                       AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                       AND entitlement.organizer_seat_limit IS NOT NULL
+                       AND (
+                         (SELECT COUNT(*)
+                            FROM organization_memberships member
+                           WHERE member.organization_id = ?
+                             AND member.role IN ('owner', 'admin'))
+                         +
+                         (SELECT COUNT(*)
+                            FROM auth_verifications invitation
+                           WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                             AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                             AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                             AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                         ) < entitlement.organizer_seat_limit
+                       )
+               )`,
         )
         .bind(
           input.id,
@@ -1397,8 +1593,17 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
           input.expiresAt,
           input.createdAt,
           input.updatedAt,
-        )
-        .run();
+          input.role,
+          input.organizationId,
+          input.updatedAt,
+          input.updatedAt,
+          input.organizationId,
+          input.organizationId,
+        );
+      const result = await guardedInsert.run();
+      if (Number(result.meta?.changes ?? 1) === 0) {
+        throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
+      }
     } catch (error) {
       if (repositoryConflict(error)) {
         throw new MemberRepositoryConflictError("The invitation already exists.");
@@ -2231,7 +2436,6 @@ const fixedOrigins = {
 const LOCAL_BETTER_AUTH_SECRET = "eventloom-integrated-local-auth-secret-v1";
 const LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY =
   "eventloom-integrated-local-airtable-credential-key-v2";
-const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";
 const LOCAL_CACHE_INVALIDATION_TOKEN = "local-cache-invalidation";
 
 function authEnvironment(value: string): "local" | "staging" | "production" | null {
@@ -2240,13 +2444,16 @@ function authEnvironment(value: string): "local" | "staging" | "production" | nu
 
 export function runtimeBindingsForEnvironment(source: RuntimeBindings): RuntimeBindings {
   if (source.APP_ENV !== "local") return source;
+  const webOrigin = source.WEB_ORIGIN.trim() || fixedOrigins.local.web;
+  const apiOrigin = source.API_ORIGIN?.trim() || fixedOrigins.local.api;
   return {
     ...source,
-    API_ORIGIN: fixedOrigins.local.api,
+    WEB_ORIGIN: webOrigin,
+    API_ORIGIN: apiOrigin,
     AIRTABLE_CREDENTIAL_ENCRYPTION_KEY:
       source.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY?.trim() || LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY,
     BETTER_AUTH_SECRET: LOCAL_BETTER_AUTH_SECRET,
-    CACHE_INVALIDATION_URL: LOCAL_CACHE_INVALIDATION_URL,
+    CACHE_INVALIDATION_URL: `${webOrigin}/api/internal/cache-invalidation`,
     CACHE_INVALIDATION_TOKEN: LOCAL_CACHE_INVALIDATION_TOKEN,
   };
 }
@@ -2361,15 +2568,15 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
 
   const environment = authEnvironment(bindings.APP_ENV);
   if (environment !== null) {
-    if (environment === "local" && bindings.WEB_ORIGIN !== fixedOrigins.local.web) {
-      issues.push("WEB_ORIGIN must match the integrated local web origin.");
+    if (environment === "local" && !isLoopbackOrigin(bindings.WEB_ORIGIN)) {
+      issues.push("WEB_ORIGIN must be a loopback origin for local.");
     }
     if (
       environment === "local" &&
       bindings.API_ORIGIN !== undefined &&
-      bindings.API_ORIGIN !== fixedOrigins.local.api
+      !isLoopbackOrigin(bindings.API_ORIGIN)
     ) {
-      issues.push("API_ORIGIN must match the integrated local API origin.");
+      issues.push("API_ORIGIN must be a loopback origin for local.");
     }
     if (environment !== "local" && !isHttpsOrigin(bindings.WEB_ORIGIN)) {
       issues.push("WEB_ORIGIN must be an HTTPS origin for deployed environments.");
@@ -2485,6 +2692,22 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
   if (bindings.PRIVATE_FILES === undefined) {
     throw new TypeError("The private files binding is required outside local development.");
   }
+  const deploymentMode = resolveDeploymentMode(
+    deploymentEnvironmentSchema.parse(bindings.APP_ENV),
+    bindings.DEPLOYMENT_MODE === undefined
+      ? undefined
+      : deploymentModeSchema.parse(bindings.DEPLOYMENT_MODE),
+  );
+  const provisioningToken = bindings.ORGANIZATION_PROVISIONING_TOKEN?.trim();
+  const entitlementRepository = new D1OrganizationEntitlementRepository(bindings.DB);
+  const organizationPolicy = createOrganizationPolicy(
+    deploymentMode === "managed"
+      ? {
+          deploymentMode,
+          repository: entitlementRepository,
+        }
+      : { deploymentMode },
+  );
   if (bindings.OUTBOX_QUEUE === undefined) {
     throw new TypeError("The outbox queue binding is required outside local development.");
   }
@@ -2589,9 +2812,11 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
     eventRoleInvitationAdapters,
     senderAddresses,
     calendarIntegrationOptions,
+    organizationPolicy,
   });
   const memberService = new MemberService({
     identity: new D1MemberIdentityRepository(bindings.DB),
+    organizationEntitlements: entitlementRepository,
     auth: new D1MemberAuthBoundary(bindings.DB, bindings.WEB_ORIGIN),
     invitationDelivery: new CloudflareMemberInvitationDelivery(
       bindings.DB,
@@ -2649,6 +2874,27 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
     ...(dependencies.access === undefined ? {} : { access: dependencies.access }),
     auth: betterAuthRuntime,
     members: { service: memberService },
+    ...(deploymentMode === "self-hosted" &&
+    provisioningToken !== undefined &&
+    provisioningToken.length > 0
+      ? {
+          organizationBootstrap: {
+            service: memberService,
+            authenticate: (request: Request) =>
+              secretEquals(request.headers.get("x-eventloom-bootstrap-token"), provisioningToken),
+          },
+        }
+      : {}),
+    ...(provisioningToken !== undefined && provisioningToken.length > 0
+      ? {
+          organizationProvisioning: {
+            service: memberService,
+            entitlements: entitlementRepository,
+            authenticate: (request: Request) =>
+              secretEquals(request.headers.get("authorization"), `Bearer ${provisioningToken}`),
+          },
+        }
+      : {}),
     integrations,
     ...(airtableIntegration === undefined ? {} : { airtableIntegration }),
   };

@@ -101,7 +101,10 @@ describe("API foundation", () => {
             origin,
             "content-type": "text/plain",
           },
-          body: JSON.stringify({ expectedVersion: 1 }),
+          body: JSON.stringify({
+            expectedVersion: 1,
+            revisionSyncToken: "11111111-1111-4111-8111-111111111111",
+          }),
         },
         production,
       );
@@ -121,6 +124,60 @@ describe("API foundation", () => {
     expect(response.status).toBe(404);
     expect(body.error.code).toBe("NOT_FOUND");
     expect(response.headers.get("x-request-id")).toBe(body.error.traceId);
+  });
+});
+
+describe("organization bootstrap authentication", () => {
+  it("authenticates the verified user before handling the bootstrap route", async () => {
+    const principal: UserPrincipal = {
+      kind: "user",
+      sessionId: "session-bootstrap",
+      userId: "bootstrap-owner",
+      email: "bootstrap@example.test",
+      memberships: [],
+      speakerGrants: [],
+      reviewerGrants: [],
+    };
+    const app = createApp({
+      authenticator: { authenticate: async () => principal },
+      organizationBootstrap: {
+        authenticate: (request) =>
+          request.headers.get("x-eventloom-bootstrap-token") === "operator-token",
+        service: {
+          async createOrganization(actor: { readonly organizationId: string }) {
+            return {
+              organizationId: actor.organizationId,
+              slug: "bootstrap",
+              name: "Bootstrap Organization",
+              config: {},
+              createdAt: "2026-08-17T00:00:00.000Z",
+              updatedAt: "2026-08-17T00:00:00.000Z",
+            };
+          },
+        } as never,
+      },
+    });
+
+    const response = await app.request(
+      "https://api.example.test/api/setup/organizations/bootstrap",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "bootstrap",
+          origin: environment.WEB_ORIGIN,
+          "x-eventloom-bootstrap-token": "operator-token",
+        },
+        body: JSON.stringify({
+          organizationId: "org-bootstrap",
+          slug: "bootstrap",
+          name: "Bootstrap Organization",
+        }),
+      },
+      environment,
+    );
+
+    expect(response.status).toBe(201);
   });
 });
 
