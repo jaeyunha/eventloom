@@ -24,10 +24,11 @@ product-architecture source.
 - PR state: open, non-draft, merge status `CLEAN`
 - Current GitHub main/base:
   `a9d0019eac57aa90503a6623011e570e22620fcf`
-- Exact pushed implementation/review checkpoint before this ledger update:
+- Exact reviewed implementation/source checkpoint:
   `4bbf3407882fdda13aace4c74b7795a4a76c4ac7`
-- The exact final ledger commit is linked from issue #56 after this document is
-  committed and pushed.
+- Subsequent handoff-only commits do not change that reviewed source tree. The
+  current branch head is linked from issue #56 and PR #38 because a committed
+  document cannot embed its own commit identity.
 
 ## Lane objective and narrow scope
 
@@ -126,7 +127,7 @@ for these narrow findings:
 
 ## Verification ledger
 
-Update this ledger before pushing the checkpoint.
+This ledger records the commands executed against the reviewed source tree.
 
 - [x] Failing-first focused regression observed:
   `bun run test:unit -- apps/web/src/features/cfp/flow.test.ts apps/web/src/features/sessions/session-workspace.component.test.tsx`
@@ -189,9 +190,7 @@ Update this ledger before pushing the checkpoint.
   - Context/history: PASS, no blockers.
   - Hands-on QA: PASS; 76 focused, 10 composed-runtime, and 13 isolated
     Chromium tests passed, and the submitted-edit screenshot was inspected.
-  - Code-quality inspection found no source/test defect. Its final
-    repository-delivery verdict is recorded in issue #56 and PR #38 after this
-    handoff commit is pushed, avoiding a self-referential status entry here.
+  - Code-quality inspection found no source/test defect.
 
 ## Delivery readiness
 
@@ -205,9 +204,9 @@ Update this ledger before pushing the checkpoint.
   code-quality, security, hands-on QA, and context/history reviewers.
 - [x] Complete the explicitly requested repeat source, security, QA, context,
   and goal checks.
-- Final repository-delivery review verdicts and the exact handoff commit are
-  recorded externally in issue #56 and PR #38 after this file is pushed.
-- [ ] Keep PR #38 unmerged and undeployed pending explicit instruction.
+- The current branch identity and post-commit delivery verdict are recorded in
+  issue #56 and PR #38; this file records the reviewed source identity.
+- [x] PR #38 remains unmerged and undeployed pending explicit instruction.
 
 ## Deferred canonical lifecycle work
 
@@ -221,7 +220,7 @@ Update this ledger before pushing the checkpoint.
 
 ## Dependencies and merge order
 
-1. Finish and re-review the narrow PR #38 checkpoint.
+1. The narrow PR #38 source checkpoint is complete and reviewed.
 2. Do not merge or deploy from this retained lane without explicit instruction.
 3. PRs #31, #32, and #33 must merge before starting the separate canonical
    accepted-participant lifecycle branch.
@@ -236,8 +235,7 @@ Update this ledger before pushing the checkpoint.
   - `apps/web/.next/`
   - `apps/api/.wrangler/tmp/`
 - Do not stage unrelated files or regenerated outputs.
-- Before commit, confirm `git status --short` contains only the expected
-  lane-owned source/tests and this document.
+- The handoff-only checkpoint was prepared with no unrelated tracked changes.
 
 ## Precise resume instructions
 
@@ -268,7 +266,8 @@ git diff --name-status github/main...HEAD
 git diff --check github/main...HEAD
 ```
 
-Continue the narrowed CFP objective from this active worktree until the five
-reviews and final checkpoint are complete. When starting the deferred canonical
-lifecycle later, do not reuse this worktree or branch; follow the private
-handoff and create a fresh worktree after the dependency PRs merge.
+Keep this retained worktree active for explicit follow-up instruction. The
+narrow CFP source objective has no remaining blocker. When starting the
+deferred canonical lifecycle later, do not reuse this worktree or branch;
+follow the private handoff and create a fresh worktree after the dependency PRs
+merge.
