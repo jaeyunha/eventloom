@@ -8,25 +8,21 @@ import {
   InMemoryReminderRepository,
 } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
-import { type EvaluationDecisionProjectionInput } from "../features/evaluations/service";
+import type { EvaluationDecisionProjectionInput } from "../features/evaluations/service";
 import type {
   EventRoleInvitation,
   EventRoleInvitationRepository,
 } from "../features/event-invitations/types";
-
-import {
-  type AirtableRequest,
-  type AirtableTransport,
-  FakeAirtableTransport,
-} from "../infrastructure/airtable";
+import type { AirtableRequest, AirtableTransport } from "../infrastructure/airtable";
+import { FakeAirtableTransport } from "../infrastructure/airtable";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import {
   AirtableAgendaRepository,
   AirtableCommunicationRepository,
   AirtableCrmRepository,
   AirtableEvaluationDecisionProjection,
-  AirtableEvaluationReminderBoundary,
   AirtableEvaluationProjectionStore,
+  AirtableEvaluationReminderBoundary,
   AirtableEventRepository,
   AirtableRemixContentGateway,
   CloudflareCfpEffects,
@@ -875,7 +871,7 @@ describe("integrated local runtime composition", () => {
       APP_ENV: "local",
       RUNTIME_PROFILE: "integrated",
       WEB_ORIGIN: "http://127.0.0.1:3015",
-      API_ORIGIN: "https://production-origin-must-be-ignored.example",
+      API_ORIGIN: "http://127.0.0.1:8787",
       AIRTABLE_BASE_ID: "production-base-must-not-be-used",
       AIRTABLE_BASE_DEV_ID: "development-base",
       BETTER_AUTH_SECRET: "production-secret-must-not-be-used",

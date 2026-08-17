@@ -1139,10 +1139,7 @@ describe("evaluation plans and assignments", () => {
       repository,
       aiSuggestionProvider: {
         suggest: async () => ({
-          candidates: [
-            { criterionId: "quality", value: 4, evidence: ["Submission evidence"] },
-            { criterionId: "relevance", value: 4, evidence: ["Submission evidence"] },
-          ],
+          candidates: validAiCandidates(),
         }),
       },
     });
@@ -3888,6 +3885,38 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         relevance: [
           {
             evidence: ["The practical audience focus directly supports program relevance."],
+          },
+        ],
+      },
+    });
+  });
+
+  it("accepts natural grounded rationale inflections without accepting filler", async () => {
+    const candidates = validAiCandidates().map((candidate) =>
+      candidate.criterionId === "quality"
+        ? {
+            ...candidate,
+            evidence: [
+              "The practical material will resonate with the audience and improve their understanding.",
+            ],
+          }
+        : candidate,
+    );
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates }),
+    });
+    const assignment = await assignOne(service);
+
+    await expect(
+      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+    ).resolves.toMatchObject({
+      candidates: {
+        quality: [
+          {
+            evidence: [
+              "The practical material will resonate with the audience and improve their understanding.",
+            ],
           },
         ],
       },
