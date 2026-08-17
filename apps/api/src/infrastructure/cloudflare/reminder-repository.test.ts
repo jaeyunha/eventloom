@@ -122,6 +122,7 @@ describe("Cloudflare reminder outbox", () => {
       state: "queued",
       attemptCount: 0,
       availableAt: new Date(database.row.availableAt),
+      leaseOwner: null,
       leaseExpiresAt: null,
     };
     const repository = new InMemoryOutboxJobRepository([job]);

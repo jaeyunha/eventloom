@@ -1,12 +1,19 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import {
+  EvaluationExportCoordinator,
+  InMemoryEvaluationExportArtifactStore,
+  InMemoryEvaluationExportStore,
+} from "./export-jobs";
+import {
   InMemoryEvaluationRepository,
   InMemorySubmissionReviewSource,
   type OrganizerWorkspaceRecords,
 } from "./repository";
 import {
+  createEvaluationExportGenerator,
   createEvaluationRoutes,
+  createUniqueCsvHeaders,
   type EvaluationRouteEnvironment,
   type EvaluationRouteOptions,
 } from "./routes";
@@ -55,9 +62,13 @@ class DecisionReadFailureRepository extends InMemoryEvaluationRepository {
   }
 }
 
-function createTestApp(
+type TestRouteOptions =
+  | EvaluationRouteOptions
+  | ((service: EvaluationService) => EvaluationRouteOptions);
+
+function createTestHarness(
   serviceOptions: EvaluationServiceOptions = {},
-  routeOptions: EvaluationRouteOptions = {},
+  routeOptions: TestRouteOptions = {},
   submissionMaterials: readonly SubmissionReviewMaterial[] = [
     {
       id: "submission-1",
@@ -115,8 +126,24 @@ function createTestApp(
     );
     await next();
   });
-  app.route("/evaluations", createEvaluationRoutes(service, routeOptions));
-  return app;
+  app.route(
+    "/evaluations",
+    createEvaluationRoutes(
+      service,
+      typeof routeOptions === "function" ? routeOptions(service) : routeOptions,
+    ),
+  );
+  return { app, service };
+}
+
+function createTestApp(
+  serviceOptions: EvaluationServiceOptions = {},
+  routeOptions: TestRouteOptions = {},
+  submissionMaterials?: readonly SubmissionReviewMaterial[],
+  repositoryOverride?: InMemoryEvaluationRepository,
+) {
+  return createTestHarness(serviceOptions, routeOptions, submissionMaterials, repositoryOverride)
+    .app;
 }
 
 async function jsonRequest(
@@ -131,6 +158,49 @@ async function jsonRequest(
     headers: { "content-type": "application/json", "x-test-actor": actor },
     body: JSON.stringify(body),
   });
+}
+
+function parseCsvRecords(csv: string): readonly Record<string, string>[] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < csv.length; index += 1) {
+    const character = csv[index];
+    if (quoted) {
+      if (character === '"' && csv[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        cell += character;
+      }
+    } else if (character === '"' && cell.length === 0) {
+      quoted = true;
+    } else if (character === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (character === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+  const [headers, ...dataRows] = rows;
+  if (headers === undefined) throw new Error("Expected CSV headers.");
+  return dataRows
+    .filter((values) => values.some((value) => value.length > 0))
+    .map((values) =>
+      Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""])),
+    );
 }
 
 const planRequest = {
@@ -167,6 +237,15 @@ const planRequest = {
 };
 
 describe("evaluation HTTP routes", () => {
+  it("keeps headers unique after CSV formula-safety encoding", () => {
+    expect(
+      createUniqueCsvHeaders([
+        { header: "=Round - Quality", stableId: "round-1/quality" },
+        { header: "'=Round - Quality", stableId: "round-2/quality" },
+      ]),
+    ).toEqual(["=Round - Quality", "'=Round - Quality [round-2/quality]"]);
+  });
+
   it("creates the first draft from the canonical plan DTO without a seeded fallback", async () => {
     const app = createTestApp();
     const before = await app.request("/evaluations/plans?eventId=event-1");
@@ -814,7 +893,7 @@ describe("evaluation HTTP routes", () => {
               },
               {
                 id: "evidence",
-                label: "Evidence",
+                label: "Quality [round-1/quality]",
                 description: "Written evidence for the scorecard.",
                 minimum: 0,
                 maximum: 1,
@@ -1248,47 +1327,347 @@ describe("evaluation HTTP routes", () => {
     expect(outsidePool.status).toBe(403);
   });
 
+  it("creates a durable export run before generation and downloads only after completion", async () => {
+    const queuedRunIds: string[] = [];
+    const coordinator = new EvaluationExportCoordinator({
+      store: new InMemoryEvaluationExportStore(),
+      artifacts: new InMemoryEvaluationExportArtifactStore(),
+      queue: {
+        enqueue: async (runId) => {
+          queuedRunIds.push(runId);
+        },
+      },
+      generator: {
+        generate: async () => ({
+          body: "Title,Lifecycle status\nProposal One,submitted\n",
+          rowCount: 1,
+        }),
+      },
+      clock: () => new Date("2026-08-16T20:00:00.000Z"),
+      idFactory: () => "evaluation-export-1",
+    });
+    const app = createTestApp({}, { resultsExports: coordinator });
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+
+    const created = await app.request("/evaluations/plans/plan-1/exports", {
+      method: "POST",
+      headers: { "idempotency-key": "review-results-attempt-1" },
+    });
+    const createdBody = (await created.json()) as {
+      data: {
+        id: string;
+        status: string;
+        statusUrl: string;
+        downloadUrl: string;
+      };
+    };
+    expect(created.status).toBe(202);
+    expect(createdBody.data).toMatchObject({
+      id: "evaluation-export-1",
+      status: "queued",
+      statusUrl: "/api/admin/evaluations/plans/plan-1/exports/evaluation-export-1",
+      downloadUrl: "/api/admin/evaluations/plans/plan-1/exports/evaluation-export-1/download",
+    });
+    expect(queuedRunIds).toEqual(["evaluation-export-1"]);
+
+    const routePrefix = "/api/admin";
+    const queuedStatus = await app.request(createdBody.data.statusUrl.replace(routePrefix, ""));
+    await expect(queuedStatus.json()).resolves.toMatchObject({
+      data: { id: "evaluation-export-1", status: "queued" },
+    });
+    const earlyDownload = await app.request(createdBody.data.downloadUrl.replace(routePrefix, ""));
+    expect(earlyDownload.status).toBe(409);
+
+    await coordinator.process(createdBody.data.id);
+
+    const readyStatus = await app.request(createdBody.data.statusUrl.replace(routePrefix, ""));
+    await expect(readyStatus.json()).resolves.toMatchObject({
+      data: {
+        id: "evaluation-export-1",
+        status: "ready",
+        rowCount: 1,
+        downloadUrl: createdBody.data.downloadUrl,
+      },
+    });
+    const download = await app.request(createdBody.data.downloadUrl.replace(routePrefix, ""));
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-type")).toContain("text/csv");
+    expect(download.headers.get("content-disposition")).toContain("evaluation-plan-1.csv");
+    await expect(download.text()).resolves.toBe("Title,Lifecycle status\nProposal One,submitted\n");
+
+    const replay = await app.request("/evaluations/plans/plan-1/exports", {
+      method: "POST",
+      headers: { "idempotency-key": "review-results-attempt-1" },
+    });
+    await expect(replay.json()).resolves.toMatchObject({
+      data: { id: "evaluation-export-1", status: "ready" },
+    });
+    expect(queuedRunIds).toEqual(["evaluation-export-1"]);
+
+    const otherTenant = await app.request("/evaluations/plans/plan-1/exports", {
+      method: "POST",
+      headers: {
+        "idempotency-key": "other-tenant-attempt",
+        "x-test-actor": "other-tenant",
+      },
+    });
+    expect(otherTenant.status).toBe(404);
+  });
+
+  it("exports exact organizer results for mixed scorecard fields", async () => {
+    const exportHarness: { coordinator?: EvaluationExportCoordinator } = {};
+    const { app } = createTestHarness(
+      {},
+      (service) => {
+        const coordinator = new EvaluationExportCoordinator({
+          store: new InMemoryEvaluationExportStore(),
+          artifacts: new InMemoryEvaluationExportArtifactStore(),
+          queue: { enqueue: async () => undefined },
+          generator: createEvaluationExportGenerator(service),
+          clock: () => new Date("2026-08-16T20:00:00.000Z"),
+          idFactory: () => "mixed-scorecard-export",
+        });
+        exportHarness.coordinator = coordinator;
+        return { resultsExports: coordinator };
+      },
+      [
+        {
+          id: "submission-1",
+          tenantId: "tenant-1",
+          eventId: "event-1",
+          title: "Proposal One",
+          abstract: "Proposal details",
+          status: "submitted",
+          answers: { topic: "Infrastructure" },
+          identityFieldIds: [],
+          participants: [
+            {
+              id: "participant-1",
+              displayName: "Participant One",
+              email: "participant@example.com",
+              biography: "Participant biography",
+            },
+          ],
+        },
+        {
+          id: "draft-submission",
+          tenantId: "tenant-1",
+          eventId: "event-1",
+          title: "Draft proposal",
+          abstract: "Not yet submitted",
+          status: "draft",
+          answers: {},
+          identityFieldIds: [],
+          participants: [],
+        },
+      ],
+    );
+    const round = planRequest.rounds[0];
+    const qualityCriterion = round?.rubric.criteria[0];
+    if (round === undefined || qualityCriterion === undefined) {
+      throw new Error("The route fixture must include an initial round and criterion.");
+    }
+    await jsonRequest(app, "/evaluations/plans", "POST", {
+      ...planRequest,
+      rounds: [
+        {
+          ...round,
+          rubric: {
+            ...round.rubric,
+            criteria: [
+              qualityCriterion,
+              {
+                ...qualityCriterion,
+                id: "quality-secondary",
+              },
+              {
+                id: "recommendation",
+                label: "Recommendation",
+                description: "Committee recommendation",
+                minimum: 1,
+                maximum: 3,
+                weight: 1,
+                required: true,
+                inputType: "dropdown",
+                options: [
+                  { id: "accept", label: "Accept", value: "accept" },
+                  { id: "maybe", label: "Maybe", value: "maybe" },
+                  { id: "reject", label: "Reject", value: "reject" },
+                ],
+              },
+              {
+                id: "evidence",
+                label: "Quality [round-1/quality]",
+                description: "Written evidence for the scorecard.",
+                minimum: 0,
+                maximum: 1,
+                weight: 1,
+                required: true,
+                inputType: "free_text",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
+      expectedVersion: 1,
+    });
+    const assigned = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: [reviewer.userId],
+    });
+    const assignmentResponse = (await assigned.json()) as {
+      assignments: readonly [{ readonly id: string }];
+    };
+    expect(Object.keys(assignmentResponse)).toEqual(["assignments"]);
+    const assignmentId = assignmentResponse.assignments[0].id;
+    const saved = await jsonRequest(
+      app,
+      `/evaluations/assignments/${assignmentId}/review`,
+      "PUT",
+      {
+        scores: [
+          { criterionId: "quality", value: 4, origin: "human" },
+          { criterionId: "quality-secondary", value: 2, origin: "human" },
+          { criterionId: "recommendation", value: "accept", origin: "human" },
+          {
+            criterionId: "evidence",
+            value: "Authoritative submitted evidence",
+            origin: "human",
+          },
+        ],
+        comment:
+          '[scorecard-response id="evidence"]Stale legacy evidence[/scorecard-response]\nCommittee summary.',
+      },
+      "reviewer",
+    );
+    const savedReview = (await saved.json()) as { version: number };
+    await jsonRequest(
+      app,
+      `/evaluations/assignments/${assignmentId}/review/submit`,
+      "POST",
+      { expectedVersion: savedReview.version },
+      "reviewer",
+    );
+
+    const created = await app.request("/evaluations/plans/plan-1/exports", {
+      method: "POST",
+      headers: { "idempotency-key": "mixed-scorecard-attempt" },
+    });
+    const createdBody = (await created.json()) as { data: { id: string } };
+    const coordinator = exportHarness.coordinator;
+    if (coordinator === undefined) throw new Error("Expected the evaluation export coordinator.");
+    await coordinator.process(createdBody.data.id);
+    const response = await app.request(
+      `/evaluations/plans/plan-1/exports/${createdBody.data.id}/download`,
+    );
+    const csv = await response.text();
+    const [record] = parseCsvRecords(csv);
+
+    expect(response.status).toBe(200);
+    expect(record).toEqual({
+      "Submission ID": "submission-1",
+      Title: "Proposal One",
+      "Lifecycle status": "submitted",
+      Participants: "Participant One",
+      "Decision status": "undecided",
+      "Decision reason": "",
+      "Assignment reviewers": reviewer.userId,
+      "Assignment statuses": "submitted",
+      "Round one - Submitted reviews": "1",
+      "Round one - Expected reviews": "1",
+      "Round one - Aggregate score": "7",
+      "Round one - Possible score": "13",
+      "Round one - Reviewer comments": "Committee summary.",
+      "Round one - Quality [round-1/quality]": "4",
+      "Round one - Quality [round-1/quality-secondary]": "2",
+      "Round one - Recommendation": "accept",
+      "Round one - Quality [round-1/quality] [round-1/evidence]":
+        "Authoritative submitted evidence",
+    });
+  });
+
   it("exports a stable, formula-safe organizer CSV without crossing tenants", async () => {
     const getAggregate = vi.spyOn(EvaluationService.prototype, "getAggregate");
     const listAggregates = vi.spyOn(EvaluationService.prototype, "listAggregates");
-    const app = createTestApp({}, {}, [
-      {
-        id: "submission-1",
-        tenantId: "tenant-1",
-        eventId: "event-1",
-        title: "=2+3",
-        abstract: "Proposal details",
-        answers: { topic: "Visible" },
-        identityFieldIds: [],
-        participants: [
-          {
-            id: "participant-1",
-            displayName: "@attacker",
-            email: "participant@example.com",
-            biography: "Participant biography",
+    let nextExportId = 0;
+    const exportHarness: { coordinator?: EvaluationExportCoordinator } = {};
+    const { app } = createTestHarness(
+      {},
+      (service) => {
+        const coordinator = new EvaluationExportCoordinator({
+          store: new InMemoryEvaluationExportStore(),
+          artifacts: new InMemoryEvaluationExportArtifactStore(),
+          queue: { enqueue: async () => undefined },
+          generator: createEvaluationExportGenerator(service),
+          clock: () => new Date("2026-08-16T20:00:00.000Z"),
+          idFactory: () => {
+            nextExportId += 1;
+            return `formula-export-${nextExportId}`;
           },
-        ],
+        });
+        exportHarness.coordinator = coordinator;
+        return { resultsExports: coordinator };
       },
-    ]);
+      [
+        {
+          id: "submission-1",
+          tenantId: "tenant-1",
+          eventId: "event-1",
+          title: "=2+3",
+          abstract: "Proposal details",
+          answers: { topic: "Visible" },
+          identityFieldIds: [],
+          participants: [
+            {
+              id: "participant-1",
+              displayName: "@attacker",
+              email: "participant@example.com",
+              biography: "Participant biography",
+            },
+          ],
+        },
+      ],
+    );
     await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
-    const first = await app.request("/evaluations/plans/plan-1/export.csv");
-    const second = await app.request("/evaluations/plans/plan-1/export.csv");
-    const otherTenant = await app.request("/evaluations/plans/plan-1/export.csv", {
-      headers: { "x-test-actor": "other-tenant" },
+    async function createAndDownload(idempotencyKey: string): Promise<Response> {
+      const created = await app.request("/evaluations/plans/plan-1/exports", {
+        method: "POST",
+        headers: { "idempotency-key": idempotencyKey },
+      });
+      const body = (await created.json()) as { data: { id: string } };
+      const coordinator = exportHarness.coordinator;
+      if (coordinator === undefined) throw new Error("Expected the evaluation export coordinator.");
+      await coordinator.process(body.data.id);
+      return app.request(`/evaluations/plans/plan-1/exports/${body.data.id}/download`);
+    }
+    const first = await createAndDownload("formula-attempt-1");
+    const second = await createAndDownload("formula-attempt-2");
+    const otherTenant = await app.request("/evaluations/plans/plan-1/exports", {
+      method: "POST",
+      headers: {
+        "idempotency-key": "formula-other-tenant",
+        "x-test-actor": "other-tenant",
+      },
     });
     const firstText = await first.text();
     const secondText = await second.text();
+    const [firstRecord] = parseCsvRecords(firstText);
 
     expect(first.status).toBe(200);
     expect(first.headers.get("content-type")).toContain("text/csv");
     expect(first.headers.get("content-disposition")).toContain("evaluation-plan-1.csv");
     expect(firstText).toBe(secondText);
-    expect(firstText).toContain("submission_id,title,participants");
-    expect(firstText).toContain("submission-1");
-    expect(firstText).toContain("submission-1,'=2+3,'@attacker");
+    expect(firstRecord).toMatchObject({
+      "Submission ID": "submission-1",
+      Title: "'=2+3",
+      Participants: "'@attacker",
+    });
     expect(otherTenant.status).toBe(404);
     expect(getAggregate).not.toHaveBeenCalled();
-    expect(listAggregates).toHaveBeenCalledTimes(2);
+    expect(listAggregates).not.toHaveBeenCalled();
     getAggregate.mockRestore();
     listAggregates.mockRestore();
   });

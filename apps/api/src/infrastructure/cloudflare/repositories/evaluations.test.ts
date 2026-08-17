@@ -50,11 +50,173 @@ class RecordingD1 {
 
   async batch(statements: RecordedStatement[]) {
     (this.batches as RecordedStatement[][]).push(statements);
-    return statements.map(() => ({ results: [], meta: { changes: 1 } }));
+    return statements.map(() => ({
+      results: this.allRows.shift() ?? [],
+      meta: { changes: 1 },
+    }));
   }
 }
 
 const timestamp = "2026-08-13T12:00:00.000Z";
+
+function workspaceDatabase(reviewCount: number, scoresPerReview: number): RecordingD1 {
+  const database = new RecordingD1();
+  const assignmentRows = Array.from({ length: reviewCount }, (_, reviewIndex) => ({
+    id: `assignment-${reviewIndex + 1}`,
+    organization_id: "org-1",
+    event_id: "event-1",
+    plan_id: "plan-1",
+    round_id: "round-1",
+    submission_id: `submission-${reviewIndex + 1}`,
+    reviewer_id: `reviewer-${reviewIndex + 1}`,
+    status: reviewIndex === 0 ? "in_progress" : "submitted",
+    predecessor_assignment_id: null,
+    successor_assignment_id: null,
+    superseded_reason: null,
+    superseded_at: null,
+    plan_version: 2,
+    round_revision: 3,
+    rubric_revision: 4,
+    submission_revision: 5,
+    version: reviewIndex + 1,
+    created_at: timestamp,
+    updated_at: timestamp,
+  }));
+  const reviewRows = Array.from({ length: reviewCount }, (_, reviewIndex) => ({
+    id: `review-${reviewIndex + 1}`,
+    organization_id: "org-1",
+    event_id: "event-1",
+    plan_id: "plan-1",
+    round_id: "round-1",
+    assignment_id: `assignment-${reviewIndex + 1}`,
+    submission_id: `submission-${reviewIndex + 1}`,
+    reviewer_id: `reviewer-${reviewIndex + 1}`,
+    comment: reviewIndex === 0 ? "Draft" : "Submitted",
+    submitted_at: reviewIndex === 0 ? null : timestamp,
+    plan_revision: 2,
+    round_revision: 3,
+    rubric_revision: 4,
+    submission_revision: 5,
+    version: reviewIndex + 1,
+    created_at: timestamp,
+    updated_at: timestamp,
+  }));
+  const scoreRows = reviewRows.flatMap((reviewRow, reviewIndex) =>
+    Array.from({ length: scoresPerReview }, (_, scoreIndex) => ({
+      organization_id: "org-1",
+      event_id: "event-1",
+      review_id: reviewRow.id,
+      criterion_id: `criterion-${scoreIndex + 1}`,
+      value_number: scoreIndex === 0 ? null : scoreIndex + 3,
+      value_text: scoreIndex === 0 ? "strong" : null,
+      origin: scoreIndex === 0 ? "ai" : "human",
+      human_confirmed_by: scoreIndex === 0 ? `reviewer-${reviewIndex + 1}` : null,
+      suggestion_id: scoreIndex === 0 ? `suggestion-${reviewIndex + 1}` : null,
+      suggestion_status: scoreIndex === 0 ? "edited" : null,
+      rubric_revision: 4,
+      submission_revision: 5,
+      updated_at: timestamp,
+    })),
+  );
+  const evidenceRows = scoreRows.flatMap((scoreRow) => [
+    { ...scoreRow, ordinal: 0, evidence: `${scoreRow.review_id}:${scoreRow.criterion_id}:first` },
+    { ...scoreRow, ordinal: 1, evidence: `${scoreRow.review_id}:${scoreRow.criterion_id}:second` },
+  ]);
+
+  database.allRows.push(assignmentRows, reviewRows, [], scoreRows, evidenceRows);
+  return database;
+}
+
+describe("D1EvaluationRepository organizer workspace hydration", () => {
+  it("uses one plan-scoped session batch for export records", async () => {
+    const database = workspaceDatabase(4, 3);
+
+    const records = await new D1EvaluationRepository(
+      database as unknown as D1Database,
+    ).listOrganizerExportRecords("org-1", "event-1", "plan-1");
+
+    expect(database.sessionConstraints).toEqual(["first-primary"]);
+    expect(database.batches).toHaveLength(1);
+    expect(database.batches[0]).toHaveLength(6);
+    for (const prepared of database.batches[0] ?? []) {
+      expect(prepared.values.slice(0, 3)).toEqual(["org-1", "event-1", "plan-1"]);
+    }
+    expect(records.assignments).toHaveLength(4);
+    expect(records.reviews).toHaveLength(4);
+    expect(Object.keys(records.reviews[3]?.scores ?? {})).toEqual([
+      "criterion-1",
+      "criterion-2",
+      "criterion-3",
+    ]);
+  });
+
+  it("uses a fixed five statements while preserving complete review score hydration", async () => {
+    const smallDatabase = workspaceDatabase(1, 1);
+    const largeDatabase = workspaceDatabase(4, 3);
+
+    const [small, large] = await Promise.all([
+      new D1EvaluationRepository(
+        smallDatabase as unknown as D1Database,
+      ).listOrganizerWorkspaceRecords("org-1", "event-1"),
+      new D1EvaluationRepository(
+        largeDatabase as unknown as D1Database,
+      ).listOrganizerWorkspaceRecords("org-1", "event-1"),
+    ]);
+
+    expect(smallDatabase.statements).toHaveLength(5);
+    expect(largeDatabase.statements).toHaveLength(5);
+    expect(large.assignments.map((item) => item.submissionId)).toEqual([
+      "submission-1",
+      "submission-2",
+      "submission-3",
+      "submission-4",
+    ]);
+    expect(large.reviews.map((item) => item.id)).toEqual([
+      "review-1",
+      "review-2",
+      "review-3",
+      "review-4",
+    ]);
+    expect(Object.keys(large.reviews[3]?.scores ?? {})).toEqual([
+      "criterion-1",
+      "criterion-2",
+      "criterion-3",
+    ]);
+    expect(small.reviews[0]).toMatchObject({
+      id: "review-1",
+      comment: "Draft",
+      submittedAt: null,
+      scores: {
+        "criterion-1": {
+          value: "strong",
+          origin: "ai",
+          evidence: ["review-1:criterion-1:first", "review-1:criterion-1:second"],
+          humanConfirmedBy: "reviewer-1",
+          suggestionId: "suggestion-1",
+          suggestionStatus: "edited",
+          rubricRevision: 4,
+          submissionRevision: 5,
+        },
+      },
+    });
+    expect(large.reviews[1]).toMatchObject({ submittedAt: timestamp });
+
+    for (const prepared of largeDatabase.statements) {
+      expect(prepared.sql).toContain("organization_id = ?");
+      expect(prepared.sql).toContain("event_id = ?");
+      expect(prepared.values.slice(0, 2)).toEqual(["org-1", "event-1"]);
+    }
+    expect(largeDatabase.statements.map((prepared) => prepared.sql)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/evaluation_reviews[\s\S]*ORDER BY id/),
+        expect.stringMatching(/evaluation_scores[\s\S]*ORDER BY review_id, criterion_id/),
+        expect.stringMatching(
+          /evaluation_score_evidence[\s\S]*ORDER BY review_id, criterion_id, ordinal/,
+        ),
+      ]),
+    );
+  });
+});
 
 describe("D1EvaluationRepository consistency", () => {
   it("reads evaluation plans from the primary for optimistic transitions", async () => {
