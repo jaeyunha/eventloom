@@ -37,4 +37,22 @@ describe("CFP option list editor", () => {
     expect(markup).toContain('required=""');
     expect(markup).toContain("Type an option and press Enter");
   });
+  it("offers canonical Program settings values and a management link", () => {
+    const markup = renderToStaticMarkup(
+      <CfpOptionListEditor
+        id="tracks"
+        label="Tracks"
+        description="Route proposals into program areas."
+        values={[]}
+        availableValues={["Platform", "Accessibility"]}
+        manageHref="/admin/events/event-1/settings/classification"
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Using the Program settings classification library.");
+    expect(markup).toContain("Manage classifications");
+    expect(markup).toContain("Add Platform");
+    expect(markup).not.toContain("Type an option and press Enter");
+  });
 });

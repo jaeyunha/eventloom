@@ -934,3 +934,27 @@ export async function verifyForgePrivacy({ configuration, fetchImplementation = 
 }
 
 export { ENVIRONMENTS, ORGANIZATION_ID_MIGRATION };
+
+export function assertOrganizationProvisioningConfiguration(env = process.env) {
+  const mode = (
+    env.DEPLOYMENT_MODE ?? (env.APP_ENV === "local" ? "self-hosted" : "managed")
+  ).trim();
+  if (mode !== "managed" && mode !== "self-hosted") {
+    throw new Error(`DEPLOYMENT_MODE must be managed or self-hosted (received ${mode}).`);
+  }
+  const provisioning = env.ORGANIZATION_PROVISIONING_TOKEN?.trim() ?? "";
+  const bootstrap = env.ORGANIZATION_BOOTSTRAP_TOKEN?.trim() ?? "";
+  if (mode === "managed" && provisioning.length === 0) {
+    throw new Error(
+      "ORGANIZATION_PROVISIONING_TOKEN is required for managed deployments that provision organizations.",
+    );
+  }
+  if (bootstrap.length > 0 && provisioning.length > 0 && bootstrap === provisioning) {
+    throw new Error("ORGANIZATION_BOOTSTRAP_TOKEN must not equal ORGANIZATION_PROVISIONING_TOKEN.");
+  }
+  return {
+    mode,
+    hasProvisioningToken: provisioning.length > 0,
+    hasBootstrapToken: bootstrap.length > 0,
+  };
+}

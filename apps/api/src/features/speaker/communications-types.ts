@@ -14,7 +14,8 @@ export interface SpeakerCommunications {
     templateId?: string;
     name: string;
     subject: string;
-    html: string;
+    /** Legacy compatibility only; speaker HTML is generated from text. */
+    html?: string;
     text: string;
     status: "draft" | "approved";
   }): Promise<SpeakerEmailTemplate>;
@@ -24,7 +25,8 @@ export interface SpeakerCommunications {
     accountId: string;
     templateId: string;
     subject: string;
-    html: string;
+    /** Legacy compatibility only; speaker HTML is generated from text. */
+    html?: string;
     text: string;
     status: "draft" | "approved";
   }): Promise<SpeakerEmailTemplate>;
@@ -55,6 +57,13 @@ export interface SpeakerCommunications {
     accountId: string;
     participantIds: readonly string[];
   }): Promise<readonly SpeakerInvitationPreview[]>;
+  findInvitationReplay(input: {
+    organizationId: string;
+    eventId: string;
+    accountId: string;
+    participantIds: readonly string[];
+    idempotencyKey: string;
+  }): Promise<SpeakerInvitationResult | null>;
   sendInvitations(input: {
     organizationId: string;
     eventId: string;

@@ -2222,7 +2222,11 @@ function SpeakerEmailComposer({
                     placeholder="<p>Hello {{first_name}},</p><p>Add your message here.</p>"
                     maxLength={100_000}
                     disabled={saveBusy}
+                    readOnly
                   />
+                  <p className={styles.muted}>
+                    Generated from the plain text body when you save or preview.
+                  </p>
                 </Field>
               </TabsContent>
               <TabsContent value="text">

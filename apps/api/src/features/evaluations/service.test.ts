@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { EvaluationError } from "./errors";
 import {
+  type EvaluationPlanRevisionPrecondition,
+  type EvaluationPlanScheduleSync,
+  type EvaluationReviewWriteAdmission,
   InMemoryEvaluationRepository,
   InMemorySubmissionReviewSource,
   type OrganizerWorkspaceRecords,
   type ReviewerWorkspaceRecords,
   type SubmissionReviewLookup,
 } from "./repository";
+import { MAX_REVISION_RECONCILIATION_ROUNDS } from "./revision-schedule-sync";
 import {
   type EvaluationDecisionProjectionInput,
   type EvaluationEventMetadataSource,
@@ -16,7 +20,10 @@ import {
 import type {
   EvaluationActor,
   EvaluationAssignment,
+  EvaluationPlan,
+  EvaluationReview,
   EvaluationReviewerProjection,
+  EvaluationSuggestion,
   ReviewRound,
   SubmissionReviewMaterial,
 } from "./types";
@@ -70,6 +77,24 @@ class StaleAssignmentRepository extends InMemoryEvaluationRepository {
     return assignment === null ? null : { ...assignment, status: "assigned" };
   }
 }
+
+class NonAtomicEvaluationRepository extends InMemoryEvaluationRepository {
+  override readonly supportsAtomicPlanRevisionSync: boolean = false;
+}
+
+class ReconciliationBatchRepository extends InMemoryEvaluationRepository {
+  reconciliationCalls = 0;
+
+  override async reconcilePlanRevisionFamily(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncToken: string,
+  ): Promise<void> {
+    this.reconciliationCalls += 1;
+    await super.reconcilePlanRevisionFamily(tip, expectedVersion, scheduleSyncs, revisionSyncToken);
+  }
+}
 class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   planGate: Promise<void> | null = null;
   planListStarted: (() => void) | null = null;
@@ -80,6 +105,7 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   workspaceCalls = 0;
   assignmentListCalls = 0;
   reviewListCalls = 0;
+  successorCalls = 0;
   batchGate: Promise<void> | null = null;
   organizerWorkspaceFailure: Error | null = null;
 
@@ -127,6 +153,11 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
     return super.listReviews(requestedTenantId, planId);
   }
 
+  override async getPlanSuccessor(tenantId: string, eventId: string, predecessorPlanId: string) {
+    this.successorCalls += 1;
+    return super.getPlanSuccessor(tenantId, eventId, predecessorPlanId);
+  }
+
   resetCounts(): void {
     this.planGate = null;
     this.planListStarted = null;
@@ -134,9 +165,137 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
     this.workspaceCalls = 0;
     this.assignmentListCalls = 0;
     this.reviewListCalls = 0;
+    this.successorCalls = 0;
     this.organizerWorkspaceCalls = 0;
     this.organizerWorkspaceStarted = null;
     this.decisionCalls = 0;
+  }
+}
+
+class RacingLineageRepository extends InMemoryEvaluationRepository {
+  lineagePlanId: string | null = null;
+
+  override async putPlan(
+    plan: EvaluationPlan,
+    expectedVersion: number | null,
+    revisionPrecondition?: EvaluationPlanRevisionPrecondition,
+  ): Promise<void> {
+    const lineagePlanId = this.lineagePlanId;
+    if (revisionPrecondition !== undefined && lineagePlanId !== null) {
+      this.lineagePlanId = null;
+      const lineagePlan = await this.getPlan(plan.tenantId, lineagePlanId);
+      if (lineagePlan === null) throw new Error("Expected a lineage race fixture.");
+      await super.putPlan(
+        {
+          ...lineagePlan,
+          version: lineagePlan.version + 1,
+        },
+        lineagePlan.version,
+      );
+    }
+    await super.putPlan(plan, expectedVersion, revisionPrecondition);
+  }
+}
+
+class PausedReconciliationRepository extends InMemoryEvaluationRepository {
+  #pause:
+    | {
+        readonly entered: () => void;
+        readonly release: Promise<void>;
+      }
+    | undefined;
+
+  pauseNextReconciliation(): { readonly entered: Promise<void>; readonly release: () => void } {
+    let signalEntered = () => {};
+    let release = () => {};
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#pause = { entered: signalEntered, release: released };
+    return { entered, release };
+  }
+
+  override async reconcilePlanRevisionFamily(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncToken: string,
+  ): Promise<void> {
+    const pause = this.#pause;
+    if (pause !== undefined) {
+      this.#pause = undefined;
+      pause.entered();
+      await pause.release;
+    }
+    await super.reconcilePlanRevisionFamily(tip, expectedVersion, scheduleSyncs, revisionSyncToken);
+  }
+}
+
+class FailingReconciliationRepository extends InMemoryEvaluationRepository {
+  failNextReconciliation = false;
+
+  override async reconcilePlanRevisionFamily(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncToken: string,
+  ): Promise<void> {
+    if (this.failNextReconciliation) {
+      this.failNextReconciliation = false;
+      throw new Error("Injected reconciliation interruption.");
+    }
+    await super.reconcilePlanRevisionFamily(tip, expectedVersion, scheduleSyncs, revisionSyncToken);
+  }
+}
+
+class PendingLineageRepairRepository extends InMemoryEvaluationRepository {
+  override async hasPendingPlanLineageRepair(): Promise<boolean> {
+    return true;
+  }
+}
+
+class RacingReviewAdmissionRepository extends InMemoryEvaluationRepository {
+  supersedeBeforeReviewWrite = false;
+  closeBeforeSuggestionWrite = false;
+
+  override async putReview(
+    review: EvaluationReview,
+    expectedVersion: number | null,
+    admission: EvaluationReviewWriteAdmission,
+  ): Promise<void> {
+    if (this.supersedeBeforeReviewWrite) {
+      this.supersedeBeforeReviewWrite = false;
+      const current = await this.getAssignment(
+        admission.assignment.tenantId,
+        admission.assignment.id,
+      );
+      if (current === null) throw new Error("Expected an assignment race fixture.");
+      await this.putAssignmentsForTesting([
+        { ...current, status: "superseded", version: current.version + 1 },
+      ]);
+    }
+    await super.putReview(review, expectedVersion, admission);
+  }
+
+  override async putSuggestion(
+    suggestion: EvaluationSuggestion,
+    expectedVersion: number | null,
+    admission?: EvaluationReviewWriteAdmission,
+  ): Promise<void> {
+    if (this.closeBeforeSuggestionWrite && admission !== undefined) {
+      this.closeBeforeSuggestionWrite = false;
+      const plan = await this.getPlan(admission.assignment.tenantId, admission.assignment.planId);
+      if (plan === null) throw new Error("Expected a plan race fixture.");
+      await super.putPlanState(
+        { ...plan, status: "closed", version: plan.version + 1 },
+        plan.version,
+        [],
+      );
+    }
+    await super.putSuggestion(suggestion, expectedVersion, admission);
   }
 }
 
@@ -256,7 +415,10 @@ const submission: SubmissionReviewMaterial = {
 };
 
 async function fixture(
-  options: Pick<EvaluationServiceOptions, "acceptanceHandoff" | "decisionProjection"> & {
+  options: Pick<
+    EvaluationServiceOptions,
+    "acceptanceHandoff" | "aiSuggestionProvider" | "decisionProjection"
+  > & {
     blindReview?: boolean;
     reviewsPerSubmission?: number;
     maxAssignmentsPerReviewer?: number;
@@ -290,6 +452,9 @@ async function fixture(
       ...(options.decisionProjection === undefined
         ? {}
         : { decisionProjection: options.decisionProjection }),
+      ...(options.aiSuggestionProvider === undefined
+        ? {}
+        : { aiSuggestionProvider: options.aiSuggestionProvider }),
     },
   );
   const draft = await service.createPlan(organizer, {
@@ -307,7 +472,7 @@ async function fixture(
       ? {}
       : { reviewerProjection: options.reviewerProjection }),
   });
-  const plan = await service.openPlan(organizer, draft.id, draft.version);
+  const plan = await service.openPlan(organizer, draft.id, draft.version, crypto.randomUUID());
   return {
     repository,
     service,
@@ -700,25 +865,22 @@ describe("evaluation plans and assignments", () => {
       reviewerId: "reviewer-2",
     };
     await repository.putAssignmentsForTesting([withdrawnAssignment]);
-    await repository.putReview(
-      {
-        id: "review-withdrawn",
-        tenantId,
-        eventId,
-        planId: "plan-1",
-        roundId: round.id,
-        assignmentId: withdrawnAssignment.id,
-        submissionId: withdrawnAssignment.submissionId,
-        reviewerId: withdrawnAssignment.reviewerId,
-        scores: {},
-        comment: "Historical draft remains stored.",
-        submittedAt: null,
-        version: 1,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-      },
-      null,
-    );
+    await repository.putReviewForTesting({
+      id: "review-withdrawn",
+      tenantId,
+      eventId,
+      planId: "plan-1",
+      roundId: round.id,
+      assignmentId: withdrawnAssignment.id,
+      submissionId: withdrawnAssignment.submissionId,
+      reviewerId: withdrawnAssignment.reviewerId,
+      scores: {},
+      comment: "Historical draft remains stored.",
+      submittedAt: null,
+      version: 1,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
 
     await expect(service.listReviewerWorkspace(reviewer("reviewer-2"), eventId)).resolves.toEqual({
       assignments: [],
@@ -742,6 +904,70 @@ describe("evaluation plans and assignments", () => {
     await expect(
       service.getReviewContext(reviewer("reviewer-2"), withdrawnAssignment.id),
     ).rejects.toMatchObject({ code: "EVALUATION_CONFLICT" });
+  });
+
+  it("blocks reviewer reads and writes while legacy lineage repair is unresolved", async () => {
+    const repository = new PendingLineageRepairRepository();
+    const { service } = await fixture({ reviewsPerSubmission: 1, repository });
+    const assignment = await assignOne(service);
+
+    await expectEvaluationError(
+      service.listReviewerWorkspace(reviewer("reviewer-1"), eventId),
+      "EVALUATION_CONFLICT",
+    );
+    await expectEvaluationError(
+      service.saveReview(reviewer("reviewer-1"), assignment.id, {
+        scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+      }),
+      "EVALUATION_CONFLICT",
+    );
+  });
+
+  it("rejects a review save when assignment supersession wins the commit race", async () => {
+    const repository = new RacingReviewAdmissionRepository();
+    const { service } = await fixture({ reviewsPerSubmission: 1, repository });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+    repository.supersedeBeforeReviewWrite = true;
+
+    await expectEvaluationError(
+      service.saveReview(reviewer("reviewer-1"), assignment.id, {
+        scores: [{ criterionId: "quality", value: 5, origin: "human" }],
+        expectedVersion: draft.version,
+      }),
+      "EVALUATION_CONFLICT",
+    );
+    await expect(repository.getReview(tenantId, assignment.id)).resolves.toMatchObject({
+      version: draft.version,
+    });
+  });
+
+  it("rejects AI suggestion persistence when plan close wins the provider race", async () => {
+    const repository = new RacingReviewAdmissionRepository();
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      repository,
+      aiSuggestionProvider: {
+        suggest: async () => ({
+          candidates: [
+            { criterionId: "quality", value: 4, evidence: ["Submission evidence"] },
+            { criterionId: "relevance", value: 4, evidence: ["Submission evidence"] },
+          ],
+        }),
+      },
+    });
+    const assignment = await assignOne(service);
+    repository.closeBeforeSuggestionWrite = true;
+
+    await expectEvaluationError(
+      service.generateAiSuggestions(reviewer("reviewer-1"), {
+        assignmentId: assignment.id,
+      }),
+      "EVALUATION_CLOSED",
+    );
+    await expect(repository.listSuggestions(tenantId, assignment.id)).resolves.toEqual([]);
   });
 
   it("excludes decided submissions from reviewer queues while retaining organizer facts", async () => {
@@ -1265,6 +1491,7 @@ describe("evaluation plans and assignments", () => {
 
     expect(repository.assignmentListCalls).toBe(0);
     expect(repository.reviewListCalls).toBe(0);
+    expect(repository.successorCalls).toBe(0);
     expect(submissions.singleCalls).toBe(0);
     expect(submissions.batchCalls).toBe(1);
     expect(submissions.lastLookups).toEqual([
@@ -1508,7 +1735,7 @@ describe("evaluation plans and assignments", () => {
   it("allows organizer cleanup after the evaluation plan closes", async () => {
     const { plan, repository, service } = await fixture();
     const assignment = await assignOne(service);
-    await service.closePlan(organizer, plan.id, plan.version);
+    await service.closePlan(organizer, plan.id, plan.version, crypto.randomUUID());
 
     await service.unassignAssignment(organizer, plan.id, assignment.id);
 
@@ -1880,14 +2107,11 @@ describe("review drafts, AI assistance, and aggregates", () => {
 
     const currentReview = await repository.getReview(tenantId, assignment.id);
     if (currentReview === null) throw new Error("Expected submitted review fixture.");
-    await repository.putReview(
-      {
-        ...currentReview,
-        roundRevision: aggregate.roundRevision + 1,
-        rubricRevision: aggregate.rubricRevision + 1,
-      },
-      currentReview.version,
-    );
+    await repository.putReviewForTesting({
+      ...currentReview,
+      roundRevision: aggregate.roundRevision + 1,
+      rubricRevision: aggregate.rubricRevision + 1,
+    });
     await expect(
       service.getAggregate(organizer, plan.id, round.id, submission.id),
     ).resolves.toMatchObject({
@@ -2460,11 +2684,17 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       ],
     });
     expect(edited.version).toBe(2);
-    const opened = await service.openPlan(organizer, edited.id, edited.version);
+    const opened = await service.openPlan(
+      organizer,
+      edited.id,
+      edited.version,
+      crypto.randomUUID(),
+    );
     expect(opened.gradingLockedAt).toBe(nowIso);
     const rescheduled = await service.updatePlanSchedule(organizer, opened.id, {
       expectedVersion: opened.version,
       closesAt: "2026-08-13T12:00:00.000Z",
+      revisionSyncToken: crypto.randomUUID(),
     });
     expect(rescheduled).toMatchObject({
       closesAt: "2026-08-13T12:00:00.000Z",
@@ -2502,7 +2732,12 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
   });
   it("reopens a closed plan with the current version and preserves its grading lock", async () => {
     const { service, plan } = await fixture({ reviewsPerSubmission: 1 });
-    const closedPlan = await service.closePlan(organizer, plan.id, plan.version);
+    const closedPlan = await service.closePlan(
+      organizer,
+      plan.id,
+      plan.version,
+      crypto.randomUUID(),
+    );
 
     await expectEvaluationError(
       service.assignReviewers(organizer, {
@@ -2515,13 +2750,18 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       "EVALUATION_CLOSED",
     );
 
-    const reopened = await service.openPlan(organizer, closedPlan.id, closedPlan.version);
+    const reopened = await service.openPlan(
+      organizer,
+      closedPlan.id,
+      closedPlan.version,
+      crypto.randomUUID(),
+    );
     expect(reopened.status).toBe("open");
     expect(reopened.version).toBe(closedPlan.version + 1);
     expect(reopened.gradingLockedAt).toBe(plan.gradingLockedAt);
 
     await expectEvaluationError(
-      service.openPlan(organizer, closedPlan.id, closedPlan.version),
+      service.openPlan(organizer, closedPlan.id, closedPlan.version, crypto.randomUUID()),
       "EVALUATION_CONFLICT",
     );
     await expectEvaluationError(
@@ -2553,8 +2793,18 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       ],
       comment: "Historical review",
     });
-    const closedPlan = await service.closePlan(organizer, plan.id, plan.version);
-    const reopened = await service.openPlan(organizer, closedPlan.id, closedPlan.version);
+    const closedPlan = await service.closePlan(
+      organizer,
+      plan.id,
+      plan.version,
+      crypto.randomUUID(),
+    );
+    const reopened = await service.openPlan(
+      organizer,
+      closedPlan.id,
+      closedPlan.version,
+      crypto.randomUUID(),
+    );
 
     const revision = await service.revisePlanToDraft(organizer, reopened.id, {
       expectedVersion: reopened.version,
@@ -2562,6 +2812,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
 
     expect(revision).toMatchObject({
       id: `${reopened.id}-revision-${reopened.version}`,
+      predecessorPlanId: reopened.id,
       eventId: reopened.eventId,
       status: "draft",
       version: 1,
@@ -2574,6 +2825,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         ({ revision: _roundRevision, rubricRevision: _rubricRevision, ...round }) => ({
           ...round,
           id: `${round.id}-revision-${reopened.version}`,
+          predecessorRoundId: round.id,
         }),
       ),
     );
@@ -2598,6 +2850,913 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(await repository.getReview(tenantId, assignment.id)).toEqual(draftReview);
     expect(await repository.listAssignments(tenantId, revision.id)).toEqual([]);
     expect(await repository.listReviews(tenantId, revision.id)).toEqual([]);
+  });
+
+  it("applies a revised round schedule to existing reviewer assignments", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const revisedOpeningDates = [
+      "2026-08-09T09:00:00.000Z",
+      "2026-08-09T10:30:00.000Z",
+      "2026-08-09T12:00:00.000Z",
+    ] as const;
+    let sourcePlan = plan;
+    for (const opensAt of revisedOpeningDates) {
+      const revision = await service.revisePlanToDraft(organizer, sourcePlan.id, {
+        expectedVersion: sourcePlan.version,
+      });
+      expect(revision.predecessorPlanId).toBe(sourcePlan.id);
+      expect(revision.rounds[0]?.predecessorRoundId).toBe(sourcePlan.rounds[0]?.id);
+      const edited = await service.updatePlan(organizer, revision.id, {
+        expectedVersion: revision.version,
+        rounds: revision.rounds.map((reviewRound) => ({
+          ...reviewRound,
+          opensAt,
+        })),
+      });
+      sourcePlan = await service.openPlan(
+        organizer,
+        edited.id,
+        edited.version,
+        crypto.randomUUID(),
+      );
+    }
+    const revisedOpensAt = revisedOpeningDates[2];
+
+    const workspace = await service.listReviewerWorkspace(reviewer("reviewer-1"), eventId);
+    expect(workspace.assignments).toHaveLength(1);
+    expect(workspace.assignments[0]).toMatchObject({
+      assignment: { id: assignment.id, planId: plan.id },
+      round: { id: round.id, opensAt: revisedOpensAt },
+    });
+    expect(await repository.getAssignment(tenantId, assignment.id)).toEqual(assignment);
+    expect(await repository.getPlan(tenantId, plan.id)).toMatchObject({
+      rounds: [{ id: round.id, opensAt: revisedOpensAt }],
+    });
+  });
+
+  it("reopens a closed predecessor so retained reviewer work follows the active revision", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      comment: "Draft evidence",
+      scores: [
+        {
+          criterionId: "quality",
+          value: 4,
+          origin: "human",
+        },
+      ],
+    });
+    const closedPlan = await service.closePlan(
+      organizer,
+      plan.id,
+      plan.version,
+      crypto.randomUUID(),
+    );
+    const revision = await service.revisePlanToDraft(organizer, closedPlan.id, {
+      expectedVersion: closedPlan.version,
+    });
+    const revisedOpensAt = "2026-08-09T12:00:00.000Z";
+    const edited = await service.updatePlan(organizer, revision.id, {
+      expectedVersion: revision.version,
+      rounds: revision.rounds.map((reviewRound) => ({
+        ...reviewRound,
+        opensAt: revisedOpensAt,
+      })),
+    });
+
+    const openedRevision = await service.openPlan(
+      organizer,
+      edited.id,
+      edited.version,
+      crypto.randomUUID(),
+    );
+
+    const workspace = await service.listReviewerWorkspace(reviewer("reviewer-1"), eventId);
+    expect(workspace.assignments).toHaveLength(1);
+    expect(workspace.assignments[0]).toMatchObject({
+      assignment: { id: assignment.id, planId: plan.id, status: "in_progress" },
+      round: { id: round.id, opensAt: revisedOpensAt },
+      review: { id: draft.id, comment: "Draft evidence" },
+    });
+    expect(await repository.getPlan(tenantId, plan.id)).toMatchObject({
+      status: "open",
+      rounds: [{ id: round.id, opensAt: revisedOpensAt }],
+    });
+
+    await service.closePlan(
+      organizer,
+      openedRevision.id,
+      openedRevision.version,
+      crypto.randomUUID(),
+    );
+    expect(await repository.getPlan(tenantId, plan.id)).toMatchObject({
+      status: "closed",
+      rounds: [{ id: round.id, opensAt: revisedOpensAt }],
+    });
+  });
+
+  it("reconciles a past-due closed tip onto stale legacy ancestors", async () => {
+    const { service, repository, plan, setTime } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      comment: "Retained draft",
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+    const revision = await service.revisePlanToDraft(organizer, plan.id, {
+      expectedVersion: plan.version,
+    });
+    const revisedOpensAt = "2026-08-09T12:00:00.000Z";
+    const edited = await service.updatePlan(organizer, revision.id, {
+      expectedVersion: revision.version,
+      rounds: revision.rounds.map((reviewRound) => ({
+        ...reviewRound,
+        opensAt: revisedOpensAt,
+      })),
+    });
+    const opened = await service.openPlan(
+      organizer,
+      edited.id,
+      edited.version,
+      crypto.randomUUID(),
+    );
+    const closedTip = await service.closePlan(
+      organizer,
+      opened.id,
+      opened.version,
+      crypto.randomUUID(),
+    );
+    const synchronizedAncestor = await repository.getPlan(tenantId, plan.id);
+    if (synchronizedAncestor === null) throw new Error("Expected the ancestor plan.");
+    await repository.putPlan(
+      {
+        ...synchronizedAncestor,
+        status: "open",
+        rounds: plan.rounds,
+        version: synchronizedAncestor.version + 1,
+      },
+      synchronizedAncestor.version,
+    );
+
+    setTime("2026-08-20T12:00:00.000Z");
+    await service.reconcilePlanRevisionFamily(
+      organizer,
+      closedTip.id,
+      closedTip.version,
+      "11111111-1111-4111-8111-111111111111",
+    );
+
+    expect(await repository.getPlan(tenantId, plan.id)).toMatchObject({
+      status: "closed",
+      rounds: [{ id: round.id, opensAt: revisedOpensAt }],
+    });
+    expect(await repository.getAssignment(tenantId, assignment.id)).toMatchObject({
+      id: assignment.id,
+      planId: plan.id,
+    });
+    expect(await repository.getReview(tenantId, assignment.id)).toEqual(draft);
+    await expectEvaluationError(
+      service.saveReview(reviewer("reviewer-1"), assignment.id, {
+        comment: "Must remain closed",
+        scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+        expectedVersion: draft.version,
+      }),
+      "EVALUATION_CLOSED",
+    );
+  });
+
+  it("persists explicit lineage for maximum-length revision identifiers", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const source: EvaluationPlan = {
+      ...plan,
+      id: "p".repeat(100),
+      rounds: plan.rounds.map((reviewRound) => ({
+        ...reviewRound,
+        id: "r".repeat(100),
+      })),
+    };
+    await repository.putPlan(source, null);
+
+    const firstRevision = await service.revisePlanToDraft(organizer, source.id, {
+      expectedVersion: source.version,
+    });
+    expect(firstRevision.id).toHaveLength(100);
+    expect(firstRevision.id).not.toBe(source.id);
+    expect(firstRevision.predecessorPlanId).toBe(source.id);
+    expect(firstRevision.rounds[0]?.id).toHaveLength(100);
+    expect(firstRevision.rounds[0]?.predecessorRoundId).toBe(source.rounds[0]?.id);
+
+    const opened = await service.openPlan(
+      organizer,
+      firstRevision.id,
+      firstRevision.version,
+      crypto.randomUUID(),
+    );
+    const secondRevision = await service.revisePlanToDraft(organizer, opened.id, {
+      expectedVersion: opened.version,
+    });
+    expect(secondRevision.id).toHaveLength(100);
+    expect(secondRevision.id).not.toBe(opened.id);
+    expect(secondRevision.predecessorPlanId).toBe(opened.id);
+    expect(secondRevision.rounds[0]?.predecessorRoundId).toBe(opened.rounds[0]?.id);
+  });
+
+  it("keeps revision lineage linear and blocks non-tip lifecycle changes", async () => {
+    const { service, plan } = await fixture({ reviewsPerSubmission: 1 });
+    await service.revisePlanToDraft(organizer, plan.id, {
+      expectedVersion: plan.version,
+    });
+
+    await expect(
+      service.revisePlanToDraft(organizer, plan.id, {
+        expectedVersion: plan.version,
+      }),
+    ).rejects.toThrow("Only the latest review plan revision can change lifecycle or schedule.");
+    await expect(
+      service.closePlan(organizer, plan.id, plan.version, crypto.randomUUID()),
+    ).rejects.toThrow("Only the latest review plan revision can change lifecycle or schedule.");
+  });
+
+  it("rejects revision insertion when a validated deeper ancestor changes", async () => {
+    const repository = new RacingLineageRepository();
+    const { service, plan } = await fixture({ reviewsPerSubmission: 1, repository });
+    const source: EvaluationPlan = {
+      ...plan,
+      id: "lineage-source",
+      predecessorPlanId: plan.id,
+      rounds: plan.rounds.map((reviewRound, index) => ({
+        ...reviewRound,
+        id: `lineage-source-round-${index}`,
+        predecessorRoundId: reviewRound.id,
+      })),
+    };
+    await repository.putPlan(source, null);
+    repository.lineagePlanId = plan.id;
+
+    await expect(
+      service.revisePlanToDraft(organizer, source.id, {
+        expectedVersion: source.version,
+      }),
+    ).rejects.toThrow("The evaluation plan changed since it was loaded.");
+    expect(await repository.getPlanSuccessor(tenantId, eventId, source.id)).toBeNull();
+  });
+
+  it("keeps the active open plan writable while its successor remains draft", async () => {
+    const { service, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      comment: "Initial draft",
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+    await service.revisePlanToDraft(organizer, plan.id, {
+      expectedVersion: plan.version,
+    });
+
+    await expect(
+      service.saveReview(reviewer("reviewer-1"), assignment.id, {
+        comment: "Still writable",
+        scores: [{ criterionId: "quality", value: 5, origin: "human" }],
+        expectedVersion: draft.version,
+      }),
+    ).resolves.toMatchObject({ comment: "Still writable" });
+  });
+
+  it("rejects activation when a revision removes a predecessor round", async () => {
+    const secondRound: ReviewRound = {
+      ...round,
+      id: "round-2",
+      name: "Round two",
+      sequence: 2,
+      rubric: { ...round.rubric, id: "rubric-2" },
+    };
+    const { service, plan, repository } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRounds: [round, secondRound],
+    });
+    const openedSource = {
+      ...plan,
+      gradingRevision: plan.version,
+      gradingLockedAt: nowIso,
+    };
+    await repository.putPlan(openedSource, plan.version);
+    const revision = await service.revisePlanToDraft(organizer, openedSource.id, {
+      expectedVersion: openedSource.version,
+    });
+    const edited = await service.updatePlan(organizer, revision.id, {
+      expectedVersion: revision.version,
+      rounds: revision.rounds.slice(0, 1),
+    });
+
+    await expect(
+      service.openPlan(organizer, edited.id, edited.version, crypto.randomUUID()),
+    ).rejects.toThrow("Review plan revisions cannot remove a predecessor round.");
+  });
+
+  it("rejects an over-depth revision before persisting a successor draft", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    let tip = plan;
+    for (let depth = 1; depth <= 16; depth += 1) {
+      const child: EvaluationPlan = {
+        ...tip,
+        id: `legacy-plan-${depth}`,
+        predecessorPlanId: tip.id,
+        name: `Legacy review ${depth}`,
+        rounds: tip.rounds.map((reviewRound, index) => ({
+          ...reviewRound,
+          id: `legacy-round-${depth}-${index}`,
+          predecessorRoundId: reviewRound.id,
+        })),
+      };
+      await repository.putPlan(child, null);
+      tip = child;
+    }
+    const before = await repository.listPlans(tenantId, eventId);
+
+    await expect(
+      service.revisePlanToDraft(organizer, tip.id, {
+        expectedVersion: tip.version,
+      }),
+    ).rejects.toThrow("Review plan revision depth exceeds the synchronization limit.");
+    expect(await repository.listPlans(tenantId, eventId)).toHaveLength(before.length);
+    expect(await repository.getPlanSuccessor(tenantId, eventId, tip.id)).toBeNull();
+  });
+
+  it("closes a maximum-depth 17-plan revision family atomically", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    let tip = plan;
+    for (let depth = 1; depth <= 16; depth += 1) {
+      const child: EvaluationPlan = {
+        ...tip,
+        id: `maximum-depth-plan-${depth}`,
+        predecessorPlanId: tip.id,
+        name: `Maximum depth review ${depth}`,
+        rounds: tip.rounds.map((reviewRound, index) => ({
+          ...reviewRound,
+          id: `maximum-depth-round-${depth}-${index}`,
+          predecessorRoundId: reviewRound.id,
+          rubric: {
+            ...reviewRound.rubric,
+            id: `maximum-depth-rubric-${depth}-${index}`,
+          },
+        })),
+      };
+      await repository.putPlan(child, null);
+      tip = child;
+    }
+
+    await expect(
+      service.closePlan(organizer, tip.id, tip.version, crypto.randomUUID()),
+    ).resolves.toMatchObject({ status: "closed" });
+
+    const family = await repository.listPlans(tenantId, eventId);
+    expect(family).toHaveLength(17);
+    expect(family.every((candidate) => candidate.status === "closed")).toBe(true);
+  });
+
+  it("rejects oversized reconciliation before locking or changing the revision family", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const sourceRound = plan.rounds[0];
+    if (sourceRound === undefined) {
+      throw new Error("Expected a review round fixture.");
+    }
+    const ancestor: EvaluationPlan = {
+      ...plan,
+      version: plan.version + 1,
+      rounds: Array.from({ length: MAX_REVISION_RECONCILIATION_ROUNDS + 1 }, (_, index) => ({
+        ...sourceRound,
+        id: `oversized-ancestor-round-${index}`,
+        sequence: index + 1,
+        rubric: {
+          ...sourceRound.rubric,
+          id: `oversized-ancestor-rubric-${index}`,
+        },
+      })),
+    };
+    await repository.putPlan(ancestor, plan.version);
+    const tip: EvaluationPlan = {
+      ...ancestor,
+      id: "oversized-revision-tip",
+      predecessorPlanId: ancestor.id,
+      name: "Oversized revision tip",
+      rounds: ancestor.rounds.map((reviewRound, index) => ({
+        ...reviewRound,
+        id: `oversized-tip-round-${index}`,
+        predecessorRoundId: reviewRound.id,
+        rubric: {
+          ...reviewRound.rubric,
+          id: `oversized-tip-rubric-${index}`,
+        },
+      })),
+    };
+    await repository.putPlan(tip, null);
+    const before = await repository.listPlans(tenantId, eventId);
+
+    await expect(
+      service.closePlan(organizer, tip.id, tip.version, crypto.randomUUID()),
+    ).rejects.toThrow("Review plan revision reconciliation exceeds the total round limit.");
+    expect(await repository.listPlans(tenantId, eventId)).toEqual(before);
+  });
+
+  it("does not count unchanged ancestor rounds toward the synchronization limit", async () => {
+    const reviewRounds = Array.from(
+      { length: 50 },
+      (_, index): ReviewRound => ({
+        ...round,
+        id: `round-${index}`,
+        name: `Round ${index + 1}`,
+        sequence: index + 1,
+        rubric: {
+          ...round.rubric,
+          id: `rubric-${index}`,
+        },
+      }),
+    );
+    const { service, repository, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRounds,
+    });
+    let tip = plan;
+    for (let depth = 1; depth <= 5; depth += 1) {
+      const child: EvaluationPlan = {
+        ...tip,
+        id: `wide-plan-${depth}`,
+        predecessorPlanId: tip.id,
+        name: `Wide review ${depth}`,
+        rounds: tip.rounds.map((reviewRound, index) => ({
+          ...reviewRound,
+          id: `wide-round-${depth}-${index}`,
+          predecessorRoundId: reviewRound.id,
+          rubric: {
+            ...reviewRound.rubric,
+            id: `wide-rubric-${depth}-${index}`,
+          },
+        })),
+      };
+      await repository.putPlan(child, null);
+      tip = child;
+    }
+
+    const revision = await service.revisePlanToDraft(organizer, tip.id, {
+      expectedVersion: tip.version,
+    });
+
+    expect(revision.predecessorPlanId).toBe(tip.id);
+  });
+
+  it("opens and closes a wide revision family through bounded reconciliation", async () => {
+    const reviewRounds = Array.from(
+      { length: 50 },
+      (_, index): ReviewRound => ({
+        ...round,
+        id: `round-${index}`,
+        name: `Round ${index + 1}`,
+        sequence: index + 1,
+        rubric: {
+          ...round.rubric,
+          id: `rubric-${index}`,
+        },
+      }),
+    );
+    const { service, repository, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRounds,
+    });
+    let tip = await service.closePlan(organizer, plan.id, plan.version, crypto.randomUUID());
+    for (let depth = 1; depth <= 4; depth += 1) {
+      const child: EvaluationPlan = {
+        ...tip,
+        id: `closed-wide-plan-${depth}`,
+        predecessorPlanId: tip.id,
+        name: `Closed wide review ${depth}`,
+        rounds: tip.rounds.map((reviewRound, index) => ({
+          ...reviewRound,
+          id: `closed-wide-round-${depth}-${index}`,
+          predecessorRoundId: reviewRound.id,
+          rubric: {
+            ...reviewRound.rubric,
+            id: `closed-wide-rubric-${depth}-${index}`,
+          },
+        })),
+      };
+      await repository.putPlan(child, null);
+      tip = child;
+    }
+    const before = await repository.listPlans(tenantId, eventId);
+
+    const revision = await service.revisePlanToDraft(organizer, tip.id, {
+      expectedVersion: tip.version,
+    });
+    expect(await repository.listPlans(tenantId, eventId)).toHaveLength(before.length + 1);
+    const opened = await service.openPlan(
+      organizer,
+      revision.id,
+      revision.version,
+      crypto.randomUUID(),
+    );
+    expect(await repository.getPlan(tenantId, plan.id)).toMatchObject({ status: "open" });
+    await service.closePlan(organizer, opened.id, opened.version, crypto.randomUUID());
+    expect(await repository.getPlan(tenantId, plan.id)).toMatchObject({ status: "closed" });
+  });
+
+  it("blocks reviewer writes and successor insertion while wide close reconciliation is pending", async () => {
+    const reviewRounds = Array.from(
+      { length: 50 },
+      (_, index): ReviewRound => ({
+        ...round,
+        id: `round-${index}`,
+        name: `Round ${index + 1}`,
+        sequence: index + 1,
+        rubric: {
+          ...round.rubric,
+          id: `rubric-${index}`,
+        },
+      }),
+    );
+    const repository = new PausedReconciliationRepository();
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRounds,
+      repository,
+    });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      comment: "Retained draft",
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+    let tip = await service.closePlan(organizer, plan.id, plan.version, crypto.randomUUID());
+    for (let depth = 1; depth <= 4; depth += 1) {
+      const child: EvaluationPlan = {
+        ...tip,
+        id: `pending-wide-plan-${depth}`,
+        predecessorPlanId: tip.id,
+        name: `Pending wide review ${depth}`,
+        rounds: tip.rounds.map((reviewRound, index) => ({
+          ...reviewRound,
+          id: `pending-wide-round-${depth}-${index}`,
+          predecessorRoundId: reviewRound.id,
+          rubric: {
+            ...reviewRound.rubric,
+            id: `pending-wide-rubric-${depth}-${index}`,
+          },
+        })),
+      };
+      await repository.putPlan(child, null);
+      tip = child;
+    }
+    const revision = await service.revisePlanToDraft(organizer, tip.id, {
+      expectedVersion: tip.version,
+    });
+    const opened = await service.openPlan(
+      organizer,
+      revision.id,
+      revision.version,
+      crypto.randomUUID(),
+    );
+    const pause = repository.pauseNextReconciliation();
+    const closePromise = service.closePlan(
+      organizer,
+      opened.id,
+      opened.version,
+      crypto.randomUUID(),
+    );
+    await pause.entered;
+
+    const pendingWorkspace = await service.listReviewerWorkspace(reviewer("reviewer-1"), eventId);
+    expect(pendingWorkspace.assignments[0]?.plan.status).toBe("closed");
+    await expectEvaluationError(
+      service.saveReview(reviewer("reviewer-1"), assignment.id, {
+        comment: "Must be blocked after authoritative close",
+        scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+        expectedVersion: draft.version,
+      }),
+      "EVALUATION_CLOSED",
+    );
+    await expect(
+      service.revisePlanToDraft(organizer, opened.id, {
+        expectedVersion: opened.version + 1,
+      }),
+    ).rejects.toThrow("The evaluation plan changed since it was loaded.");
+
+    pause.release();
+    await closePromise;
+    expect(await repository.getPlan(tenantId, plan.id)).toMatchObject({ status: "closed" });
+  });
+
+  it("resumes an interrupted lifecycle reconciliation with the caller token", async () => {
+    const reviewRounds = Array.from(
+      { length: 201 },
+      (_, index): ReviewRound => ({
+        ...round,
+        id: `round-${index}`,
+        name: `Round ${index + 1}`,
+        sequence: index + 1,
+        rubric: {
+          ...round.rubric,
+          id: `rubric-${index}`,
+        },
+      }),
+    );
+    const repository = new FailingReconciliationRepository();
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRounds,
+      repository,
+    });
+    const openedSource = {
+      ...plan,
+      gradingRevision: plan.version,
+      gradingLockedAt: nowIso,
+    };
+    await repository.putPlan(openedSource, plan.version);
+    const revision = await service.revisePlanToDraft(organizer, openedSource.id, {
+      expectedVersion: openedSource.version,
+    });
+    const edited = await service.updatePlan(organizer, revision.id, {
+      expectedVersion: revision.version,
+      rounds: revision.rounds.map((reviewRound) => ({
+        ...reviewRound,
+        opensAt: "2026-08-09T12:00:00.000Z",
+      })),
+    });
+    const opened = await service.openPlan(
+      organizer,
+      edited.id,
+      edited.version,
+      "11111111-1111-4111-8111-111111111111",
+    );
+    const closeToken = "22222222-2222-4222-8222-222222222222";
+    repository.failNextReconciliation = true;
+
+    await expect(
+      service.closePlan(organizer, opened.id, opened.version, closeToken),
+    ).rejects.toThrow("Injected reconciliation interruption.");
+    const interruptedTip = await repository.getPlan(tenantId, opened.id);
+    if (interruptedTip === null) throw new Error("Expected the interrupted tip.");
+    expect(interruptedTip.status).toBe("closed");
+
+    await expect(
+      service.closePlan(organizer, opened.id, opened.version, closeToken),
+    ).resolves.toMatchObject({ status: "closed", version: interruptedTip.version });
+
+    expect(await repository.getPlan(tenantId, plan.id)).toMatchObject({ status: "closed" });
+    await expect(
+      repository.beginPlanRevisionSync(
+        interruptedTip,
+        interruptedTip.version,
+        "33333333-3333-4333-8333-333333333333",
+      ),
+    ).resolves.toBeUndefined();
+    await repository.completePlanRevisionSync(
+      interruptedTip,
+      interruptedTip.version,
+      "33333333-3333-4333-8333-333333333333",
+    );
+  });
+
+  it("replays completed single-batch lifecycle writes with the original caller token", async () => {
+    const { service, plan, repository } = await fixture({ reviewsPerSubmission: 1 });
+    const openedSource = {
+      ...plan,
+      gradingRevision: plan.version,
+      gradingLockedAt: nowIso,
+    };
+    await repository.putPlan(openedSource, plan.version);
+    const revision = await service.revisePlanToDraft(organizer, openedSource.id, {
+      expectedVersion: openedSource.version,
+    });
+    const openToken = "11111111-1111-4111-8111-111111111111";
+    const opened = await service.openPlan(organizer, revision.id, revision.version, openToken);
+
+    await expect(
+      service.openPlan(organizer, revision.id, revision.version, openToken),
+    ).resolves.toEqual(opened);
+
+    const scheduleToken = "22222222-2222-4222-8222-222222222222";
+    const scheduled = await service.updatePlanSchedule(organizer, opened.id, {
+      expectedVersion: opened.version,
+      closesAt: "2026-08-13T12:00:00.000Z",
+      revisionSyncToken: scheduleToken,
+    });
+
+    await expect(
+      service.updatePlanSchedule(organizer, opened.id, {
+        expectedVersion: opened.version,
+        closesAt: "2026-08-13T12:00:00.000Z",
+        revisionSyncToken: scheduleToken,
+      }),
+    ).resolves.toEqual(scheduled);
+
+    const closeToken = "33333333-3333-4333-8333-333333333333";
+    const closed = await service.closePlan(organizer, scheduled.id, scheduled.version, closeToken);
+
+    await expect(
+      service.closePlan(organizer, scheduled.id, scheduled.version, closeToken),
+    ).resolves.toEqual(closed);
+  });
+
+  it("reconciles oversized legacy families in bounded atomic batches", async () => {
+    const reviewRounds = Array.from(
+      { length: 50 },
+      (_, index): ReviewRound => ({
+        ...round,
+        id: `round-${index}`,
+        name: `Round ${index + 1}`,
+        sequence: index + 1,
+        rubric: {
+          ...round.rubric,
+          id: `rubric-${index}`,
+        },
+      }),
+    );
+    const repository = new ReconciliationBatchRepository();
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRounds,
+      repository,
+    });
+    const authoritativeOpensAt = "2026-08-09T12:00:00.000Z";
+    let tip = plan;
+    for (let depth = 1; depth <= 5; depth += 1) {
+      const child: EvaluationPlan = {
+        ...tip,
+        id: `legacy-wide-plan-${depth}`,
+        predecessorPlanId: tip.id,
+        name: `Legacy wide review ${depth}`,
+        rounds: tip.rounds.map((reviewRound, index) => ({
+          ...reviewRound,
+          id: `legacy-wide-round-${depth}-${index}`,
+          predecessorRoundId: reviewRound.id,
+          ...(depth === 5 ? { opensAt: authoritativeOpensAt } : {}),
+          rubric: {
+            ...reviewRound.rubric,
+            id: `legacy-wide-rubric-${depth}-${index}`,
+          },
+        })),
+      };
+      await repository.putPlan(child, null);
+      tip = child;
+    }
+
+    await service.reconcilePlanRevisionFamily(
+      organizer,
+      tip.id,
+      tip.version,
+      "22222222-2222-4222-8222-222222222222",
+    );
+
+    expect(repository.reconciliationCalls).toBe(2);
+    const reconciledRoot = await repository.getPlan(tenantId, plan.id);
+    expect(
+      reconciledRoot?.rounds.every((reviewRound) => reviewRound.opensAt === authoritativeOpensAt),
+    ).toBe(true);
+  });
+
+  it("reconciles a single legacy ancestor larger than the family round bound", async () => {
+    const reviewRounds = Array.from(
+      { length: 201 },
+      (_, index): ReviewRound => ({
+        ...round,
+        id: `round-${index}`,
+        name: `Round ${index + 1}`,
+        sequence: index + 1,
+        rubric: {
+          ...round.rubric,
+          id: `rubric-${index}`,
+        },
+      }),
+    );
+    const repository = new ReconciliationBatchRepository();
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRounds,
+      repository,
+    });
+    const authoritativeOpensAt = "2026-08-09T12:00:00.000Z";
+    const tip: EvaluationPlan = {
+      ...plan,
+      id: "oversized-tip",
+      predecessorPlanId: plan.id,
+      rounds: plan.rounds.map((reviewRound, index) => ({
+        ...reviewRound,
+        id: `oversized-tip-round-${index}`,
+        predecessorRoundId: reviewRound.id,
+        opensAt: authoritativeOpensAt,
+        rubric: {
+          ...reviewRound.rubric,
+          id: `oversized-tip-rubric-${index}`,
+        },
+      })),
+    };
+    await repository.putPlan(tip, null);
+
+    await service.reconcilePlanRevisionFamily(
+      organizer,
+      tip.id,
+      tip.version,
+      "33333333-3333-4333-8333-333333333333",
+    );
+
+    expect(repository.reconciliationCalls).toBe(1);
+    const reconciledRoot = await repository.getPlan(tenantId, plan.id);
+    expect(
+      reconciledRoot?.rounds.every((reviewRound) => reviewRound.opensAt === authoritativeOpensAt),
+    ).toBe(true);
+  });
+
+  it("reconciles a maximum-depth wide legacy family and observes convergence", async () => {
+    const reviewRounds = Array.from(
+      { length: 50 },
+      (_, index): ReviewRound => ({
+        ...round,
+        id: `round-${index}`,
+        name: `Round ${index + 1}`,
+        sequence: index + 1,
+        rubric: {
+          ...round.rubric,
+          id: `rubric-${index}`,
+        },
+      }),
+    );
+    const repository = new ReconciliationBatchRepository();
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRounds,
+      repository,
+    });
+    const authoritativeOpensAt = "2026-08-09T12:00:00.000Z";
+    let tip = plan;
+    for (let depth = 1; depth <= 16; depth += 1) {
+      const child: EvaluationPlan = {
+        ...tip,
+        id: `maximum-depth-plan-${depth}`,
+        predecessorPlanId: tip.id,
+        name: `Maximum depth review ${depth}`,
+        rounds: tip.rounds.map((reviewRound, index) => ({
+          ...reviewRound,
+          id: `maximum-depth-round-${depth}-${index}`,
+          predecessorRoundId: reviewRound.id,
+          ...(depth === 16 ? { opensAt: authoritativeOpensAt } : {}),
+          rubric: {
+            ...reviewRound.rubric,
+            id: `maximum-depth-rubric-${depth}-${index}`,
+          },
+        })),
+      };
+      await repository.putPlan(child, null);
+      tip = child;
+    }
+
+    await expect(
+      service.reconcilePlanRevisionFamily(
+        organizer,
+        tip.id,
+        tip.version,
+        "44444444-4444-4444-8444-444444444444",
+      ),
+    ).resolves.toEqual(tip);
+    expect(repository.reconciliationCalls).toBe(4);
+    const reconciledRoot = await repository.getPlan(tenantId, plan.id);
+    expect(
+      reconciledRoot?.rounds.every((reviewRound) => reviewRound.opensAt === authoritativeOpensAt),
+    ).toBe(true);
+  });
+
+  it("rejects revision creation before an adapter without atomic family writes creates a draft", async () => {
+    const repository = new NonAtomicEvaluationRepository();
+    const { service, plan } = await fixture({ reviewsPerSubmission: 1, repository });
+
+    await expect(
+      service.revisePlanToDraft(organizer, plan.id, {
+        expectedVersion: plan.version,
+      }),
+    ).rejects.toThrow("Review plan revisions require the authoritative D1 runtime.");
+    expect(await repository.listPlans(tenantId, eventId)).toHaveLength(1);
+  });
+
+  it("keeps every plan unchanged when an ancestor schedule CAS fails", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const revision = await service.revisePlanToDraft(organizer, plan.id, {
+      expectedVersion: plan.version,
+    });
+    const selectedUpdate = {
+      ...revision,
+      closesAt: "2026-08-11T22:00:00.000Z",
+      version: revision.version + 1,
+    };
+    const ancestorUpdate = {
+      ...plan,
+      closesAt: selectedUpdate.closesAt,
+      version: plan.version + 1,
+    };
+
+    await expect(
+      repository.putPlanSchedule(selectedUpdate, revision.version, [
+        { plan: ancestorUpdate, expectedVersion: plan.version - 1 },
+      ]),
+    ).rejects.toThrow("Evaluation plan changed since it was loaded.");
+    expect(await repository.getPlan(tenantId, revision.id)).toEqual(revision);
+    expect(await repository.getPlan(tenantId, plan.id)).toEqual(plan);
   });
 
   it("requires an injected provider, snapshots revisions, and audits human resolutions", async () => {
@@ -2657,7 +3816,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 2 },
       rounds: [round],
     });
-    const plan = await service.openPlan(organizer, draft.id, draft.version);
+    const plan = await service.openPlan(organizer, draft.id, draft.version, crypto.randomUUID());
     const assignments = await service.assignReviewers(organizer, {
       planId: plan.id,
       roundId: round.id,
@@ -2787,7 +3946,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 2 },
       rounds: [round],
     });
-    const plan = await service.openPlan(organizer, draft.id, draft.version);
+    const plan = await service.openPlan(organizer, draft.id, draft.version, crypto.randomUUID());
     const assignments = await service.assignReviewers(organizer, {
       planId: plan.id,
       roundId: round.id,

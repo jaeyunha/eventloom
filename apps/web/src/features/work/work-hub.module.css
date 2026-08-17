@@ -330,6 +330,31 @@
   font-size: 0.875rem;
   line-height: 1.5;
 }
+.organizationChoices {
+  display: grid;
+  gap: var(--space-2);
+}
+.organizationChoice {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+}
+.organizationName {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.organizationChoice [data-slot="button"] {
+  min-height: 44px;
+}
 .emptyState {
   grid-column: 1 / -1;
 }
@@ -413,6 +438,13 @@
   .actions > a {
     flex: 1 1 auto;
   }
+  .organizationChoice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .organizationChoice [data-slot="button"] {
+    width: 100%;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .workspaceCard {
@@ -421,4 +453,15 @@
   .workspaceCard:hover {
     transform: none;
   }
+}
+
+.emptyStateLink {
+  color: var(--foreground);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.emptyStateLink:hover {
+  color: var(--foreground);
 }
