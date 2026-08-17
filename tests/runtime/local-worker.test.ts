@@ -1310,23 +1310,28 @@ describe.sequential("composed local Worker", () => {
     );
 
     const replacementBody = "deterministic replacement speaker bytes";
-    const replacementAuthorizeResponse = await runtimeRequest(
-      `/api/speaker/events/${eventId}/uploads`,
-      jsonRequest(
-        "POST",
-        {
-          participantId: uploadTask.participantId,
-          taskId: uploadTask.id,
-          kind: "slides",
-          fileName: "deck-v2.pdf",
-          contentType: "application/pdf",
-          sizeBytes: new TextEncoder().encode(replacementBody).byteLength,
-          supersedesAssetId: upload.asset.id,
-          expectedLatestVersion: upload.asset.version,
-        },
-        { ...speakerHeaders, "idempotency-key": "local-runtime-replacement-v2" },
-      ),
-    );
+    const authorizeReplacement = (idempotencyKey: string, fileName = "deck-v2.pdf") =>
+      runtimeRequest(
+        `/api/speaker/events/${eventId}/uploads`,
+        jsonRequest(
+          "POST",
+          {
+            participantId: uploadTask.participantId,
+            taskId: uploadTask.id,
+            kind: "slides",
+            fileName,
+            contentType: "application/pdf",
+            sizeBytes: new TextEncoder().encode(replacementBody).byteLength,
+            supersedesAssetId: upload.asset.id,
+            expectedLatestVersion: upload.asset.version,
+          },
+          { ...speakerHeaders, "idempotency-key": idempotencyKey },
+        ),
+      );
+    const [replacementAuthorizeResponse, replayedReplacementResponse] = await Promise.all([
+      authorizeReplacement("local-runtime-replacement-v2"),
+      authorizeReplacement("local-runtime-replacement-v2"),
+    ]);
     expect(
       replacementAuthorizeResponse.status,
       await replacementAuthorizeResponse.clone().text(),
@@ -1340,17 +1345,32 @@ describe.sequential("composed local Worker", () => {
       };
       grant: { method: string; url: string; headers: Record<string, string> };
     }>(replacementAuthorizeResponse);
+    const replayedReplacement = await jsonData<{
+      asset: { id: string };
+      grant: { method: string; url: string; headers: Record<string, string> };
+    }>(replayedReplacementResponse);
+    expect(replayedReplacementResponse.status).toBe(201);
+    expect(replayedReplacement.asset.id).toBe(replacement.asset.id);
+    const changedReplayResponse = await authorizeReplacement(
+      "local-runtime-replacement-v2",
+      "deck-v2-renamed.pdf",
+    );
+    expect(changedReplayResponse.status).toBe(409);
+    const staleHeadResponse = await authorizeReplacement("local-runtime-replacement-v2-other");
+    expect(staleHeadResponse.status).toBe(409);
     expect(replacement.asset).toMatchObject({
       version: 2,
       versionFamilyId: upload.asset.versionFamilyId,
       supersedesAssetId: upload.asset.id,
     });
-    const replacementUploadResponse = await runtimeRequest(replacement.grant.url, {
-      method: replacement.grant.method,
-      headers: { ...replacement.grant.headers, ...speakerHeaders },
+    const replacementUploadResponse = await runtimeRequest(replayedReplacement.grant.url, {
+      method: replayedReplacement.grant.method,
+      headers: { ...replayedReplacement.grant.headers, ...speakerHeaders },
       body: replacementBody,
     });
-    expect(replacementUploadResponse.status).toBe(201);
+    expect(replacementUploadResponse.status, await replacementUploadResponse.clone().text()).toBe(
+      201,
+    );
     const replacementFinalizeResponse = await runtimeRequest(
       `/api/speaker/events/${eventId}/assets/${replacement.asset.id}/finalize`,
       jsonRequest("POST", { state: "ready" }, speakerHeaders),
