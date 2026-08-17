@@ -1,12 +1,12 @@
 # Lane handoff: judge-participant-lifecycle
 
-## Retained-lane status
+## Merged-lane status
 
-**This is an active retained lane. Do not pause or exit it while the narrowed
-CFP edit-state objective remains under review.**
+**Goal item (9), the narrowed CFP edit-state objective, is complete.**
 
-PR #38 remains open, clean, unmerged, and undeployed. Do not expand feature
-scope, delete the branch, or delete the worktree.
+PR #38 was merged by the user at
+`7e39cbc6f9ecd7fceb6cc42f9f9aae5146c7381e` on 2026-08-17. The lane did not
+deploy production. The worktree is retained clean and may remain idle.
 
 This repository handoff is an explicit lane-coordination deliverable requested
 by the user. It records delivery evidence and deferred work; it is not a
@@ -21,18 +21,18 @@ product-architecture source.
 - Worktree:
   `/Users/jaeyunha/wt/open-sessionboard/judge-participant-lifecycle`
 - Pull request: https://github.com/jaeyunha/eventloom/pull/38
-- PR state: open, non-draft, merge status `CLEAN`
+- PR state: merged
 - Current GitHub main/base:
-  `a9d0019eac57aa90503a6623011e570e22620fcf`
-- Exact reviewed implementation/source checkpoint:
+  `7e39cbc6f9ecd7fceb6cc42f9f9aae5146c7381e`
+- Exact reviewed implementation/source checkpoint before merge:
   `4bbf3407882fdda13aace4c74b7795a4a76c4ac7`
-- Subsequent handoff-only commits do not change that reviewed source tree. The
-  current branch head is linked from issue #56 and PR #38 because a committed
-  document cannot embed its own commit identity.
+- Final pre-merge authoritative handoff checkpoint:
+  `9366c8f82d0e0d8fd9f5d409b0513abaa650484b`
+- The merge commit contains the reviewed source tree and pre-merge handoff.
 
 ## Lane objective and narrow scope
 
-PR #38 must remain limited to the independently valid CFP/session corrections:
+Merged PR #38 is limited to the independently valid CFP/session corrections:
 
 1. Preserve a submitted proposal as the active record when the applicant uses
    `Edit submission`, navigates Back to Account, and moves forward again.
@@ -195,7 +195,7 @@ This ledger records the commands executed against the reviewed source tree.
 ## Delivery readiness
 
 - [x] Current GitHub main is incorporated at
-  `a9d0019eac57aa90503a6623011e570e22620fcf`.
+  `7e39cbc6f9ecd7fceb6cc42f9f9aae5146c7381e`.
 - [x] The narrow CFP/session source and test scope is complete.
 - [x] The completion/participation-portal handoff coverage is preserved.
 - [x] Focused, composed-runtime, `make check`, `make test`, and isolated browser
@@ -204,9 +204,11 @@ This ledger records the commands executed against the reviewed source tree.
   code-quality, security, hands-on QA, and context/history reviewers.
 - [x] Complete the explicitly requested repeat source, security, QA, context,
   and goal checks.
-- The current branch identity and post-commit delivery verdict are recorded in
-  issue #56 and PR #38; this file records the reviewed source identity.
-- [x] PR #38 remains unmerged and undeployed pending explicit instruction.
+- The merge identity and final delivery evidence are recorded in issue #56 and
+  PR #38.
+- [x] PR #38 was merged by the user at
+  `7e39cbc6f9ecd7fceb6cc42f9f9aae5146c7381e`.
+- [x] No production deployment was performed by this lane.
 
 ## Deferred canonical lifecycle work
 
@@ -220,8 +222,8 @@ This ledger records the commands executed against the reviewed source tree.
 
 ## Dependencies and merge order
 
-1. The narrow PR #38 source checkpoint is complete and reviewed.
-2. Do not merge or deploy from this retained lane without explicit instruction.
+1. The narrow PR #38 source checkpoint is complete, reviewed, and merged.
+2. Do not deploy production from this lane.
 3. PRs #31, #32, and #33 must merge before starting the separate canonical
    accepted-participant lifecycle branch.
 4. Start that future work from then-current `github/main`, not from this
@@ -237,7 +239,7 @@ This ledger records the commands executed against the reviewed source tree.
 - Do not stage unrelated files or regenerated outputs.
 - The handoff-only checkpoint was prepared with no unrelated tracked changes.
 
-## Precise resume instructions
+## Post-merge reference instructions
 
 ```bash
 cd /Users/jaeyunha/wt/open-sessionboard/judge-participant-lifecycle
@@ -266,8 +268,8 @@ git diff --name-status github/main...HEAD
 git diff --check github/main...HEAD
 ```
 
-Keep this retained worktree active for explicit follow-up instruction. The
-narrow CFP source objective has no remaining blocker. When starting the
-deferred canonical lifecycle later, do not reuse this worktree or branch;
-follow the private handoff and create a fresh worktree after the dependency PRs
-merge.
+The retained worktree is clean and may remain idle. The narrow CFP source
+objective has no remaining blocker. When starting the deferred canonical
+lifecycle later, do not reuse this worktree or branch; follow the private
+handoff and create a fresh worktree after the dependency PRs merge. Do not
+deploy production from this lane.
