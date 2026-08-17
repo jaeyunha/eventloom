@@ -2967,7 +2967,17 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
             `INSERT INTO audit_events
                (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id,
                 trace_id, details_json, occurred_at)
-             VALUES (?, ?, 'user', ?, 'evaluation_accepted', 'submission', ?, NULL, ?, ?)
+             SELECT ?, ?, 'user', ?, 'evaluation_accepted', 'submission', ?, NULL, ?, ?
+             WHERE EXISTS (
+               SELECT 1
+               FROM evaluation_decisions
+               WHERE organization_id = ?
+                 AND event_id = ?
+                 AND plan_id = ?
+                 AND submission_id = ?
+                 AND version = ?
+                 AND status = 'accepted'
+             )
              ON CONFLICT (id) DO NOTHING`,
           )
           .bind(
@@ -2984,6 +2994,11 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
               sessionId: session.id,
             }),
             input.decidedAt,
+            input.tenantId,
+            input.eventId,
+            input.planId,
+            input.submissionId,
+            input.decisionVersion,
           )
           .run(),
         this.#enqueue(
@@ -3365,10 +3380,34 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         `INSERT INTO outbox_jobs
            (id, tenant_id, topic, deduplication_key, payload_json, state,
             attempt_count, available_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+         SELECT ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1
+           FROM evaluation_decisions
+           WHERE organization_id = ?
+             AND event_id = ?
+             AND plan_id = ?
+             AND submission_id = ?
+             AND version = ?
+             AND status = 'accepted'
+         )
          ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
       )
-      .bind(jobId, input.tenantId, topic, deduplicationKey, JSON.stringify(payload), now, now, now)
+      .bind(
+        jobId,
+        input.tenantId,
+        topic,
+        deduplicationKey,
+        JSON.stringify(payload),
+        now,
+        now,
+        now,
+        input.tenantId,
+        input.eventId,
+        input.planId,
+        input.submissionId,
+        input.decisionVersion,
+      )
       .run();
     const inserted = result.meta === undefined || result.meta.changes > 0;
     const state = inserted
