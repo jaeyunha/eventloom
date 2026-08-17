@@ -4,6 +4,28 @@ export interface OrganizationEntitlementRepository {
   getEntitlement(organizationId: string): Promise<OrganizationEntitlement | null>;
 }
 
+export interface OrganizationEntitlementAudit {
+  readonly id: string;
+  readonly traceId: string;
+  readonly occurredAt: string;
+  readonly expectedRevision: number;
+}
+
+export interface OrganizationEntitlementCommandRepository
+  extends OrganizationEntitlementRepository {
+  putEntitlement(
+    entitlement: OrganizationEntitlement,
+    audit: OrganizationEntitlementAudit,
+  ): Promise<OrganizationEntitlement>;
+}
+
+export class OrganizationEntitlementConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OrganizationEntitlementConflictError";
+  }
+}
+
 export type EventCreationAuthorization =
   | { readonly kind: "unrestricted" }
   | {
@@ -32,7 +54,7 @@ export class OrganizationPolicyError extends Error {
 }
 
 export class InMemoryOrganizationEntitlementRepository
-  implements OrganizationEntitlementRepository
+  implements OrganizationEntitlementCommandRepository
 {
   readonly #entitlements: Map<string, OrganizationEntitlement>;
 
@@ -44,6 +66,32 @@ export class InMemoryOrganizationEntitlementRepository
 
   async getEntitlement(organizationId: string): Promise<OrganizationEntitlement | null> {
     return structuredClone(this.#entitlements.get(organizationId) ?? null);
+  }
+
+  async putEntitlement(
+    entitlement: OrganizationEntitlement,
+    audit: OrganizationEntitlementAudit,
+  ): Promise<OrganizationEntitlement> {
+    const current = this.#entitlements.get(entitlement.organizationId);
+    if (current !== undefined && structuredClone(current).revision === entitlement.revision) {
+      if (JSON.stringify(current) !== JSON.stringify(entitlement)) {
+        throw new OrganizationEntitlementConflictError(
+          "The entitlement revision is already associated with another payload.",
+        );
+      }
+      return structuredClone(current);
+    }
+    if (
+      (current === undefined && audit.expectedRevision !== 0) ||
+      (current !== undefined && current.revision !== audit.expectedRevision) ||
+      entitlement.revision <= audit.expectedRevision
+    ) {
+      throw new OrganizationEntitlementConflictError(
+        "The organization entitlement revision is stale.",
+      );
+    }
+    this.#entitlements.set(entitlement.organizationId, structuredClone(entitlement));
+    return structuredClone(entitlement);
   }
 }
 

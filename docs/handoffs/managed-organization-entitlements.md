@@ -76,3 +76,23 @@ Cloudflare/D1 workflow was run for this retirement checkpoint.
 
 Temporary visual-QA screenshots were intentionally excluded from this
 checkpoint.
+
+## Follow-up checkpoint after initial retirement
+
+A second implementation slice landed immediately after the first push:
+
+- Optimistic entitlement replacement with expected-revision concurrency.
+- Shared in-memory and D1 command repository path.
+- Internal route `PUT /api/internal/organizations/:organizationId/entitlement`.
+- Deterministic audit-event IDs derived from organization ID + idempotency key.
+- Atomic D1 batch with payload guard and audit insert.
+
+Important paths:
+
+- `apps/api/src/features/organizations/policy.ts`
+- `apps/api/src/features/organizations/routes.ts`
+- `apps/api/src/infrastructure/cloudflare/repositories/organization-entitlements.ts`
+- `apps/api/src/runtime/cloudflare.ts`
+
+This second slice was committed and pushed before worktree deletion. Focused
+tests for the new put path may still need expansion before delivery.

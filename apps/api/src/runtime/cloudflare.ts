@@ -2552,11 +2552,12 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
       : deploymentModeSchema.parse(bindings.DEPLOYMENT_MODE),
   );
   const provisioningToken = bindings.ORGANIZATION_PROVISIONING_TOKEN?.trim();
+  const entitlementRepository = new D1OrganizationEntitlementRepository(bindings.DB);
   const organizationPolicy = createOrganizationPolicy(
     deploymentMode === "managed"
       ? {
           deploymentMode,
-          repository: new D1OrganizationEntitlementRepository(bindings.DB),
+          repository: entitlementRepository,
         }
       : { deploymentMode },
   );
@@ -2740,6 +2741,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
       ? {
           organizationProvisioning: {
             service: memberService,
+            entitlements: entitlementRepository,
             authenticate: (request: Request) =>
               request.headers.get("authorization") === `Bearer ${provisioningToken}`,
           },

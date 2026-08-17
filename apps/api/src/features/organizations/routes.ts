@@ -9,6 +9,10 @@ import {
   MemberServiceError,
 } from "../members/service";
 import type { MemberActor } from "../members/types";
+import {
+  OrganizationEntitlementConflictError,
+  type OrganizationEntitlementCommandRepository,
+} from "./policy";
 
 const identifierSchema = z.string().trim().min(1).max(200);
 const organizationSchema = z
@@ -30,6 +34,12 @@ const provisionOrganizationSchema = organizationSchema
     entitlement: organizationEntitlementSchema,
   })
   .strict();
+const updateEntitlementSchema = z
+  .object({
+    expectedRevision: z.int().nonnegative(),
+    entitlement: organizationEntitlementSchema,
+  })
+  .strict();
 
 type OrganizationRouteContext = Context<MemberRouteEnvironment>;
 
@@ -40,6 +50,7 @@ export interface SelfHostedOrganizationBootstrapDependencies {
 
 export interface OrganizationProvisioningRouteDependencies {
   readonly service: Pick<MemberService, "provisionOrganization">;
+  readonly entitlements: OrganizationEntitlementCommandRepository;
   readonly authenticate: (request: Request) => boolean | Promise<boolean>;
 }
 
@@ -72,10 +83,21 @@ function idempotencyKey(context: OrganizationRouteContext): string {
     throw new MemberServiceError(
       "VALIDATION_ERROR",
       400,
-      "An Idempotency-Key header is required for organization bootstrap.",
+      "An Idempotency-Key header is required for organization provisioning.",
     );
   }
   return value;
+}
+
+async function entitlementAuditId(organizationId: string, key: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${organizationId}\u0000${key}`),
+  );
+  const hex = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return `organization-entitlement:${hex}`;
 }
 
 function organizationRouteError(error: Error, context: OrganizationRouteContext): Response {
@@ -101,6 +123,9 @@ function organizationRouteError(error: Error, context: OrganizationRouteContext)
           : "CONFLICT",
       error.message,
     );
+  }
+  if (error instanceof OrganizationEntitlementConflictError) {
+    return routeError(context, 409, "CONFLICT", error.message);
   }
   throw error;
 }
@@ -180,6 +205,36 @@ export function createOrganizationProvisioningRoutes(
       idempotencyKey: idempotencyKey(context),
     });
     return context.json({ data }, 201);
+  });
+
+  routes.put("/:organizationId/entitlement", async (context) => {
+    if (!(await dependencies.authenticate(context.req.raw))) {
+      throw new AuthAccessError("FORBIDDEN", "The provisioning credential is invalid.");
+    }
+    const organizationId = identifierSchema.parse(context.req.param("organizationId"));
+    const key = idempotencyKey(context);
+    const input = updateEntitlementSchema.parse(await context.req.json().catch(() => undefined));
+    if (input.entitlement.organizationId !== organizationId) {
+      throw new MemberServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "The entitlement organization must match the route organization.",
+      );
+    }
+    if (input.entitlement.revision <= input.expectedRevision) {
+      throw new MemberServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "The entitlement revision must be greater than the expected revision.",
+      );
+    }
+    const data = await dependencies.entitlements.putEntitlement(input.entitlement, {
+      id: await entitlementAuditId(organizationId, key),
+      traceId: context.get("traceId"),
+      occurredAt: new Date().toISOString(),
+      expectedRevision: input.expectedRevision,
+    });
+    return context.json({ data });
   });
 
   routes.onError(organizationRouteError);
