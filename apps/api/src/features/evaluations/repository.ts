@@ -1387,7 +1387,12 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       expectedAssignmentVersion,
       "Assignment",
     );
-    if (assignment.status !== "assigned" && assignment.status !== "in_progress") {
+    const currentAssignment = this.#assignments.get(assignmentStorageKey);
+    if (
+      currentAssignment?.status !== "assigned" &&
+      currentAssignment?.status !== "in_progress" &&
+      currentAssignment?.status !== "submitted"
+    ) {
       throw conflict("This assignment is no longer available for review.");
     }
     if (

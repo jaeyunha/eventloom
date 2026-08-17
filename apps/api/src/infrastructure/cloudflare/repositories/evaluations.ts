@@ -1942,7 +1942,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
           `EXISTS (
             SELECT 1 FROM review_assignments
             WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?
-              AND status IN ('assigned', 'in_progress')
+              AND status IN ('assigned', 'in_progress', 'submitted')
           )
           AND NOT EXISTS (
             SELECT 1 FROM evaluation_conflicts
