@@ -2953,6 +2953,7 @@ function useCrmContactActions({
   dispatchContactSelection,
   loadAnalytics,
   loadContacts,
+  markContactMutation,
   setHistory,
 }: {
   readonly api: CrmApi;
@@ -2964,6 +2965,7 @@ function useCrmContactActions({
   readonly dispatchContactSelection: Dispatch<CrmContactSelectionAction>;
   readonly loadAnalytics: () => Promise<void>;
   readonly loadContacts: () => Promise<void>;
+  readonly markContactMutation: () => void;
   readonly setHistory: (value: CrmStateUpdate<readonly CrmHistoryEntry[]>) => void;
 }): {
   readonly addNote: (body: string) => Promise<void>;
@@ -3017,6 +3019,7 @@ function useCrmContactActions({
         () => api.getContactHistory(selectedContact.id),
         loadAnalytics,
         loadContacts,
+        markContactMutation,
       );
       setHistory(nextHistory);
     } catch (reason) {
@@ -3277,6 +3280,7 @@ export function useCrmWorkspaceController(
     dispatchContactSelection: selection.dispatchContactSelection,
     loadAnalytics: directory.loadAnalytics,
     loadContacts: directory.loadContacts,
+    markContactMutation: directory.markContactMutation,
     setHistory: selection.setHistory,
   });
   const outreach = useCrmOutreachActions({

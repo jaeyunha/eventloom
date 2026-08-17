@@ -1170,13 +1170,20 @@ describe("CRM contact analytics refresh", () => {
     const loadHistory = vi.fn(async () => history);
     const loadAnalytics = vi.fn(async () => undefined);
     const loadContacts = vi.fn(async () => undefined);
+    const markContactMutation = vi.fn();
 
     await expect(
-      refreshCrmEventMembershipAfterSave(loadHistory, loadAnalytics, loadContacts),
+      refreshCrmEventMembershipAfterSave(
+        loadHistory,
+        loadAnalytics,
+        loadContacts,
+        markContactMutation,
+      ),
     ).resolves.toBe(history);
     expect(loadHistory).toHaveBeenCalledOnce();
     expect(loadAnalytics).toHaveBeenCalledOnce();
     expect(loadContacts).toHaveBeenCalledOnce();
+    expect(markContactMutation).toHaveBeenCalledOnce();
   });
 });
 
