@@ -207,7 +207,7 @@ describe("Cloudflare outbox consumer", () => {
 
     expect(send).not.toHaveBeenCalled();
     expect(queueMessage.acked).toBe(true);
-    expect(repository.get("job-1")?.state).toBe("dead-letter");
+    expect(repository.get("job-1")?.state).toBe("failed");
   });
 
   it("retries a live lease at its expiry instead of exhausting Queue retries", async () => {
