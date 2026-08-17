@@ -708,6 +708,7 @@ CREATE TABLE `events` (
 	`slug` text NOT NULL,
 	`name` text NOT NULL,
 	`status` text NOT NULL,
+	`legacy_retired_at` text,
 	`time_zone` text NOT NULL,
 	`starts_at` text NOT NULL,
 	`ends_at` text NOT NULL,
@@ -724,15 +725,14 @@ CREATE TABLE `events` (
 	`created_by` text NOT NULL,
 	`updated_by` text NOT NULL,
 	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`organization_id`) ON UPDATE no action ON DELETE cascade,
-	CONSTRAINT "events_status_check" CHECK("events"."status" in ('draft','active','archived')),
 	CONSTRAINT "events_duration_check" CHECK("events"."default_duration_minutes">0),
+	CONSTRAINT "events_status_check" CHECK("events"."status" in ('draft','active','archived')),
 	CONSTRAINT "events_version_check" CHECK("events"."version">0),
 	CONSTRAINT "events_times_check" CHECK("events"."ends_at">"events"."starts_at"),
 	CONSTRAINT "events_cfp_times_check" CHECK((("events"."cfp_opens_at" is null and "events"."cfp_closes_at" is null) or ("events"."cfp_opens_at" is not null and "events"."cfp_closes_at" is not null and "events"."cfp_closes_at">"events"."cfp_opens_at")))
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `events_organization_slug_unique` ON `events` (`organization_id`,`slug`);--> statement-breakpoint
-CREATE INDEX `events_organization_status_updated_idx` ON `events` (`organization_id`,`status`,`updated_at`);--> statement-breakpoint
 CREATE INDEX `events_organization_slug_idx` ON `events` (`organization_id`,`slug`);--> statement-breakpoint
 CREATE UNIQUE INDEX `events_organization_id_unique` ON `events` (`organization_id`,`id`);--> statement-breakpoint
 CREATE TABLE `formats` (

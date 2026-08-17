@@ -56,7 +56,6 @@ const organizerEventFixture = {
   organizationId: ORGANIZATION_ID,
   slug: EVENT_ID,
   name: "Open Sessionboard Conference",
-  status: "active",
   timeZone: "America/Los_Angeles",
   startsAt: "2026-09-18T16:00:00.000Z",
   endsAt: "2026-09-18T23:00:00.000Z",

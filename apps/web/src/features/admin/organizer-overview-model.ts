@@ -21,7 +21,6 @@ export interface OrganizerOverviewEvent {
   readonly id: string;
   readonly name: string;
   readonly slug: string | null;
-  readonly status: string | null;
   readonly startsAt: string | null;
   readonly endsAt: string | null;
 }
@@ -140,7 +139,6 @@ function parseOrganizerOverviewEvent(event: unknown, index: number): OrganizerOv
     id: requiredString(event.id, `events[${index}].id`),
     name: requiredString(event.name, `events[${index}].name`),
     slug: nullableString(event.slug, `events[${index}].slug`),
-    status: nullableString(event.status, `events[${index}].status`),
     startsAt: nullableString(event.startsAt, `events[${index}].startsAt`),
     endsAt: nullableString(event.endsAt, `events[${index}].endsAt`),
   };
@@ -297,27 +295,6 @@ export function createOrganizerOverviewApi(
   };
 }
 
-export type OrganizerOverviewStatusClass = "statusLive" | "statusDraft" | "statusArchived";
-
-export function eventStatusClass(status: string | null): OrganizerOverviewStatusClass {
-  switch (status?.toLowerCase()) {
-    case "live":
-    case "published":
-    case "active":
-      return "statusLive";
-    case "draft":
-      return "statusDraft";
-    case "archived":
-      return "statusArchived";
-    default:
-      return "statusArchived";
-  }
-}
-
-const organizerEventStatuses = ["draft", "active", "archived"] as const;
-
-export type OrganizerEventStatus = (typeof organizerEventStatuses)[number];
-
 export interface OrganizerEventCfpSettings {
   readonly enabled: boolean;
   readonly opensAt: string | null;
@@ -369,7 +346,6 @@ export interface OrganizerEventRecord {
   readonly organizationId: string;
   readonly slug: string;
   readonly name: string;
-  readonly status: OrganizerEventStatus;
   readonly timeZone: string;
   readonly startsAt: string;
   readonly endsAt: string;
@@ -397,14 +373,12 @@ export interface OrganizerEventCreateInput {
   readonly cfpSettings: OrganizerEventCfpSettings;
   readonly defaultCalendarSettings: OrganizerEventDefaultCalendarSettings;
   readonly slug?: string;
-  readonly status?: OrganizerEventStatus;
 }
 
 export interface OrganizerEventUpdateInput {
   readonly expectedVersion: number;
   readonly name?: string;
   readonly slug?: string;
-  readonly status?: OrganizerEventStatus;
   readonly timeZone?: string;
   readonly startsAt?: string;
   readonly endsAt?: string;
@@ -420,7 +394,6 @@ export interface OrganizerEventsApi {
   getEvent(eventId: string, signal?: AbortSignal): Promise<OrganizerEventRecord>;
   createEvent(input: OrganizerEventCreateInput): Promise<OrganizerEventRecord>;
   updateEvent(eventId: string, input: OrganizerEventUpdateInput): Promise<OrganizerEventRecord>;
-  archiveEvent(eventId: string, expectedVersion: number): Promise<OrganizerEventRecord>;
 }
 
 type OrganizerEventsFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -491,16 +464,6 @@ function eventRequiredInteger(value: unknown, field: string, minimum = 0): numbe
     throw eventRecordError(`${field} must be an integer of at least ${minimum}.`);
   }
   return value;
-}
-
-function eventStatus(value: unknown, field: string): OrganizerEventStatus {
-  if (
-    typeof value !== "string" ||
-    !organizerEventStatuses.includes(value as OrganizerEventStatus)
-  ) {
-    throw eventRecordError(`${field} must be draft, active, or archived.`);
-  }
-  return value as OrganizerEventStatus;
 }
 
 function eventScheduleDates(value: unknown, field: string): readonly string[] | undefined {
@@ -651,7 +614,6 @@ export function parseOrganizerEventRecord(payload: unknown): OrganizerEventRecor
     organizationId: eventRequiredString(payload.organizationId, "organizationId"),
     slug: eventRequiredString(payload.slug, "slug"),
     name: eventRequiredString(payload.name, "name"),
-    status: eventStatus(payload.status, "status"),
     timeZone: eventRequiredString(payload.timeZone, "timeZone"),
     startsAt: eventRequiredString(payload.startsAt, "startsAt"),
     endsAt: eventRequiredString(payload.endsAt, "endsAt"),
@@ -743,7 +705,6 @@ function eventCreateBody(input: OrganizerEventCreateInput): Record<string, unkno
       location: input.defaultCalendarSettings.location,
     },
     ...(input.slug === undefined ? {} : { slug: input.slug }),
-    ...(input.status === undefined ? {} : { status: input.status }),
   };
 }
 
@@ -752,7 +713,6 @@ function eventUpdateBody(input: OrganizerEventUpdateInput): Record<string, unkno
     expectedVersion: input.expectedVersion,
     ...(input.name === undefined ? {} : { name: input.name }),
     ...(input.slug === undefined ? {} : { slug: input.slug }),
-    ...(input.status === undefined ? {} : { status: input.status }),
     ...(input.timeZone === undefined ? {} : { timeZone: input.timeZone }),
     ...(input.startsAt === undefined ? {} : { startsAt: input.startsAt }),
     ...(input.endsAt === undefined ? {} : { endsAt: input.endsAt }),
@@ -841,13 +801,6 @@ export function createOrganizerEventsApi(
         body: JSON.stringify(eventUpdateBody(input)),
       });
     },
-    archiveEvent(eventId, expectedVersion) {
-      return request(
-        `/${eventPathSegment(eventId, "event ID")}/archive`,
-        parseOrganizerEventResponse,
-        { method: "POST", body: JSON.stringify({ expectedVersion }) },
-      );
-    },
   };
 }
 
@@ -856,7 +809,6 @@ export type OrganizerEventDateMode = "range" | "individual";
 export interface OrganizerEventFormValues {
   readonly name: string;
   readonly slug: string;
-  readonly status: OrganizerEventStatus;
   readonly timeZone: string;
   readonly startsAt: string;
   readonly endsAt: string;
@@ -963,7 +915,6 @@ export function organizerEventEditorFormValues(
   return {
     name: event?.name ?? "",
     slug: event?.slug ?? "",
-    status: event?.status ?? "draft",
     timeZone,
     startsAt: event ? isoToLocalDateTime(event.startsAt, timeZone) : "",
     endsAt: event ? isoToLocalDateTime(event.endsAt, timeZone) : "",
@@ -1205,7 +1156,6 @@ export function validateOrganizerEventForm(
       location: values.defaultCalendarLocation.trim() || values.venue.trim() || null,
     },
     ...(slug ? { slug } : {}),
-    status: values.status,
   };
   return { input };
 }
@@ -1294,11 +1244,10 @@ export function organizerEventIntersectsCalendarDate(
 }
 
 export function initialCalendarMonth(
-  events: readonly Pick<OrganizerEventRecord, "status" | "startsAt" | "timeZone">[],
+  events: readonly Pick<OrganizerEventRecord, "startsAt" | "timeZone">[],
 ): Date {
   let earliestDate: string | null = null;
   for (const event of events) {
-    if (event.status === "archived") continue;
     const startDate = eventLocalDate(event.startsAt, event.timeZone);
     if (startDate !== null && (earliestDate === null || startDate < earliestDate)) {
       earliestDate = startDate;

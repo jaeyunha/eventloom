@@ -4,16 +4,6 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,16 +21,12 @@ import {
   type OrganizerEventCreateInput,
   type OrganizerEventFormValues,
   type OrganizerEventRecord,
-  type OrganizerEventStatus,
   organizerEventEditorFormValues,
   organizerEventIntersectsCalendarDate,
   organizerEventMinimumDateTimeLocal,
-  eventStatusClass as organizerEventStatusClass,
   parseCalendarInstant,
   validateOrganizerEventForm,
 } from "./organizer-overview-model";
-
-const organizerEventStatuses = ["draft", "active", "archived"] as const;
 
 const ORGANIZER_OVERVIEW_MONTH_FORMATTER = new Intl.DateTimeFormat("en-US", {
   month: "long",
@@ -93,20 +79,6 @@ function eventSettingsHref(organizationId: string, eventId: string): string {
 
 function agendaHref(organizationId: string, eventId: string): string {
   return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/agenda`;
-}
-
-const organizerEventStatusClasses = {
-  statusLive: styles.statusLive,
-  statusDraft: styles.statusDraft,
-  statusArchived: styles.statusArchived,
-} as const;
-
-function eventStatusClass(status: string | null): string {
-  return organizerEventStatusClasses[organizerEventStatusClass(status)] ?? "";
-}
-
-function eventManagementStatusLabel(status: OrganizerEventStatus): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 function OrganizerEventEditor({
@@ -210,30 +182,8 @@ function OrganizerEventEditor({
         </label>
       </div>
       <div className={styles.eventTwoColumn}>
-        {event ? (
-          <label className={styles.eventField} htmlFor="organizer-event-status">
-            <span className={styles.eventFieldLabel}>Status</span>
-            <select
-              className={styles.eventInput}
-              id="organizer-event-status"
-              name="status"
-              value={values.status}
-              onChange={(formEvent) =>
-                updateValue("status", formEvent.target.value as OrganizerEventStatus)
-              }
-            >
-              {organizerEventStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status === "active"
-                    ? "Active"
-                    : status.charAt(0).toUpperCase() + status.slice(1)}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
         <label
-          className={`${styles.eventField} ${event ? "" : styles.eventFieldFull}`}
+          className={`${styles.eventField} ${styles.eventFieldFull}`}
           htmlFor="organizer-event-time-zone"
         >
           <span className={styles.eventFieldLabel}>Event time zone</span>
@@ -406,7 +356,6 @@ function OrganizerEventEditor({
 interface OrganizerEventsLoadedProps {
   readonly data: OrganizerEventsData;
   readonly busy: boolean;
-  readonly notice: string | null;
   readonly initialEditor?: "create" | undefined;
   readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
@@ -416,7 +365,6 @@ interface OrganizerEventsLoadedProps {
         expectedVersion: number,
       ) => Promise<void>)
     | undefined;
-  readonly onArchive?: ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
 }
 
 interface OrganizerEventsWorkspaceProps {
@@ -432,8 +380,6 @@ interface OrganizerEventsWorkspaceProps {
   readonly onToday: () => void;
   readonly onNextMonth: () => void;
   readonly onEdit: (eventId: string) => void;
-  readonly onArchiveRequest: (event: OrganizerEventRecord) => void;
-  readonly onArchive?: ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
   readonly onUpdate?:
     | ((
         eventId: string,
@@ -456,8 +402,6 @@ function OrganizerEventsWorkspace({
   onToday,
   onNextMonth,
   onEdit,
-  onArchiveRequest,
-  onArchive,
   onUpdate,
 }: OrganizerEventsWorkspaceProps) {
   return (
@@ -503,9 +447,6 @@ function OrganizerEventsWorkspace({
                         >
                           <span className={styles.upcomingTitleRow}>
                             <strong>{event.name}</strong>
-                            <Badge className={eventStatusClass(event.status)} variant="outline">
-                              {eventManagementStatusLabel(event.status)}
-                            </Badge>
                           </span>
                           <code className={styles.eventIdentifier}>{event.id}</code>
                           <span>
@@ -572,10 +513,8 @@ function OrganizerEventsWorkspace({
                     {Array.from({ length: 6 }, (_, weekIndex) => (
                       <tr key={calendarCells[weekIndex * 7]?.dateKey}>
                         {calendarCells.slice(weekIndex * 7, weekIndex * 7 + 7).map((cell) => {
-                          const cellEvents = data.events.filter(
-                            (event) =>
-                              event.status !== "archived" &&
-                              organizerEventIntersectsCalendarDate(event, cell.date),
+                          const cellEvents = data.events.filter((event) =>
+                            organizerEventIntersectsCalendarDate(event, cell.date),
                           );
                           return (
                             <td
@@ -599,9 +538,6 @@ function OrganizerEventsWorkspace({
                                     aria-label={event.name}
                                   >
                                     <span className={styles.calendarEventName}>{event.name}</span>
-                                    <span className={styles.calendarEventStatus}>
-                                      {eventManagementStatusLabel(event.status)}
-                                    </span>
                                   </Link>
                                 ))}
                               </div>
@@ -619,11 +555,10 @@ function OrganizerEventsWorkspace({
           <TabsContent value="list" className="mt-0">
             <div className={styles.tableWrap}>
               <table className={styles.eventsTable}>
-                <caption>Organization events and their current status</caption>
+                <caption>Organization events</caption>
                 <thead>
                   <tr>
                     <th scope="col">Event</th>
-                    <th scope="col">Status</th>
                     <th scope="col">Event dates</th>
                     <th scope="col">
                       <span className={styles.srOnly}>Actions</span>
@@ -641,11 +576,6 @@ function OrganizerEventsWorkspace({
                           {event.name}
                         </Link>
                         <p className={styles.eventSlug}>/{event.slug}</p>
-                      </td>
-                      <td>
-                        <Badge className={eventStatusClass(event.status)} variant="outline">
-                          {eventManagementStatusLabel(event.status)}
-                        </Badge>
                       </td>
                       <td className={styles.eventDateCell}>
                         {formatEventManagementDates(event)}
@@ -672,17 +602,6 @@ function OrganizerEventsWorkspace({
                               {editor === event.id ? "Close editor" : "Edit"}
                             </Button>
                           ) : null}
-                          {event.status !== "archived" && onArchive ? (
-                            <Button
-                              size="sm"
-                              type="button"
-                              variant="outline"
-                              disabled={busy}
-                              onClick={() => onArchiveRequest(event)}
-                            >
-                              Archive
-                            </Button>
-                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -700,16 +619,13 @@ function OrganizerEventsWorkspace({
 export function OrganizerEventsLoaded({
   data,
   busy,
-  notice,
   initialEditor,
   onCreate,
   onUpdate,
-  onArchive,
 }: OrganizerEventsLoadedProps) {
   const [editor, setEditor] = useState<"create" | string | null>(initialEditor ?? null);
   const [view, setView] = useState<"calendar" | "list">("calendar");
   const [visibleMonth, setVisibleMonth] = useState(() => initialCalendarMonth(data.events));
-  const [archiveTarget, setArchiveTarget] = useState<OrganizerEventRecord | null>(null);
   const editingEvent =
     editor !== null && editor !== "create"
       ? data.events.find((event) => event.id === editor)
@@ -719,7 +635,7 @@ export function OrganizerEventsLoaded({
   const upcomingEvents = [...data.events]
     .filter((event) => {
       const startsAt = parseCalendarInstant(event.startsAt);
-      return event.status !== "archived" && startsAt !== null && startsAt >= new Date();
+      return startsAt !== null && startsAt >= new Date();
     })
     .sort((left, right) => {
       const leftStart = parseCalendarInstant(left.startsAt)?.valueOf() ?? Number.POSITIVE_INFINITY;
@@ -739,12 +655,6 @@ export function OrganizerEventsLoaded({
     if (!editingEvent || !onUpdate) return;
     await onUpdate(editingEvent.id, input, editingEvent.version);
     setEditor(null);
-  }
-
-  async function archive() {
-    if (!onArchive || archiveTarget === null) return;
-    await onArchive(archiveTarget.id, archiveTarget.version);
-    setArchiveTarget(null);
   }
 
   return (
@@ -772,13 +682,6 @@ export function OrganizerEventsLoaded({
           </div>
         ) : null}
       </header>
-
-      {notice ? (
-        <Alert role="status">
-          <AlertTitle>Event updated</AlertTitle>
-          <AlertDescription>{notice}</AlertDescription>
-        </Alert>
-      ) : null}
 
       {editor !== null ? (
         <Card
@@ -817,33 +720,8 @@ export function OrganizerEventsLoaded({
           setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))
         }
         onEdit={(eventId) => setEditor((current) => (current === eventId ? null : eventId))}
-        onArchiveRequest={setArchiveTarget}
         onUpdate={onUpdate}
-        onArchive={onArchive}
       />
-      <AlertDialog
-        open={archiveTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setArchiveTarget(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Archive this event?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {archiveTarget
-                ? `${archiveTarget.name} will leave active event workflows.`
-                : "This event will leave active event workflows."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={busy} variant="destructive" onClick={() => void archive()}>
-              Archive event
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }
