@@ -100,7 +100,7 @@ import type {
 import { InMemoryReportRepository, ReportService } from "../features/reports/service";
 import type { ReportProgramRecord } from "../features/reports/types";
 import { InMemorySessionRepository, SessionService } from "../features/sessions/service";
-import type { Session } from "../features/sessions/types";
+import type { DecisionVersionFence, Session } from "../features/sessions/types";
 import { CommunicationSpeakerCommunications } from "../features/speaker/communications";
 import { SpeakerService } from "../features/speaker/service";
 import type {
@@ -1373,8 +1373,11 @@ class LocalSpeakerRepository
 }
 
 class LocalSessionRepository extends InMemorySessionRepository {
-  constructor(private readonly speakerRepository: LocalSpeakerRepository) {
-    super();
+  constructor(
+    private readonly speakerRepository: LocalSpeakerRepository,
+    decisionFenceChecker: (fence: DecisionVersionFence) => Promise<boolean>,
+  ) {
+    super({}, decisionFenceChecker);
   }
 
   override listSpeakerIds(tenantId: string, eventId: string): Promise<readonly string[]> {
@@ -2697,7 +2700,11 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       })(),
     },
   );
-  const sessionRepository = new LocalSessionRepository(speakerRepository);
+  let localDecisionFenceChecker: (fence: DecisionVersionFence) => Promise<boolean> = async () =>
+    true;
+  const sessionRepository = new LocalSessionRepository(speakerRepository, (fence) =>
+    localDecisionFenceChecker(fence),
+  );
   const deterministicAgendaSuggestions = new DeterministicAgendaSuggestionProvider();
   const agendaMutationLock = new InMemoryAgendaMutationLock();
   const agendaEngine = localAgendaEngine(
@@ -2855,6 +2862,19 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const evaluationRepository = new InMemoryEvaluationRepository();
+  localDecisionFenceChecker = async (fence) => {
+    const decision = await evaluationRepository.getDecision(
+      fence.tenantId,
+      fence.planId,
+      fence.submissionId,
+    );
+    return (
+      decision !== null &&
+      decision.eventId === fence.eventId &&
+      decision.version === fence.version &&
+      decision.status === fence.status
+    );
+  };
   const localEvaluationPlan: EvaluationPlan = {
     id: "local-evaluation-plan",
     tenantId: LOCAL_ORGANIZATION_ID,

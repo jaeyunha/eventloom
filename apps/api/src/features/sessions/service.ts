@@ -1218,7 +1218,7 @@ export class SessionService {
         if (input.beforePersist !== undefined && !(await input.beforePersist())) {
           return sessionProjection(current);
         }
-        await this.#repository.putSession(next, expected);
+        await this.#repository.putSession(next, expected, input.decisionFence);
         await this.recordAudit(audit);
       }
     } catch (error) {
@@ -2344,7 +2344,10 @@ export class InMemorySessionRepository implements SessionRepository {
   readonly #audit = new Map<string, SessionAuditEntry[]>();
   readonly #speakerIds = new Map<string, Set<string>>();
 
-  constructor(seed: SessionRepositorySeed = {}) {
+  constructor(
+    seed: SessionRepositorySeed = {},
+    private readonly decisionFenceChecker?: (fence: DecisionVersionFence) => Promise<boolean>,
+  ) {
     for (const session of seed.sessions ?? [])
       this.#sessions.set(key(session.tenantId, session.eventId, session.id), clone(session));
     for (const room of seed.rooms ?? [])
@@ -2376,7 +2379,18 @@ export class InMemorySessionRepository implements SessionRepository {
       .filter((value) => value.tenantId === tenantId && value.eventId === eventId)
       .map(clone);
   }
-  async putSession(value: Session, expected: number | null): Promise<void> {
+  async putSession(
+    value: Session,
+    expected: number | null,
+    decisionFence?: DecisionVersionFence,
+  ): Promise<void> {
+    if (
+      decisionFence !== undefined &&
+      this.decisionFenceChecker !== undefined &&
+      !(await this.decisionFenceChecker(decisionFence))
+    ) {
+      throw new SessionRepositoryConflictError("The evaluation decision changed.");
+    }
     putVersioned(this.#sessions, key(value.tenantId, value.eventId, value.id), value, expected);
   }
   async deleteSession(
