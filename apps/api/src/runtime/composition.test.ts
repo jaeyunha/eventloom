@@ -8,7 +8,6 @@ import {
   InMemoryReminderRepository,
 } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
-import { EvaluationService } from "../features/evaluations/service";
 import type {
   EventRoleInvitation,
   EventRoleInvitationRepository,
@@ -16,21 +15,18 @@ import type {
 
 import {
   type AirtableRequest,
-  type AirtableResponse,
   type AirtableTransport,
   FakeAirtableTransport,
 } from "../infrastructure/airtable";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import {
   AirtableAgendaRepository,
-  AirtableCfpRepository,
   AirtableCommunicationRepository,
   AirtableCrmRepository,
   AirtableEvaluationReminderBoundary,
-  AirtableEvaluationRepository,
+  AirtableEvaluationProjectionStore,
   AirtableEventRepository,
   AirtableRemixContentGateway,
-  AirtableSubmissionReviewSource,
   CloudflareCfpEffects,
   EVALUATION_REMINDER_ATTEMPTS_SQL,
   evaluationReminderAttemptKey,
@@ -2868,7 +2864,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       }),
     ).rejects.toThrow("speaker content changed");
   });
-  it("batches organizer workspace Airtable reads under the warm latency budget", async () => {
+  it("batches organizer workspace Airtable projection reads", async () => {
     const tenantId = "tenant-organizer-workspace";
     const eventId = "event-organizer-workspace";
     const otherTenantId = "tenant-organizer-other";
@@ -3180,77 +3176,36 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       title: "Foreign event proposal",
     });
 
-    const service = new EvaluationService(
-      new AirtableEvaluationRepository({ baseId: "base-test", transport }),
-      new AirtableSubmissionReviewSource(
-        new AirtableCfpRepository({ baseId: "base-test", transport }),
-      ),
-      {
-        async getEventMetadata(_requestedTenantId, requestedEventId) {
-          return {
-            id: requestedEventId,
-            name: "Review event",
-            timeZone: "UTC",
-            startsAt: "2026-08-09T00:00:00.000Z",
-            endsAt: "2099-12-31T23:59:00.000Z",
-          };
-        },
-      },
-    );
+    const projection = new AirtableEvaluationProjectionStore({
+      baseId: "base-test",
+      transport,
+    });
     transport.requests.length = 0;
-    const startedAt = performance.now();
-    const workspace = await service.getOrganizerWorkspace(
-      {
-        tenantId,
-        userId: "organizer-workspace",
-        kind: "human",
-        grants: [{ eventId, role: "organizer" }],
-      },
-      eventId,
-    );
-    const elapsedMs = performance.now() - startedAt;
+    const records = await projection.listOrganizerWorkspaceRecords(tenantId, eventId);
 
-    expect(elapsedMs).toBeLessThan(1_100);
-    expect(workspace.plan).toMatchObject({ id: planId, tenantId, eventId });
-    expect(workspace.submissions.map((submission) => submission.id).sort()).toEqual([
-      "submission-organizer-alpha",
-      "submission-organizer-zulu",
-    ]);
-    expect(workspace.assignments.map((assignment) => assignment.id).sort()).toEqual([
+    expect(records.assignments.map((assignment) => assignment.id).sort()).toEqual([
       assignmentOutstanding.id,
       assignmentSubmitted.id,
     ]);
-    expect(workspace.progress).toMatchObject({
-      planId,
-      total: 2,
-      assigned: 1,
-      inProgress: 0,
-      submitted: 1,
-      abstained: 0,
-      completionPercent: 50,
-    });
-    expect(workspace.progress.reviewers).toHaveLength(2);
-    expect(workspace.decisions).toEqual({
-      [assignmentSubmitted.submissionId]: expect.objectContaining({
+    expect(records.reviews).toEqual([reviewDraft, reviewSubmitted]);
+    expect(records.decisions).toEqual([
+      expect.objectContaining({
         id: decisionAccepted.id,
         status: "accepted",
         version: 2,
       }),
-      [assignmentOutstanding.submissionId]: expect.objectContaining({
+      expect.objectContaining({
         id: decisionWaitlisted.id,
         status: "waitlisted",
         version: 1,
       }),
-    });
-    expect(workspace.aggregates).toHaveLength(2);
+    ]);
     const reads = transport.requests.filter((request) => request.method === "GET");
-    expect(reads).toHaveLength(5);
+    expect(reads).toHaveLength(3);
     expect(reads.map((request) => request.table).sort()).toEqual([
       "Decisions",
       "Evaluations",
       "Review Plans",
-      "Review Plans",
-      "Submissions",
     ]);
     for (const table of ["Review Plans", "Evaluations", "Decisions"] as const) {
       const read = reads.find((request) => request.table === table);
@@ -3258,9 +3213,9 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       expect(read?.query?.filterByFormula).toContain(tenantId);
       expect(read?.query?.filterByFormula).toContain(eventId);
     }
-    expect(JSON.stringify(workspace)).not.toContain("foreign");
+    expect(JSON.stringify(records)).not.toContain("foreign");
   });
-  it("atomically supersedes Airtable assignments while preserving lineage and reviews", async () => {
+  it("reads superseded assignment lineage from Airtable projections", async () => {
     const tenantId = "tenant-replacement";
     const eventId = "event-replacement";
     const planId = "plan-replacement";
@@ -3344,10 +3299,22 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         "Rounds JSON": JSON.stringify(plan),
       },
     });
+    const supersededAssignment = {
+      ...assignmentA,
+      status: "superseded" as const,
+      version: 2,
+      supersededByAssignmentId: assignmentC.id,
+      updatedAt: replacedAt,
+    };
+    const successorAssignment = {
+      ...assignmentC,
+      replacementForAssignmentId: assignmentA.id,
+    };
     for (const [recordId, entity, entityType] of [
-      ["rec00000000000101", assignmentA, "evaluation_assignment"],
+      ["rec00000000000101", supersededAssignment, "evaluation_assignment"],
       ["rec00000000000102", assignmentB, "evaluation_assignment"],
       ["rec00000000000103", reviewA, "evaluation_review"],
+      ["rec00000000000104", successorAssignment, "evaluation_assignment"],
     ] as const) {
       transport.seed({
         baseId: "base-test",
@@ -3360,146 +3327,26 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       });
     }
 
-    let rejectNextMutation = true;
-    const mutationTransport: AirtableTransport = {
-      async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
-        if (
-          rejectNextMutation &&
-          request.method === "PATCH" &&
-          request.table === "Review Plans" &&
-          request.recordId === "rec00000000000100"
-        ) {
-          rejectNextMutation = false;
-          return { status: 503, headers: {}, body: {} as TBody };
-        }
-        return transport.request<TBody>(request);
-      },
-    };
-    const repository = new AirtableEvaluationRepository({
+    const projection = new AirtableEvaluationProjectionStore({
       baseId: "base-test",
-      transport: mutationTransport,
+      transport,
     });
-    const scope = {
-      tenantId,
-      eventId,
-      planId,
-      roundId,
-      submissionId,
-      planVersion: assignmentA.planVersion,
-    };
-    const replacement = {
-      oldAssignmentId: assignmentA.id,
-      replacementReviewerId: assignmentC.reviewerId,
-      successorAssignment: assignmentC,
-      expectedAssignmentVersion: assignmentA.version,
-      reason: "Reviewer conflict disclosed after assignment.",
-    };
 
-    await expect(repository.replaceAssignment(scope, replacement)).rejects.toMatchObject({
-      status: 503,
-    });
-    await expect(repository.getAssignment(tenantId, assignmentA.id)).resolves.toMatchObject(
-      assignmentA,
+    await expect(projection.getAssignment(tenantId, assignmentA.id)).resolves.toEqual(
+      supersededAssignment,
     );
-    await expect(repository.getAssignment(tenantId, assignmentC.id)).resolves.toBeNull();
-    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
-
-    const replaced = await repository.replaceAssignment(scope, replacement);
-    expect(replaced).toMatchObject({
-      scope,
-      replacedAssignment: {
-        ...assignmentA,
-        status: "superseded",
-        successorAssignmentId: assignmentC.id,
-        supersededReason: replacement.reason,
-        version: 2,
-        updatedAt: replacedAt,
-      },
-      successorAssignment: {
-        ...assignmentC,
-        predecessorAssignmentId: assignmentA.id,
-        successorAssignmentId: null,
-        supersededReason: null,
-      },
-      activeAssignments: [assignmentB, expect.objectContaining(assignmentC)],
-      history: [{ assignment: expect.objectContaining({ id: assignmentA.id }), review: reviewA }],
-    });
-    expect(replaced.successorAssignment).toMatchObject({
-      planVersion: 4,
-      rubricRevision: 7,
-      roundRevision: 3,
-      submissionRevision: 2,
-    });
-    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
-
-    await expect(
-      repository.applyAssignmentDistribution(scope, {
-        assignments: [replaced.successorAssignment],
-        expectedActiveVersions: [
-          { assignmentId: assignmentB.id, version: 1 },
-          { assignmentId: assignmentC.id, version: 1 },
-        ],
-        reason: "Organizer removed the completed reviewer.",
-      }),
-    ).rejects.toThrow("changed since the distribution was previewed");
-    await expect(repository.getAssignment(tenantId, assignmentB.id)).resolves.toMatchObject(
+    await expect(projection.getAssignment(tenantId, assignmentC.id)).resolves.toEqual(
+      successorAssignment,
+    );
+    await expect(projection.getReview(tenantId, assignmentA.id)).resolves.toEqual(reviewA);
+    await expect(projection.listAssignments(tenantId, planId)).resolves.toEqual([
+      supersededAssignment,
       assignmentB,
-    );
-
-    const distributed = await repository.applyAssignmentDistribution(scope, {
-      assignments: [replaced.successorAssignment],
-      expectedActiveVersions: [
-        { assignmentId: assignmentB.id, version: assignmentB.version },
-        { assignmentId: assignmentC.id, version: assignmentC.version },
-      ],
-      reason: "Organizer removed the completed reviewer.",
-    });
-    expect(distributed.activeAssignments).toEqual([
-      expect.objectContaining({
-        id: assignmentC.id,
-        planVersion: 4,
-        rubricRevision: 7,
-        roundRevision: 3,
-      }),
+      successorAssignment,
     ]);
-    expect(distributed.supersededAssignments).toEqual([
-      expect.objectContaining({
-        id: assignmentB.id,
-        status: "superseded",
-        supersededReason: "Organizer removed the completed reviewer.",
-        version: 3,
-      }),
-    ]);
-    await expect(
-      repository.listOrganizerWorkspaceRecords(tenantId, eventId),
-    ).resolves.toMatchObject({
-      assignments: [expect.objectContaining({ id: assignmentC.id })],
-      reviews: [reviewA],
-    });
-    await expect(
-      repository.listReviewerWorkspaceRecords(tenantId, assignmentA.reviewerId, [eventId]),
-    ).resolves.toEqual({ assignments: [], reviews: [] });
-    await expect(repository.listAssignments(tenantId, planId)).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: assignmentA.id, status: "superseded" }),
-        expect.objectContaining({ id: assignmentB.id, status: "superseded" }),
-        expect.objectContaining({ id: assignmentC.id, status: "assigned" }),
-      ]),
-    );
-    expect(transport.requests.some((request) => request.method === "DELETE")).toBe(false);
-    const mutations = transport.requests.filter(
-      (request) =>
-        request.method === "PATCH" &&
-        request.table === "Evaluations" &&
-        request.recordId === undefined,
-    );
-    expect(mutations).toHaveLength(2);
-    expect(
-      mutations.every((request) => JSON.stringify(request.body).includes("performUpsert")),
-    ).toBe(true);
   });
 
-  it("keeps a >10 assignment generation authoritative when the second materialization batch fails", async () => {
+  it("reads a >10 assignment generation snapshot from Airtable projections", async () => {
     const tenantId = "tenant-generation";
     const eventId = "event-generation";
     const planId = "plan-generation";
@@ -3522,16 +3369,6 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       createdAt: now,
       updatedAt: now,
     };
-    transport.seed({
-      baseId: "base-test",
-      table: "Review Plans",
-      recordId: "rec00000000000200",
-      fields: {
-        "Application ID": plan.id,
-        "Rounds JSON": JSON.stringify(plan),
-      },
-    });
-
     const previousAssignments = Array.from({ length: 6 }, (_, index) => ({
       id: `a-assignment-generation-${String(index).padStart(2, "0")}`,
       tenantId,
@@ -3613,288 +3450,76 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       createdAt: committedAt,
       updatedAt: committedAt,
     }));
-    let materializationBatchCount = 0;
-    const secondBatchFailureTransport: AirtableTransport = {
-      async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
-        if (
-          request.method === "PATCH" &&
-          request.table === "Evaluations" &&
-          request.recordId === undefined
-        ) {
-          materializationBatchCount += 1;
-          if (materializationBatchCount === 2) {
-            return { status: 503, headers: {}, body: {} as TBody };
-          }
-        }
-        return transport.request<TBody>(request);
-      },
-    };
-    const repository = new AirtableEvaluationRepository({
+    const supersededAssignments = previousAssignments.map((assignment) => ({
+      ...assignment,
+      status: "superseded" as const,
+      version: 2,
+      updatedAt: committedAt,
+    }));
+    transport.seed({
       baseId: "base-test",
-      transport: secondBatchFailureTransport,
-    });
-    const scope = {
-      tenantId,
-      eventId,
-      planId,
-      roundId,
-      submissionId,
-      planVersion: 3,
-    };
-
-    const result = await repository.applyAssignmentDistribution(scope, {
-      assignments: desiredAssignments,
-      expectedActiveVersions: previousAssignments.map((assignment) => ({
-        assignmentId: assignment.id,
-        version: assignment.version,
-      })),
-      reason: "Replace the full reviewer slate.",
-    });
-
-    expect(materializationBatchCount).toBe(2);
-    expect(result.activeAssignments).toEqual(desiredAssignments);
-    expect(result.supersededAssignments).toHaveLength(6);
-    expect(result.history).toEqual([
-      {
-        assignment: expect.objectContaining({
-          id: previousAssignments[0]?.id,
-          status: "superseded",
+      table: "Review Plans",
+      recordId: "rec00000000000200",
+      fields: {
+        "Application ID": plan.id,
+        "Rounds JSON": JSON.stringify({
+          ...plan,
+          assignmentGenerationSnapshot: {
+            version: 1,
+            committedAt,
+            assignments: [...supersededAssignments, ...desiredAssignments],
+          },
         }),
-        review: historicalReview,
       },
-    ]);
+    });
+    const projection = new AirtableEvaluationProjectionStore({
+      baseId: "base-test",
+      transport,
+    });
 
-    const listed = await repository.listAssignments(tenantId, planId);
+    const listed = await projection.listAssignments(tenantId, planId);
     expect(listed).toHaveLength(11);
     expect(listed.filter((assignment) => assignment.status === "superseded")).toHaveLength(6);
     expect(listed.filter((assignment) => assignment.status === "assigned")).toHaveLength(5);
     await expect(
-      repository.getAssignment(tenantId, previousAssignments[0]?.id ?? ""),
+      projection.getAssignment(tenantId, previousAssignments[0]?.id ?? ""),
     ).resolves.toMatchObject({ status: "superseded", version: 2 });
     await expect(
-      repository.getAssignment(tenantId, desiredAssignments[4]?.id ?? ""),
+      projection.getAssignment(tenantId, desiredAssignments[4]?.id ?? ""),
     ).resolves.toEqual(desiredAssignments[4]);
     await expect(
-      repository.listOrganizerWorkspaceRecords(tenantId, eventId),
+      projection.listOrganizerWorkspaceRecords(tenantId, eventId),
     ).resolves.toMatchObject({
       assignments: desiredAssignments,
       reviews: [historicalReview],
     });
     await expect(
-      repository.listReviewerWorkspaceRecords(tenantId, desiredAssignments[4]?.reviewerId ?? "", [
+      projection.listReviewerWorkspaceRecords(tenantId, desiredAssignments[4]?.reviewerId ?? "", [
         eventId,
       ]),
     ).resolves.toEqual({
       assignments: [desiredAssignments[4]],
       reviews: [],
     });
-    await expect(repository.getReview(tenantId, previousAssignments[0]?.id ?? "")).resolves.toEqual(
+    await expect(projection.getReview(tenantId, previousAssignments[0]?.id ?? "")).resolves.toEqual(
       historicalReview,
     );
-
-    const planPatch = transport.requests.find(
-      (request) =>
-        request.method === "PATCH" &&
-        request.table === "Review Plans" &&
-        request.recordId === "rec00000000000200",
-    );
-    const planFields = (
-      planPatch?.body as { readonly fields?: Readonly<Record<string, unknown>> } | undefined
-    )?.fields;
-    const storedPlan = JSON.parse(String(planFields?.["Rounds JSON"])) as {
-      readonly assignmentGenerationSnapshot?: {
-        readonly version: number;
-        readonly assignments: readonly unknown[];
-      };
-    };
-    expect(storedPlan.assignmentGenerationSnapshot).toMatchObject({
-      version: 1,
-      assignments: expect.arrayContaining([
-        expect.objectContaining({ id: desiredAssignments[4]?.id }),
-      ]),
-    });
-    expect(storedPlan.assignmentGenerationSnapshot?.assignments).toHaveLength(11);
   });
 
-  it("persists tenant-scoped Airtable suggestions with atomic CAS resolution", async () => {
-    const tenantId = "tenant-suggestion";
-    const eventId = "event-suggestion";
-    const planId = "plan-suggestion";
-    const roundId = "round-suggestion";
-    const submissionId = "submission-suggestion";
-    const assignmentId = "assignment-suggestion";
-    const reviewerId = "reviewer-suggestion";
-    const now = "2026-08-10T12:00:00.000Z";
-    const later = "2026-08-10T12:10:00.000Z";
+  it("exposes no Airtable suggestion command methods or PATCH boundary", () => {
     const transport = new FormulaRecordingTransport();
-    const assignment = {
-      id: assignmentId,
-      tenantId,
-      eventId,
-      planId,
-      roundId,
-      submissionId,
-      reviewerId,
-      status: "assigned" as const,
-      planVersion: 4,
-      rubricRevision: 7,
-      roundRevision: 3,
-      submissionRevision: 2,
-      version: 1,
-      createdAt: now,
-      updatedAt: now,
-    };
-    transport.seed({
-      baseId: "base-test",
-      table: "Evaluations",
-      fields: {
-        "Application ID": assignment.id,
-        "Scores JSON": JSON.stringify({
-          ...assignment,
-          entityType: "evaluation_assignment",
-        }),
-      },
-    });
-    const candidate = {
-      id: "candidate-quality",
-      criterionId: "quality",
-      value: 4,
-      evidence: ["Clear problem statement"],
-      provenance: {
-        provider: "openai",
-        model: "gpt-5-mini",
-        generatedAt: now,
-        sourceReferences: ["submission:2", "rubric:7"],
-      },
-    };
-    const suggestion = {
-      id: "suggestion-quality",
-      tenantId,
-      eventId,
-      planId,
-      roundId,
-      assignmentId,
-      submissionId,
-      reviewerId,
-      rubricRevision: 7,
-      submissionRevision: 2,
-      planRevision: 4,
-      rubricId: "rubric-main",
-      candidates: { quality: [candidate] },
-      criterionCandidates: [candidate],
-      provenance: candidate.provenance,
-      status: "pending" as const,
-      version: 1,
-      history: [{ action: "generate" as const, actorId: null, at: now }],
-      audit: [{ action: "generate" as const, actorId: null, at: now }],
-      createdAt: now,
-      updatedAt: now,
-    };
-    const repository = new AirtableEvaluationRepository({
+    const projection = new AirtableEvaluationProjectionStore({
       baseId: "base-test",
       transport,
     });
 
-    await repository.putSuggestion(suggestion, null, assignment.version);
-    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(suggestion);
-    await expect(repository.getSuggestion("tenant-other", suggestion.id)).resolves.toBeNull();
-    await expect(repository.listSuggestions(tenantId, planId)).resolves.toEqual([suggestion]);
-
-    const resolvedSuggestion = {
-      ...suggestion,
-      status: "accepted" as const,
-      version: 2,
-      history: [
-        ...suggestion.history,
-        { action: "accept" as const, actorId: reviewerId, at: later },
-      ],
-      audit: [...suggestion.audit, { action: "accept" as const, actorId: reviewerId, at: later }],
-      updatedAt: later,
-    };
-    const resolvedAssignment = {
-      ...assignment,
-      status: "in_progress" as const,
-      version: 2,
-      updatedAt: later,
-    };
-    const review = {
-      id: `review:${assignmentId}`,
-      tenantId,
-      eventId,
-      planId,
-      roundId,
-      assignmentId,
-      submissionId,
-      reviewerId,
-      scores: {
-        quality: {
-          criterionId: "quality",
-          value: 4,
-          origin: "ai" as const,
-          evidence: candidate.evidence,
-          humanConfirmedBy: reviewerId,
-          suggestionId: suggestion.id,
-          suggestionStatus: "accepted" as const,
-          rubricRevision: 7,
-          submissionRevision: 2,
-          updatedAt: later,
-        },
-      },
-      comment: "",
-      submittedAt: null,
-      version: 1,
-      planRevision: 4,
-      rubricRevision: 7,
-      roundRevision: 3,
-      submissionRevision: 2,
-      createdAt: later,
-      updatedAt: later,
-    };
-
-    await expect(
-      repository.resolveSuggestion(
-        resolvedSuggestion,
-        suggestion.version,
-        resolvedAssignment,
-        assignment.version,
-        review,
-        null,
+    expect("putSuggestion" in projection).toBe(false);
+    expect("resolveSuggestion" in projection).toBe(false);
+    expect(
+      transport.requests.some(
+        (request) => request.method === "PATCH" && request.table === "Evaluations",
       ),
-    ).resolves.toEqual({ suggestion: resolvedSuggestion, review });
-    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(
-      resolvedSuggestion,
-    );
-    await expect(repository.getAssignment(tenantId, assignmentId)).resolves.toEqual(
-      resolvedAssignment,
-    );
-    await expect(repository.getReview(tenantId, assignmentId)).resolves.toEqual(review);
-
-    await expect(
-      repository.resolveSuggestion(
-        resolvedSuggestion,
-        suggestion.version,
-        resolvedAssignment,
-        assignment.version,
-        review,
-        null,
-      ),
-    ).rejects.toThrow("Suggestion changed since it was loaded");
-    await expect(
-      repository.putSuggestion(
-        { ...resolvedSuggestion, eventId: "event-other", version: 3 },
-        resolvedSuggestion.version,
-        resolvedAssignment.version,
-      ),
-    ).rejects.toThrow("Suggestion changed since it was loaded");
-    expect(transport.requests.some((request) => request.method === "DELETE")).toBe(false);
-    const resolutionMutation = transport.requests.find(
-      (request) =>
-        request.method === "PATCH" &&
-        request.recordId === undefined &&
-        (request.body as { readonly records?: readonly unknown[] } | undefined)?.records?.length ===
-          3,
-    );
-    expect(resolutionMutation).toBeDefined();
+    ).toBe(false);
   });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();
@@ -3923,7 +3548,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       },
     } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
     const boundary = new AirtableEvaluationReminderBoundary(
-      new AirtableEvaluationRepository({ baseId: "base-test", transport }),
+      new AirtableEvaluationProjectionStore({ baseId: "base-test", transport }),
       database,
       queue,
       testSenderAddresses,

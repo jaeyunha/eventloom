@@ -1,11 +1,20 @@
 import { localDateInTimeZone } from "@eventloom/contracts";
 import { z } from "zod";
-import { advisoryUnavailable, closed, conflict, forbidden, invalidInput, notFound } from "./errors";
+import {
+  advisoryUnavailable,
+  advisoryUnsupported,
+  closed,
+  conflict,
+  forbidden,
+  invalidInput,
+  notFound,
+} from "./errors";
 import type {
   EvaluationRepository,
   OrganizerWorkspaceRecords,
   SubmissionReviewSource,
 } from "./repository";
+import { isMeaningfulSuggestionRationale, scoreableRubricCriteria } from "./suggestion-validation";
 import type {
   EvaluationActor,
   EvaluationAggregate,
@@ -193,6 +202,14 @@ export interface EvaluationOrganizerWorkspaceDiagnostic {
   readonly code: "decisions_unavailable";
   readonly message: string;
 }
+export interface EvaluationOrganizerSubmittedReview {
+  readonly id: string;
+  readonly roundId: string;
+  readonly submissionId: string;
+  readonly reviewerId: string;
+  readonly comment: string;
+  readonly submittedAt: string;
+}
 export interface EvaluationOrganizerWorkspace {
   readonly event: EvaluationEventMetadata;
   readonly plan: EvaluationPlan;
@@ -200,6 +217,7 @@ export interface EvaluationOrganizerWorkspace {
   readonly assignments: readonly EvaluationAssignment[];
   readonly progress: EvaluationProgress;
   readonly aggregates: readonly EvaluationAggregate[];
+  readonly submittedReviews: readonly EvaluationOrganizerSubmittedReview[];
   readonly decisions: Readonly<Record<string, EvaluationDecision>>;
   readonly diagnostics?: readonly EvaluationOrganizerWorkspaceDiagnostic[];
 }
@@ -643,31 +661,12 @@ function aggregateForSubmission(
 ): EvaluationAggregate {
   const roundRevision = round.revision ?? gradingRevision(plan);
   const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
-  const submissionAssignments = assignments.filter(
-    (assignment) =>
-      assignment.eventId === plan.eventId &&
-      assignment.roundId === round.id &&
-      assignment.submissionId === submissionId &&
-      isActionableAssignment(assignment) &&
-      (assignment.rubricRevision ?? assignment.planVersion) === rubricRevision &&
-      (assignment.roundRevision ?? assignment.rubricRevision ?? assignment.planVersion) ===
-        roundRevision,
+  const submissionAssignments = assignments.filter((assignment) =>
+    isCountedAssignmentForRound(plan, round, submissionId, assignment),
   );
   const reviewByAssignment = new Map(
     reviews
-      .filter(
-        (review) =>
-          review.roundId === round.id &&
-          (review.rubricRevision ??
-            review.rubricVersion ??
-            review.planRevision ??
-            review.planVersion) === rubricRevision &&
-          (review.roundRevision ??
-            review.rubricRevision ??
-            review.rubricVersion ??
-            review.planRevision ??
-            review.planVersion) === roundRevision,
-      )
+      .filter((review) => isReviewForRoundRevision(plan, round, review))
       .map((review) => [review.assignmentId, review]),
   );
   const submittedReviews = submissionAssignments
@@ -904,8 +903,46 @@ function isActionableAssignment(assignment: EvaluationAssignment): boolean {
   return assignment.status !== "abstained" && assignment.status !== "superseded";
 }
 
+function isCountedAssignmentForRound(
+  plan: EvaluationPlan,
+  round: ReviewRound,
+  submissionId: string,
+  assignment: EvaluationAssignment,
+): boolean {
+  const roundRevision = round.revision ?? gradingRevision(plan);
+  const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
+  return (
+    assignment.eventId === plan.eventId &&
+    assignment.roundId === round.id &&
+    assignment.submissionId === submissionId &&
+    isActionableAssignment(assignment) &&
+    (assignment.rubricRevision ?? assignment.planVersion) === rubricRevision &&
+    (assignment.roundRevision ?? assignment.rubricRevision ?? assignment.planVersion) ===
+      roundRevision
+  );
+}
+
+function isReviewForRoundRevision(
+  plan: EvaluationPlan,
+  round: ReviewRound,
+  review: EvaluationReview,
+): boolean {
+  const roundRevision = round.revision ?? gradingRevision(plan);
+  const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
+  return (
+    review.roundId === round.id &&
+    (review.rubricRevision ?? review.rubricVersion ?? review.planRevision ?? review.planVersion) ===
+      rubricRevision &&
+    (review.roundRevision ??
+      review.rubricRevision ??
+      review.rubricVersion ??
+      review.planRevision ??
+      review.planVersion) === roundRevision
+  );
+}
+
 function isReviewableSubmission(submission: Readonly<{ status?: string | undefined }>): boolean {
-  return submission.status !== "withdrawn";
+  return submission.status === "submitted";
 }
 
 function gradingRevision(plan: EvaluationPlan): number {
@@ -1137,6 +1174,41 @@ export class EvaluationService {
     const decisions = Object.fromEntries(
       planDecisions.map((decision) => [decision.submissionId, decision] as const),
     );
+    const effectiveAssignmentById = new Map(
+      effectiveAssignments.map((assignment) => [assignment.id, assignment] as const),
+    );
+    const roundById = new Map(plan.rounds.map((candidate) => [candidate.id, candidate] as const));
+    const submittedReviews = reviews
+      .flatMap((review): readonly EvaluationOrganizerSubmittedReview[] => {
+        const assignment = effectiveAssignmentById.get(review.assignmentId);
+        const reviewRound = roundById.get(review.roundId);
+        if (
+          review.submittedAt === null ||
+          assignment === undefined ||
+          reviewRound === undefined ||
+          !isCountedAssignmentForRound(plan, reviewRound, review.submissionId, assignment) ||
+          !isReviewForRoundRevision(plan, reviewRound, review)
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: review.id,
+            roundId: review.roundId,
+            submissionId: review.submissionId,
+            reviewerId: review.reviewerId,
+            comment: review.comment,
+            submittedAt: review.submittedAt,
+          },
+        ];
+      })
+      .sort(
+        (left, right) =>
+          left.submissionId.localeCompare(right.submissionId) ||
+          left.roundId.localeCompare(right.roundId) ||
+          left.submittedAt.localeCompare(right.submittedAt) ||
+          left.reviewerId.localeCompare(right.reviewerId),
+      );
     return {
       event,
       plan,
@@ -1144,6 +1216,7 @@ export class EvaluationService {
       assignments: effectiveAssignments,
       progress: progressForAssignments(plan, effectiveAssignments),
       aggregates,
+      submittedReviews,
       decisions,
       ...(diagnostics === undefined ? {} : { diagnostics }),
     };
@@ -2337,12 +2410,8 @@ export class EvaluationService {
       throw conflict("A submitted review cannot receive AI suggestions.");
     }
     assertPlanIsWritable(plan, round, this.#clock());
-    const material = await this.#submissions.getSubmissionForReview(
-      actor.tenantId,
-      assignment.eventId,
-      assignment.submissionId,
-    );
-    if (material === null) throw notFound("The assigned submission was not found.");
+    if (scoreableRubricCriteria(round).length === 0) throw advisoryUnsupported();
+    const material = await this.#requireActiveSubmission(plan, assignment.submissionId);
     const producer = this.#aiSuggestionProducer;
     if (producer === undefined) {
       throw advisoryUnavailable(
@@ -2378,6 +2447,7 @@ export class EvaluationService {
     } catch {
       throw advisoryUnavailable();
     }
+    await this.#requireActiveSubmission(plan, assignment.submissionId);
     const candidates = this.#normalizeProviderCandidates(result, round, providerInput);
     const now = this.#clock().toISOString();
     const provenance: EvaluationSuggestionProvenance = {
@@ -2460,19 +2530,37 @@ export class EvaluationService {
     requireHumanReviewer(actor, assignment);
     await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
     const { plan, round } = await this.#assignmentContext(assignment);
-    const material = await this.#submissions.getSubmissionForReview(
-      actor.tenantId,
-      assignment.eventId,
-      assignment.submissionId,
-    );
-    if (material === null) throw notFound("The assigned submission was not found.");
+    const material = await this.#requireActiveSubmission(plan, assignment.submissionId);
     const revision = await this.#submissionRevision(
       actor.tenantId,
       assignment.eventId,
       assignment.submissionId,
       material.version ?? material.revision,
     );
-    return this.#listSuggestionsForAssignment(actor, assignment, plan, round, revision);
+    const suggestions = await this.#listSuggestionsForAssignment(
+      actor,
+      assignment,
+      plan,
+      round,
+      revision,
+    );
+    const currentAssignment = await this.#getAssignment(actor.tenantId, assignment.id);
+    requireHumanReviewer(actor, currentAssignment);
+    if (
+      currentAssignment.tenantId !== assignment.tenantId ||
+      currentAssignment.eventId !== assignment.eventId ||
+      currentAssignment.planId !== assignment.planId ||
+      currentAssignment.roundId !== assignment.roundId ||
+      currentAssignment.submissionId !== assignment.submissionId ||
+      currentAssignment.reviewerId !== assignment.reviewerId ||
+      currentAssignment.status === "abstained" ||
+      currentAssignment.status === "superseded"
+    ) {
+      throw forbidden("A conflict declaration removes access to this submission.");
+    }
+    await this.#requireNoAssignmentConflict(actor.tenantId, currentAssignment.id);
+    await this.#requireActiveSubmission(plan, currentAssignment.submissionId);
+    return suggestions;
   }
 
   async listSuggestions(
@@ -2498,12 +2586,7 @@ export class EvaluationService {
       throw conflict("A submitted review cannot resolve AI suggestions.");
     }
     assertPlanIsWritable(plan, round, this.#clock());
-    const material = await this.#submissions.getSubmissionForReview(
-      actor.tenantId,
-      assignment.eventId,
-      assignment.submissionId,
-    );
-    if (material === null) throw notFound("The assigned submission was not found.");
+    const material = await this.#requireActiveSubmission(plan, assignment.submissionId);
     const submissionRevision = await this.#submissionRevision(
       actor.tenantId,
       assignment.eventId,
@@ -2522,6 +2605,7 @@ export class EvaluationService {
         actor.userId,
         this.#clock().toISOString(),
       );
+      await this.#requireActiveSubmission(plan, assignment.submissionId);
       await this.#repository.putSuggestion(staleSuggestion, suggestion.version, assignment.version);
       throw conflict("The AI evaluation suggestion is stale and must be regenerated.");
     }
@@ -2666,6 +2750,7 @@ export class EvaluationService {
       audit: [...suggestion.audit, auditEntry],
       updatedAt: now,
     };
+    await this.#requireActiveSubmission(plan, assignment.submissionId);
     const resolution = await this.#repository.resolveSuggestion(
       resolvedSuggestion,
       suggestion.version,
@@ -2841,21 +2926,20 @@ export class EvaluationService {
   ): Promise<readonly EvaluationReview[]> {
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
-    findRound(plan, roundId);
+    const round = findRound(plan, roundId);
     const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
     const assignmentIds = new Set(
       assignments
-        .filter(
-          (assignment) =>
-            assignment.eventId === plan.eventId &&
-            assignment.roundId === roundId &&
-            assignment.submissionId === submissionId &&
-            isActionableAssignment(assignment),
-        )
+        .filter((assignment) => isCountedAssignmentForRound(plan, round, submissionId, assignment))
         .map((assignment) => assignment.id),
     );
     return (await this.#repository.listReviews(actor.tenantId, plan.id))
-      .filter((review) => assignmentIds.has(review.assignmentId) && review.submittedAt !== null)
+      .filter(
+        (review) =>
+          assignmentIds.has(review.assignmentId) &&
+          review.submittedAt !== null &&
+          isReviewForRoundRevision(plan, round, review),
+      )
       .map((review) => ({
         ...review,
         scores: Object.fromEntries(
@@ -3370,6 +3454,7 @@ export class EvaluationService {
           current.submissionRevision !== submissionRevision)
       ) {
         current = this.#markSuggestionStale(current, actor.userId, this.#clock().toISOString());
+        await this.#requireActiveSubmission(plan, assignment.submissionId);
         await this.#repository.putSuggestion(current, suggestion.version, assignment.version);
       }
       currentSuggestions.push(current);
@@ -3425,18 +3510,45 @@ export class EvaluationService {
     round: ReviewRound,
     input: EvaluationSuggestionProviderInput,
   ): EvaluationSuggestionCandidate[] {
-    const rawCandidates: Array<{ raw: unknown; criterionIdHint?: string }> = Array.isArray(
-      result.candidates,
-    )
-      ? result.candidates.map((raw) => ({ raw }))
-      : Object.entries(result.candidates).flatMap(([criterionIdHint, values]) =>
-          [...values].map((raw) => ({ raw, criterionIdHint })),
+    const providerCandidates: unknown = result.candidates;
+    const criteria = new Map(
+      scoreableRubricCriteria(round).map((criterion) => [criterion.id, criterion]),
+    );
+    const rawCandidates: Array<{ raw: unknown; criterionIdHint?: string }> = [];
+    if (Array.isArray(providerCandidates)) {
+      rawCandidates.push(...providerCandidates.map((raw) => ({ raw })));
+    } else if (typeof providerCandidates === "object" && providerCandidates !== null) {
+      const candidateBuckets = Object.entries(providerCandidates);
+      if (
+        candidateBuckets.length !== criteria.size ||
+        candidateBuckets.some(
+          ([criterionId, values]) => !criteria.has(criterionId) || !Array.isArray(values),
+        )
+      ) {
+        throw invalidInput(
+          "The AI suggestion provider must return exactly one candidate for every scoreable criterion.",
         );
-    if (rawCandidates.length === 0) {
-      throw invalidInput("The AI suggestion provider returned no rubric candidates.");
+      }
+      for (const [criterionIdHint, values] of candidateBuckets) {
+        if (!Array.isArray(values) || values.length !== 1) {
+          throw invalidInput(
+            "The AI suggestion provider must return exactly one candidate for every scoreable criterion.",
+          );
+        }
+        rawCandidates.push(...values.map((raw) => ({ raw, criterionIdHint })));
+      }
+    } else {
+      throw invalidInput(
+        "The AI suggestion provider must return exactly one candidate for every scoreable criterion.",
+      );
     }
-    const criteria = new Map(round.rubric.criteria.map((criterion) => [criterion.id, criterion]));
-    return rawCandidates.map(({ raw, criterionIdHint }, index) => {
+    if (rawCandidates.length !== criteria.size) {
+      throw invalidInput(
+        "The AI suggestion provider must return exactly one candidate for every scoreable criterion.",
+      );
+    }
+    const seenCriterionIds = new Set<string>();
+    const candidates = rawCandidates.map(({ raw, criterionIdHint }, index) => {
       if (typeof raw !== "object" || raw === null) {
         throw invalidInput("The AI suggestion provider returned an invalid candidate.");
       }
@@ -3449,13 +3561,22 @@ export class EvaluationService {
       };
       const criterionId =
         typeof candidate.criterionId === "string" ? candidate.criterionId : (criterionIdHint ?? "");
+      if (
+        criterionIdHint !== undefined &&
+        typeof candidate.criterionId === "string" &&
+        candidate.criterionId !== criterionIdHint
+      ) {
+        throw invalidInput(
+          "The AI suggestion provider must return exactly one candidate for every scoreable criterion.",
+        );
+      }
       const criterion = criteria.get(criterionId);
-      if (criterion === undefined) {
-        throw invalidInput("The AI suggestion provider referenced an unknown criterion.");
+      if (criterion === undefined || seenCriterionIds.has(criterionId)) {
+        throw invalidInput(
+          "The AI suggestion provider must return exactly one candidate for every scoreable criterion.",
+        );
       }
-      if ((criterion.inputType ?? "numeric") === "free_text") {
-        throw invalidInput("AI suggestions are not supported for free-text criteria.");
-      }
+      seenCriterionIds.add(criterionId);
       if (
         typeof candidate.value !== "number" ||
         !Number.isFinite(candidate.value) ||
@@ -3467,12 +3588,27 @@ export class EvaluationService {
       if ((criterion.inputType ?? "numeric") === "dropdown") {
         normalizeDropdownValue(criterion, candidate.value);
       }
-      if (!Array.isArray(candidate.evidence) || candidate.evidence.length === 0) {
-        throw invalidInput("Every AI candidate must cite evidence.");
+      if (
+        !Array.isArray(candidate.evidence) ||
+        candidate.evidence.length === 0 ||
+        candidate.evidence.length > 3
+      ) {
+        throw invalidInput("Every AI candidate must include a submission-specific rationale.");
       }
       const evidence = candidate.evidence.map((citation) => {
-        if (typeof citation !== "string") throw invalidInput("AI evidence citations must be text.");
-        return requireText(citation, "AI evidence", 2_000);
+        if (typeof citation !== "string") {
+          throw invalidInput("Every AI candidate must include a submission-specific rationale.");
+        }
+        const rationale = requireText(citation, "AI evidence", 2_000);
+        if (
+          !isMeaningfulSuggestionRationale(
+            rationale,
+            `${input.submission.title} ${input.submission.abstract}`,
+          )
+        ) {
+          throw invalidInput("Every AI candidate must include a submission-specific rationale.");
+        }
+        return rationale;
       });
       const provenance: EvaluationSuggestionProvenance = {
         provider: candidate.provenance?.provider ?? "injected",
@@ -3497,6 +3633,12 @@ export class EvaluationService {
         provenance,
       };
     });
+    if (seenCriterionIds.size !== criteria.size) {
+      throw invalidInput(
+        "The AI suggestion provider must return exactly one candidate for every scoreable criterion.",
+      );
+    }
+    return candidates;
   }
 
   async #activeSubmissionIds(

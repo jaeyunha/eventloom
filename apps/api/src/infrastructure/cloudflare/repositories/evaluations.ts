@@ -93,23 +93,40 @@ function suggestionAssignmentGuard(
     database,
     `EXISTS (
       SELECT 1 FROM review_assignments
-      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND id = ?
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND submission_id = ? AND id = ?
         AND reviewer_id = ? AND version = ? AND status <> 'abstained'
     )
     AND NOT EXISTS (
       SELECT 1 FROM evaluation_conflicts
       WHERE organization_id = ? AND event_id = ? AND assignment_id = ?
+    )
+    AND EXISTS (
+      SELECT 1 FROM submissions
+      WHERE organization_id = ? AND event_id = ? AND id = ?
+        AND status = 'submitted'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM evaluation_decisions
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND submission_id = ?
     )`,
     [
       suggestion.tenantId,
       suggestion.eventId,
       suggestion.planId,
+      suggestion.submissionId,
       suggestion.assignmentId,
       suggestion.reviewerId,
       expectedAssignmentVersion,
       suggestion.tenantId,
       suggestion.eventId,
       suggestion.assignmentId,
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.submissionId,
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.planId,
+      suggestion.submissionId,
     ],
   );
 }
@@ -272,6 +289,7 @@ function updateAssignment(database: D1Database, assignment: EvaluationAssignment
 }
 
 export class D1EvaluationRepository implements EvaluationRepository {
+  readonly authority = "transactional" as const;
   constructor(private readonly database: D1Database) {}
 
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {

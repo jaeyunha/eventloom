@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { RubricCriterion } from "./scorecard-rubric-criterion";
 import { validateSuggestionEditValue } from "./model-validate-suggestion-edit-value";
+import type { RubricCriterion } from "./scorecard-rubric-criterion";
 
 const dropdownCriterion: RubricCriterion = {
   id: "recommendation",

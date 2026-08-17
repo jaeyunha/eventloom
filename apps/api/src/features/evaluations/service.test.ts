@@ -17,6 +17,7 @@ import type {
   EvaluationActor,
   EvaluationAssignment,
   EvaluationReviewerProjection,
+  EvaluationSuggestionProviderCandidate,
   ReviewRound,
   SubmissionReviewMaterial,
 } from "./types";
@@ -72,8 +73,19 @@ class StaleAssignmentRepository extends InMemoryEvaluationRepository {
 }
 
 class GatedSuggestionRepository extends InMemoryEvaluationRepository {
+  listGate: Promise<void> | null = null;
+  listEntered: (() => void) | null = null;
   resolutionGate: Promise<void> | null = null;
   resolutionEntered: (() => void) | null = null;
+
+  override async listSuggestions(
+    ...args: Parameters<InMemoryEvaluationRepository["listSuggestions"]>
+  ) {
+    const suggestions = await super.listSuggestions(...args);
+    this.listEntered?.();
+    if (this.listGate !== null) await this.listGate;
+    return suggestions;
+  }
 
   override async resolveSuggestion(
     ...args: Parameters<InMemoryEvaluationRepository["resolveSuggestion"]>
@@ -86,8 +98,10 @@ class GatedSuggestionRepository extends InMemoryEvaluationRepository {
 
 class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   planGate: Promise<void> | null = null;
+  planListStarted: (() => void) | null = null;
   planListCalls = 0;
   organizerWorkspaceCalls = 0;
+  organizerWorkspaceStarted: (() => void) | null = null;
   decisionCalls = 0;
   workspaceCalls = 0;
   assignmentListCalls = 0;
@@ -97,6 +111,7 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
 
   override async listPlans(tenantId: string, requestedEventId?: string) {
     this.planListCalls += 1;
+    this.planListStarted?.();
     const gate = this.planGate;
     if (gate !== null) await gate;
     return super.listPlans(tenantId, requestedEventId);
@@ -117,6 +132,7 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
     requestedEventId: string,
   ): Promise<OrganizerWorkspaceRecords> {
     this.organizerWorkspaceCalls += 1;
+    this.organizerWorkspaceStarted?.();
     const gate = this.batchGate;
     if (gate !== null) await gate;
     if (this.organizerWorkspaceFailure !== null) throw this.organizerWorkspaceFailure;
@@ -139,11 +155,13 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
 
   resetCounts(): void {
     this.planGate = null;
+    this.planListStarted = null;
     this.planListCalls = 0;
     this.workspaceCalls = 0;
     this.assignmentListCalls = 0;
     this.reviewListCalls = 0;
     this.organizerWorkspaceCalls = 0;
+    this.organizerWorkspaceStarted = null;
     this.decisionCalls = 0;
   }
 }
@@ -171,6 +189,7 @@ class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
   omitMaterials = false;
   failure: Error | null = null;
   organizerListCalls = 0;
+  organizerListStarted: (() => void) | null = null;
   organizerBatchGate: Promise<void> | null = null;
 
   override async getSubmissionForReview(
@@ -194,6 +213,7 @@ class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
   }
   override async listSubmissionsForOrganizer(requestedTenantId: string, requestedEventId: string) {
     this.organizerListCalls += 1;
+    this.organizerListStarted?.();
     const gate = this.organizerBatchGate;
     if (gate !== null) await gate;
     return super.listSubmissionsForOrganizer(requestedTenantId, requestedEventId);
@@ -204,7 +224,26 @@ class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
     this.batchCalls = 0;
     this.lastLookups = [];
     this.organizerListCalls = 0;
+    this.organizerListStarted = null;
     this.organizerBatchGate = null;
+  }
+}
+
+class GatedSubmissionSource extends InMemorySubmissionReviewSource {
+  readCount = 0;
+  gateReadNumber: number | null = null;
+  readGate: Promise<void> | null = null;
+  readEntered: (() => void) | null = null;
+
+  override async getSubmissionForReview(
+    ...args: Parameters<InMemorySubmissionReviewSource["getSubmissionForReview"]>
+  ) {
+    this.readCount += 1;
+    if (this.readCount === this.gateReadNumber) {
+      this.readEntered?.();
+      if (this.readGate !== null) await this.readGate;
+    }
+    return super.getSubmissionForReview(...args);
   }
 }
 
@@ -243,6 +282,7 @@ const submission: SubmissionReviewMaterial = {
   id: "submission-1",
   tenantId,
   eventId,
+  status: "submitted",
   title: "A useful session",
   abstract: "Practical material for the audience.",
   answers: {
@@ -259,6 +299,24 @@ const submission: SubmissionReviewMaterial = {
     },
   ],
 };
+
+function validAiCandidates(): readonly [
+  EvaluationSuggestionProviderCandidate,
+  EvaluationSuggestionProviderCandidate,
+] {
+  return [
+    {
+      criterionId: "quality",
+      value: 4,
+      evidence: ["The practical material gives the audience a concrete outcome."],
+    },
+    {
+      criterionId: "relevance",
+      value: 8,
+      evidence: ["The practical audience focus directly supports program relevance."],
+    },
+  ];
+}
 
 async function fixture(
   options: Pick<
@@ -323,6 +381,7 @@ async function fixture(
     repository,
     service,
     plan,
+    submissions,
     setTime(value: string) {
       currentTime = new Date(value);
     },
@@ -343,6 +402,24 @@ async function assignOne(service: EvaluationService, userId = "reviewer-1") {
   return assignment;
 }
 
+async function expectProviderCandidatesRejected(
+  candidates: readonly EvaluationSuggestionProviderCandidate[],
+  reviewRound: ReviewRound = round,
+): Promise<void> {
+  const { repository, service, plan } = await fixture({
+    reviewsPerSubmission: 1,
+    reviewRound,
+    aiSuggestionProducer: async () => ({ candidates }),
+  });
+  const assignment = await assignOne(service);
+
+  await expectEvaluationError(
+    service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+    "EVALUATION_INVALID_INPUT",
+  );
+  expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
+}
+
 async function expectEvaluationError(
   promise: Promise<unknown>,
   code: EvaluationError["code"],
@@ -351,6 +428,120 @@ async function expectEvaluationError(
 }
 
 describe("evaluation plans and assignments", () => {
+  it("returns submitted organizer comments while withholding reviewer drafts", async () => {
+    const { service, repository } = await fixture({
+      reviewsPerSubmission: 2,
+      maxAssignmentsPerReviewer: 2,
+    });
+    const assignments = await service.assignReviewers(organizer, {
+      planId: "plan-1",
+      roundId: round.id,
+      submissionId: submission.id,
+      reviewerIds: ["reviewer-submitted", "reviewer-draft"],
+    });
+    const submittedAssignment = assignments.find(
+      (assignment) => assignment.reviewerId === "reviewer-submitted",
+    );
+    const draftAssignment = assignments.find(
+      (assignment) => assignment.reviewerId === "reviewer-draft",
+    );
+    if (submittedAssignment === undefined || draftAssignment === undefined) {
+      throw new Error("Expected submitted and draft assignment fixtures.");
+    }
+
+    const submittedReview = await service.saveReview(
+      reviewer(submittedAssignment.reviewerId),
+      submittedAssignment.id,
+      {
+        scores: [
+          { criterionId: "quality", value: 4, origin: "human" },
+          { criterionId: "relevance", value: 8, origin: "human" },
+        ],
+        comment: "Submitted committee evidence.",
+      },
+    );
+    await service.submitReview(
+      reviewer(submittedAssignment.reviewerId),
+      submittedAssignment.id,
+      submittedReview.version,
+    );
+    await service.saveReview(reviewer(draftAssignment.reviewerId), draftAssignment.id, {
+      scores: [
+        { criterionId: "quality", value: 3, origin: "human" },
+        { criterionId: "relevance", value: 6, origin: "human" },
+      ],
+      comment: "Private draft evidence.",
+    });
+
+    const workspace = await service.getOrganizerWorkspace(organizer, eventId);
+
+    expect(workspace.submittedReviews).toEqual([
+      expect.objectContaining({
+        submissionId: submission.id,
+        reviewerId: submittedAssignment.reviewerId,
+        roundId: round.id,
+        comment: "Submitted committee evidence.",
+      }),
+    ]);
+    expect(JSON.stringify(workspace.submittedReviews)).not.toContain("Private draft evidence.");
+    await expectEvaluationError(
+      service.getOrganizerWorkspace(reviewer(submittedAssignment.reviewerId), eventId),
+      "EVALUATION_FORBIDDEN",
+    );
+
+    const persistedAssignment = await repository.getAssignment(tenantId, submittedAssignment.id);
+    if (persistedAssignment === null) {
+      throw new Error("Expected the submitted assignment to remain persisted.");
+    }
+    await service.replaceAssignment(organizer, submittedAssignment.id, {
+      replacementReviewerId: "reviewer-replacement",
+      expectedVersion: persistedAssignment.version,
+      reason: "The original reviewer became unavailable.",
+    });
+    await expect(service.getOrganizerWorkspace(organizer, eventId)).resolves.toMatchObject({
+      submittedReviews: [],
+    });
+  });
+
+  it("removes submitted comments and counted scores after a reviewer declares conflict", async () => {
+    const { service } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const actor = reviewer(assignment.reviewerId);
+    const draft = await service.saveReview(actor, assignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+      comment: "Submitted before conflict declaration.",
+    });
+    const submitted = await service.submitReview(actor, assignment.id, draft.version);
+    expect(submitted.submittedAt).not.toBeNull();
+
+    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
+
+    const workspace = await service.getOrganizerWorkspace(organizer, eventId);
+    const aggregate = workspace.aggregates.find(
+      (candidate) => candidate.roundId === round.id && candidate.submissionId === submission.id,
+    );
+
+    expect(aggregate).toMatchObject({
+      roundId: round.id,
+      submissionId: submission.id,
+      submittedReviewCount: 0,
+      averageWeightedTotal: null,
+    });
+    expect(workspace.submittedReviews).toEqual([]);
+    await expect(
+      service.listSubmittedReviews(organizer, "plan-1", round.id, submission.id),
+    ).resolves.toEqual([]);
+    await expect(
+      service.getAggregate(organizer, "plan-1", round.id, submission.id),
+    ).resolves.toMatchObject({
+      submittedReviewCount: 0,
+      averageWeightedTotal: null,
+    });
+  });
+
   it("loads reviewer work across every granted organization scope", async () => {
     const repository = new MultiTenantWorkspaceRepository();
     const service = new EvaluationService(
@@ -689,7 +880,7 @@ describe("evaluation plans and assignments", () => {
     ).rejects.toMatchObject({ code: "EVALUATION_CONFLICT" });
   });
 
-  it("allows a historical CFP outcome to enter a new review plan", async () => {
+  it("rejects historical CFP outcomes with a non-reviewable status", async () => {
     const submissions = new InMemorySubmissionReviewSource([
       {
         ...submission,
@@ -698,47 +889,8 @@ describe("evaluation plans and assignments", () => {
         title: "Accepted in an earlier CFP workflow",
       },
     ]);
-    const { service, plan, repository } = await fixture({
-      submissions,
-    });
+    const { service, plan, repository } = await fixture({ submissions });
 
-    const [assignment] = await service.assignReviewers(organizer, {
-      planId: plan.id,
-      roundId: plan.rounds[0]?.id ?? "",
-      submissionId: "submission-accepted",
-      reviewerIds: ["reviewer-1"],
-    });
-    expect(assignment).toMatchObject({
-      submissionId: "submission-accepted",
-      reviewerId: "reviewer-1",
-      status: "assigned",
-    });
-    await repository.putDecision(
-      {
-        id: "decision-historical-plan",
-        tenantId,
-        eventId,
-        planId: "historical-plan",
-        submissionId: "submission-accepted",
-        status: "accepted",
-        version: 1,
-        history: [],
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      },
-      null,
-    );
-
-    await expect(service.getOrganizerWorkspace(organizer, eventId, plan.id)).resolves.toMatchObject(
-      {
-        assignments: [
-          {
-            submissionId: "submission-accepted",
-            reviewerId: "reviewer-1",
-            status: "assigned",
-          },
-        ],
-      },
-    );
     await expect(
       service.assignReviewers(organizer, {
         planId: plan.id,
@@ -746,13 +898,8 @@ describe("evaluation plans and assignments", () => {
         submissionId: "submission-accepted",
         reviewerIds: ["reviewer-1"],
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        submissionId: "submission-accepted",
-        reviewerId: "reviewer-1",
-        status: "assigned",
-      }),
-    ]);
+    ).rejects.toMatchObject({ code: "EVALUATION_CONFLICT" });
+    expect(await repository.listAssignments(tenantId, plan.id)).toEqual([]);
   });
 
   it("supports an empty replacement and removes organizer and reviewer projections", async () => {
@@ -1243,8 +1390,17 @@ describe("evaluation plans and assignments", () => {
     repository.planGate = gate;
     repository.batchGate = gate;
     submissions.organizerBatchGate = gate;
+    const planListStarted = new Promise<void>((resolve) => {
+      repository.planListStarted = resolve;
+    });
+    const organizerWorkspaceStarted = new Promise<void>((resolve) => {
+      repository.organizerWorkspaceStarted = resolve;
+    });
+    const organizerListStarted = new Promise<void>((resolve) => {
+      submissions.organizerListStarted = resolve;
+    });
     const pending = service.getOrganizerWorkspace(organizer, eventId);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.all([planListStarted, organizerWorkspaceStarted, organizerListStarted]);
 
     expect(repository.planListCalls).toBe(1);
     expect(repository.organizerWorkspaceCalls).toBe(1);
@@ -1944,13 +2100,7 @@ describe("conflicts, progress, and decisions", () => {
     const { service } = await fixture({
       reviewsPerSubmission: 1,
       aiSuggestionProducer: async () => ({
-        candidates: [
-          {
-            criterionId: "quality",
-            value: 4,
-            evidence: ["The abstract names a concrete audience outcome."],
-          },
-        ],
+        candidates: validAiCandidates(),
       }),
     });
     const assignment = await assignOne(service);
@@ -2030,15 +2180,7 @@ describe("conflicts, progress, and decisions", () => {
       aiSuggestionProducer: async () => {
         announceProviderStarted();
         await providerGate;
-        return {
-          candidates: [
-            {
-              criterionId: "quality",
-              value: 4,
-              evidence: ["The abstract names a concrete audience outcome."],
-            },
-          ],
-        };
+        return { candidates: validAiCandidates() };
       },
     });
     const assignment = await assignOne(service);
@@ -2054,19 +2196,71 @@ describe("conflicts, progress, and decisions", () => {
     expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
   });
 
+  it("rejects an in-flight suggestion list after conflict declaration", async () => {
+    const repository = new GatedSuggestionRepository();
+    const { service } = await fixture({
+      repository,
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+    const assignment = await assignOne(service);
+    const actor = reviewer("reviewer-1");
+    await service.generateAiSuggestions(actor, assignment.id);
+    let releaseList: () => void = () => {
+      throw new Error("List release signal was not initialized.");
+    };
+    const listEntered = new Promise<void>((resolve) => {
+      repository.listEntered = resolve;
+    });
+    repository.listGate = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+
+    const listing = service.listAiSuggestions(actor, assignment.id);
+    await listEntered;
+    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
+    releaseList();
+
+    await expectEvaluationError(listing, "EVALUATION_FORBIDDEN");
+  });
+
+  it("allows an in-flight suggestion list after a benign autosave version change", async () => {
+    const repository = new GatedSuggestionRepository();
+    const { service } = await fixture({
+      repository,
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+    const assignment = await assignOne(service);
+    const actor = reviewer("reviewer-1");
+    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
+    let releaseList: () => void = () => {
+      throw new Error("List release signal was not initialized.");
+    };
+    const listEntered = new Promise<void>((resolve) => {
+      repository.listEntered = resolve;
+    });
+    repository.listGate = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+
+    const listing = service.listAiSuggestions(actor, assignment.id);
+    await listEntered;
+    await service.saveReview(actor, assignment.id, {
+      scores: [{ criterionId: "quality", value: 3, origin: "human" }],
+    });
+    releaseList();
+
+    await expect(listing).resolves.toEqual([suggestion]);
+  });
+
   it("rejects an in-flight suggestion resolution after conflict declaration", async () => {
     const repository = new GatedSuggestionRepository();
     const { service } = await fixture({
       repository,
       reviewsPerSubmission: 1,
       aiSuggestionProducer: async () => ({
-        candidates: [
-          {
-            criterionId: "quality",
-            value: 4,
-            evidence: ["The abstract names a concrete audience outcome."],
-          },
-        ],
+        candidates: validAiCandidates(),
       }),
     });
     const assignment = await assignOne(service);
@@ -2102,6 +2296,184 @@ describe("conflicts, progress, and decisions", () => {
     expect(await repository.getReview(tenantId, assignment.id)).toMatchObject({
       scores: { quality: { value: 3, origin: "human" } },
     });
+  });
+
+  it.each(["draft", "reopened", "withdrawn", "archived"])(
+    "rejects %s submission material before provider invocation",
+    async (status) => {
+      let providerCalls = 0;
+      const { repository, service, plan, submissions } = await fixture({
+        reviewsPerSubmission: 1,
+        aiSuggestionProducer: async () => {
+          providerCalls += 1;
+          return { candidates: validAiCandidates() };
+        },
+      });
+      const assignment = await assignOne(service);
+      submissions.set({ ...submission, status });
+
+      await expectEvaluationError(
+        service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+        "EVALUATION_CONFLICT",
+      );
+      expect(providerCalls).toBe(0);
+      expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
+    },
+  );
+
+  it("rejects missing submission material before provider invocation", async () => {
+    let providerCalls = 0;
+    const { repository, service, plan, submissions } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => {
+        providerCalls += 1;
+        return { candidates: validAiCandidates() };
+      },
+    });
+    const assignment = await assignOne(service);
+    submissions.delete(tenantId, submission.id);
+
+    await expectEvaluationError(
+      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+      "EVALUATION_NOT_FOUND",
+    );
+    expect(providerCalls).toBe(0);
+    expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
+  });
+
+  it("rejects suggestion listing after submission withdrawal", async () => {
+    const { service, submissions } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+    const assignment = await assignOne(service);
+    const actor = reviewer("reviewer-1");
+    await service.generateAiSuggestions(actor, assignment.id);
+    submissions.set({ ...submission, status: "withdrawn" });
+
+    await expectEvaluationError(
+      service.listAiSuggestions(actor, assignment.id),
+      "EVALUATION_CONFLICT",
+    );
+  });
+
+  it("rejects suggestion resolution after submission withdrawal", async () => {
+    const { repository, service, submissions } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+    const assignment = await assignOne(service);
+    const actor = reviewer("reviewer-1");
+    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
+    submissions.set({ ...submission, status: "withdrawn" });
+
+    await expectEvaluationError(
+      service.resolveAiSuggestion(actor, suggestion.id, {
+        action: "accept",
+        expectedVersion: suggestion.version,
+      }),
+      "EVALUATION_CONFLICT",
+    );
+    expect(await repository.getSuggestion(tenantId, suggestion.id)).toEqual(suggestion);
+  });
+
+  it("rejects in-flight suggestion generation after submission withdrawal", async () => {
+    let releaseProvider: () => void = () => {
+      throw new Error("Provider release signal was not initialized.");
+    };
+    let announceProviderStarted: () => void = () => {
+      throw new Error("Provider start signal was not initialized.");
+    };
+    const providerStarted = new Promise<void>((resolve) => {
+      announceProviderStarted = resolve;
+    });
+    const providerGate = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const { repository, service, plan, submissions } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => {
+        announceProviderStarted();
+        await providerGate;
+        return { candidates: validAiCandidates() };
+      },
+    });
+    const assignment = await assignOne(service);
+    const generation = service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id);
+    await providerStarted;
+    submissions.set({ ...submission, status: "withdrawn" });
+    releaseProvider();
+
+    await expectEvaluationError(generation, "EVALUATION_CONFLICT");
+    expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
+  });
+
+  it("rejects an in-flight suggestion list after submission withdrawal", async () => {
+    const repository = new GatedSuggestionRepository();
+    const { service, submissions } = await fixture({
+      repository,
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+    const assignment = await assignOne(service);
+    const actor = reviewer("reviewer-1");
+    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
+    submissions.set({ ...submission, status: "submitted", version: 2 });
+    let releaseList: () => void = () => {
+      throw new Error("List release signal was not initialized.");
+    };
+    const listEntered = new Promise<void>((resolve) => {
+      repository.listEntered = resolve;
+    });
+    repository.listGate = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+
+    const listing = service.listAiSuggestions(actor, assignment.id);
+    await listEntered;
+    submissions.set({ ...submission, status: "withdrawn" });
+    releaseList();
+
+    await expectEvaluationError(listing, "EVALUATION_CONFLICT");
+    expect(await repository.getSuggestion(tenantId, suggestion.id)).toEqual(suggestion);
+  });
+
+  it("rejects an in-flight suggestion resolution after submission withdrawal", async () => {
+    const submissions = new GatedSubmissionSource([
+      submission,
+      { ...submission, id: "submission-2", title: "Another session" },
+    ]);
+    const { repository, service } = await fixture({
+      submissions,
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+    const assignment = await assignOne(service);
+    const actor = reviewer("reviewer-1");
+    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
+    submissions.set({ ...submission, status: "submitted", version: 2 });
+    let releaseRead: () => void = () => {
+      throw new Error("Submission read release signal was not initialized.");
+    };
+    const readEntered = new Promise<void>((resolve) => {
+      submissions.readEntered = resolve;
+    });
+    submissions.gateReadNumber = submissions.readCount + 2;
+    submissions.readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+
+    const resolution = service.resolveAiSuggestion(actor, suggestion.id, {
+      action: "accept",
+      expectedVersion: suggestion.version,
+    });
+    await readEntered;
+    submissions.set({ ...submission, status: "withdrawn" });
+    releaseRead();
+
+    await expectEvaluationError(resolution, "EVALUATION_CONFLICT");
+    expect(await repository.getSuggestion(tenantId, suggestion.id)).toEqual(suggestion);
+    expect(await repository.getReview(tenantId, assignment.id)).toBeNull();
   });
 
   it("rejects incomplete acceptance before persisting a decision", async () => {
@@ -2588,6 +2960,235 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(await repository.listReviews(tenantId, revision.id)).toEqual([]);
   });
 
+  it("rejects a partial provider result without persisting a suggestion", async () => {
+    await expectProviderCandidatesRejected([validAiCandidates()[0]]);
+  });
+
+  it("rejects duplicate provider criterion ids without persisting a suggestion", async () => {
+    const quality = validAiCandidates()[0];
+    await expectProviderCandidatesRejected([quality, { ...quality, value: 3 }]);
+  });
+
+  it("rejects unexpected provider criterion ids without persisting a suggestion", async () => {
+    await expectProviderCandidatesRejected([
+      validAiCandidates()[0],
+      {
+        criterionId: "speaker-reputation",
+        value: 5,
+        evidence: ["The practical material gives the audience a concrete outcome."],
+      },
+    ]);
+  });
+
+  it("rejects an unknown empty provider criterion bucket without persistence", async () => {
+    const { repository, service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({
+        candidates: {
+          quality: [validAiCandidates()[0]],
+          relevance: [validAiCandidates()[1]],
+          injected: [],
+        },
+      }),
+    });
+    const assignment = await assignOne(service);
+
+    await expectEvaluationError(
+      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+      "EVALUATION_INVALID_INPUT",
+    );
+    expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
+  });
+
+  it("rejects non-scoreable provider criterion ids without persisting a suggestion", async () => {
+    const notesCriterion = {
+      id: "notes",
+      label: "Notes",
+      description: "Private evaluator notes.",
+      minimum: 0,
+      maximum: 0,
+      weight: 0,
+      required: false,
+      inputType: "free_text" as const,
+    };
+    await expectProviderCandidatesRejected(
+      [
+        ...validAiCandidates(),
+        {
+          criterionId: notesCriterion.id,
+          value: 0,
+          evidence: ["The practical material gives the audience a concrete outcome."],
+        },
+      ],
+      {
+        ...round,
+        rubric: {
+          ...round.rubric,
+          criteria: [...round.rubric.criteria, notesCriterion],
+        },
+      },
+    );
+  });
+
+  it("persists exactly one valid provider result for every scoreable criterion", async () => {
+    const { repository, service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+    const assignment = await assignOne(service);
+
+    const suggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id);
+
+    expect(Object.keys(suggestion.candidates).sort()).toEqual(["quality", "relevance"]);
+    expect(suggestion.criterionCandidates).toHaveLength(2);
+    expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([suggestion]);
+  });
+
+  it("rejects a one-word rationale without persisting a suggestion", async () => {
+    await expectProviderCandidatesRejected([
+      { ...validAiCandidates()[0], evidence: ["Excellent"] },
+      validAiCandidates()[1],
+    ]);
+  });
+
+  it("rejects a generic rationale without persisting a suggestion", async () => {
+    await expectProviderCandidatesRejected([
+      { ...validAiCandidates()[0], evidence: ["This proposal looks good overall."] },
+      validAiCandidates()[1],
+    ]);
+  });
+
+  it("rejects repeated source words without explanatory reasoning", async () => {
+    await expectProviderCandidatesRejected([
+      {
+        ...validAiCandidates()[0],
+        evidence: ["Practical material audience practical material audience."],
+      },
+      validAiCandidates()[1],
+    ]);
+  });
+
+  it("rejects arbitrary filler appended to source terms", async () => {
+    await expectProviderCandidatesRejected([
+      {
+        ...validAiCandidates()[0],
+        evidence: ["Practical material audience concrete outcome supports banana bicycle."],
+      },
+      validAiCandidates()[1],
+    ]);
+  });
+
+  it.each([
+    {
+      language: "Chinese",
+      submissionMaterial: {
+        ...submission,
+        title: "部署可靠性",
+        abstract: "通过回滚清单和故障演练帮助团队提高部署可靠性。",
+      },
+      candidates: [
+        {
+          criterionId: "quality",
+          value: 4,
+          evidence: ["回滚清单和故障演练提供了具体的部署可靠性依据。"],
+        },
+        {
+          criterionId: "relevance",
+          value: 8,
+          evidence: ["部署可靠性和故障演练直接对应活动主题。"],
+        },
+      ],
+    },
+    {
+      language: "Thai",
+      submissionMaterial: {
+        ...submission,
+        title: "ความน่าเชื่อถือของการปรับใช้",
+        abstract: "รายการตรวจสอบการย้อนกลับและการฝึกซ้อมช่วยให้ทีมปรับใช้ได้อย่างน่าเชื่อถือ",
+      },
+      candidates: [
+        {
+          criterionId: "quality",
+          value: 4,
+          evidence: ["รายการตรวจสอบและการฝึกซ้อมอธิบายแนวทางที่ทีมสามารถนำไปใช้ได้จริง"],
+        },
+        {
+          criterionId: "relevance",
+          value: 8,
+          evidence: ["การปรับใช้ที่น่าเชื่อถือและการย้อนกลับสอดคล้องกับหัวข้องานโดยตรง"],
+        },
+      ],
+    },
+  ])("accepts meaningful $language rationales", async ({ submissionMaterial, candidates }) => {
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      submissionMaterial,
+      aiSuggestionProducer: async () => ({ candidates }),
+    });
+    const assignment = await assignOne(service);
+
+    await expect(
+      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+    ).resolves.toMatchObject({
+      criterionCandidates: [{ criterionId: "quality" }, { criterionId: "relevance" }],
+    });
+  });
+
+  it("accepts nontrivial source-grounded rationales", async () => {
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+    const assignment = await assignOne(service);
+
+    await expect(
+      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+    ).resolves.toMatchObject({
+      candidates: {
+        quality: [
+          {
+            evidence: ["The practical material gives the audience a concrete outcome."],
+          },
+        ],
+        relevance: [
+          {
+            evidence: ["The practical audience focus directly supports program relevance."],
+          },
+        ],
+      },
+    });
+  });
+
+  it("rejects an all-free-text rubric before invoking the provider", async () => {
+    let providerCalls = 0;
+    const freeTextRound: ReviewRound = {
+      ...round,
+      rubric: {
+        ...round.rubric,
+        criteria: round.rubric.criteria.map((criterion) => ({
+          ...criterion,
+          inputType: "free_text" as const,
+        })),
+      },
+    };
+    const { repository, service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRound: freeTextRound,
+      aiSuggestionProducer: async () => {
+        providerCalls += 1;
+        return { candidates: [] };
+      },
+    });
+    const assignment = await assignOne(service);
+
+    await expectEvaluationError(
+      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+      "EVALUATION_ADVISORY_UNSUPPORTED",
+    );
+    expect(providerCalls).toBe(0);
+    expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
+  });
+
   it("requires an injected provider, snapshots revisions, and audits human resolutions", async () => {
     const repository = new InMemoryEvaluationRepository();
     const source = new InMemorySubmissionReviewSource([{ ...submission, version: 7 }]);
@@ -2597,7 +3198,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
           {
             criterionId: "quality",
             value: 4,
-            evidence: ["The abstract names a concrete audience outcome."],
+            evidence: ["The practical material gives the audience a concrete outcome."],
             provenance: {
               provider: "test-provider",
               model: "test-model",
@@ -2608,12 +3209,12 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
           {
             criterionId: "relevance",
             value: 8,
-            evidence: ["The proposal directly addresses the event topic."],
+            evidence: ["The practical audience focus directly supports program relevance."],
             provenance: {
               provider: "test-provider",
               model: "test-model",
               generatedAt: nowIso,
-              sourceReferences: ["answers.topic"],
+              sourceReferences: ["abstract"],
             },
           },
         ],
@@ -2621,7 +3222,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
           provider: "test-provider",
           model: "test-model",
           generatedAt: nowIso,
-          sourceReferences: ["abstract", "answers.topic"],
+          sourceReferences: ["abstract"],
         },
       }),
     };
@@ -2667,7 +3268,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     });
     expect(suggestion.candidates.quality?.[0]).toMatchObject({
       value: 4,
-      evidence: ["The abstract names a concrete audience outcome."],
+      evidence: ["The practical material gives the audience a concrete outcome."],
     });
     const rejectedSuggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
       assignmentId: assignment.id,
@@ -2749,21 +3350,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       },
       {
         clock: () => new Date(nowIso),
-        aiSuggestionProducer: async () => ({
-          candidates: [
-            {
-              criterionId: "quality",
-              value: 3,
-              evidence: ["The abstract contains a claim."],
-              provenance: {
-                provider: "test",
-                model: "test",
-                generatedAt: nowIso,
-                sourceReferences: ["abstract"],
-              },
-            },
-          ],
-        }),
+        aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
       },
     );
     const draft = await service.createPlan(organizer, {

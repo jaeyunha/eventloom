@@ -360,6 +360,10 @@ describe("D1EvaluationRepository compound CAS", () => {
     expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(2);
     expect(batchSql(db)).toContain("status <> 'abstained'");
     expect(batchSql(db)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
+    expect(batchSql(db)).toMatch(/EXISTS \(\s*SELECT 1 FROM submissions/u);
+    expect(batchSql(db)).toMatch(/FROM submissions\s+WHERE[\s\S]*\bid = \?/u);
+    expect(batchSql(db)).toContain("status = 'submitted'");
+    expect(batchSql(db)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_decisions/u);
 
     await repository.resolveSuggestion(suggestion, 1, assignment, 1, review, null);
 
@@ -370,6 +374,10 @@ describe("D1EvaluationRepository compound CAS", () => {
     expect(db.batches[1]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(4);
     expect(batchSql(db, 1)).toContain("status <> 'abstained'");
     expect(batchSql(db, 1)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
+    expect(batchSql(db, 1)).toMatch(/EXISTS \(\s*SELECT 1 FROM submissions/u);
+    expect(batchSql(db, 1)).toMatch(/FROM submissions\s+WHERE[\s\S]*\bid = \?/u);
+    expect(batchSql(db, 1)).toContain("status = 'submitted'");
+    expect(batchSql(db, 1)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_decisions/u);
   });
 
   it("tenant-scopes plan, assignment, review, suggestion, conflict, and decision reads", async () => {

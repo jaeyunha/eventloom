@@ -233,6 +233,7 @@ function testPlan(eventId: string): ReviewPlanSeed {
         participants: [{ id: "riley", displayName: "Riley Chen", role: "Author" }],
       },
     ],
+    submittedReviews: [],
     assignments: [
       {
         id: "assignment-042-sam",

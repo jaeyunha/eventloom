@@ -31,14 +31,45 @@ export interface SubmissionReviewLookup {
   readonly submissionId: string;
 }
 
-export interface EvaluationRepository {
+export interface EvaluationProjectionReader {
   getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null>;
   listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]>;
+  getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
+  listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
+  getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
+  listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
+  getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null>;
+  listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]>;
+  listReviewerWorkspaceRecords(
+    tenantId: string,
+    reviewerId: string,
+    eventIds: readonly string[],
+  ): Promise<ReviewerWorkspaceRecords>;
+  listOrganizerWorkspaceRecords(
+    tenantId: string,
+    eventId: string,
+  ): Promise<OrganizerWorkspaceRecords>;
+  getConflict(
+    tenantId: string,
+    assignmentId: string,
+  ): Promise<EvaluationConflictDeclaration | null>;
+  getDecision(
+    tenantId: string,
+    planId: string,
+    submissionId: string,
+  ): Promise<EvaluationDecision | null>;
+}
+
+export type EvaluationReminderPlanSource = Pick<
+  EvaluationProjectionReader,
+  "getPlan" | "listAssignments"
+>;
+
+export interface EvaluationRepository extends EvaluationProjectionReader {
+  readonly authority: "transactional";
   putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void>;
   putPlanState?(plan: EvaluationPlan, expectedVersion: number): Promise<void>;
   putPlanSchedule?(plan: EvaluationPlan, expectedVersion: number): Promise<void>;
-  getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
-  listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
   replaceAssignment(
     scope: EvaluationAssignmentScope,
     input: EvaluationAssignmentReplacementInput,
@@ -47,10 +78,6 @@ export interface EvaluationRepository {
     scope: EvaluationAssignmentScope,
     input: EvaluationAssignmentDistributionInput,
   ): Promise<EvaluationAssignmentDistributionResult>;
-  getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
-  listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
-  getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null>;
-  listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]>;
   putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
@@ -64,15 +91,6 @@ export interface EvaluationRepository {
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
   ): Promise<EvaluationSuggestionResolution>;
-  listReviewerWorkspaceRecords(
-    tenantId: string,
-    reviewerId: string,
-    eventIds: readonly string[],
-  ): Promise<ReviewerWorkspaceRecords>;
-  listOrganizerWorkspaceRecords(
-    tenantId: string,
-    eventId: string,
-  ): Promise<OrganizerWorkspaceRecords>;
   putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void>;
   saveReviewDraft(
     assignment: EvaluationAssignment,
@@ -80,10 +98,6 @@ export interface EvaluationRepository {
     review: EvaluationReview,
     expectedReviewVersion: number | null,
   ): Promise<void>;
-  getConflict(
-    tenantId: string,
-    assignmentId: string,
-  ): Promise<EvaluationConflictDeclaration | null>;
   abstainAssignment(
     assignment: EvaluationAssignment,
     expectedAssignmentVersion: number,
@@ -95,11 +109,6 @@ export interface EvaluationRepository {
     review: EvaluationReview,
     expectedReviewVersion: number,
   ): Promise<void>;
-  getDecision(
-    tenantId: string,
-    planId: string,
-    submissionId: string,
-  ): Promise<EvaluationDecision | null>;
   putDecision(decision: EvaluationDecision, expectedVersion: number | null): Promise<void>;
 }
 
@@ -172,6 +181,7 @@ function reviewHistoryFor(
 }
 
 export class InMemoryEvaluationRepository implements EvaluationRepository {
+  readonly authority = "transactional" as const;
   readonly #plans = new Map<string, EvaluationPlan>();
   readonly #assignments = new Map<string, EvaluationAssignment>();
   readonly #reviews = new Map<string, EvaluationReview>();
@@ -751,5 +761,9 @@ export class InMemorySubmissionReviewSource implements SubmissionReviewSource {
 
   set(submission: SubmissionReviewMaterial): void {
     this.#submissions.set(storageKey(submission.tenantId, submission.id), clone(submission));
+  }
+
+  delete(tenantId: string, submissionId: string): void {
+    this.#submissions.delete(storageKey(tenantId, submissionId));
   }
 }

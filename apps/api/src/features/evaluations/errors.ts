@@ -4,7 +4,8 @@ export type EvaluationErrorCode =
   | "EVALUATION_NOT_FOUND"
   | "EVALUATION_CONFLICT"
   | "EVALUATION_CLOSED"
-  | "EVALUATION_ADVISORY_UNAVAILABLE";
+  | "EVALUATION_ADVISORY_UNAVAILABLE"
+  | "EVALUATION_ADVISORY_UNSUPPORTED";
 
 export class EvaluationError extends Error {
   readonly code: EvaluationErrorCode;
@@ -42,4 +43,10 @@ export function advisoryUnavailable(
   message = "Advisory evaluation is temporarily unavailable. Manual review remains available.",
 ): EvaluationError {
   return new EvaluationError("EVALUATION_ADVISORY_UNAVAILABLE", message, 503);
+}
+
+export function advisoryUnsupported(
+  message = "AI suggestions require at least one scoreable rubric criterion.",
+): EvaluationError {
+  return new EvaluationError("EVALUATION_ADVISORY_UNSUPPORTED", message, 400);
 }
