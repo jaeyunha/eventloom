@@ -1,0 +1,143 @@
+.root {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.dropzone {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
+  min-height: 9.5rem;
+  padding: 1.35rem 1.1rem 1.2rem;
+  border: 1px dashed color-mix(in srgb, var(--border) 88%, var(--foreground) 12%);
+  border-radius: calc(var(--radius) + 0.45rem);
+  background: color-mix(in srgb, var(--muted) 62%, transparent);
+  color: var(--foreground);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.dropzone[data-active="true"] {
+  border-color: color-mix(in srgb, var(--foreground) 28%, var(--border));
+  background: color-mix(in srgb, var(--muted) 78%, var(--background));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.dropzone[data-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  color: var(--muted-foreground);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.hint {
+  margin: 0;
+  max-width: 22rem;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.browse {
+  margin: 0.15rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.list {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  min-height: 4.15rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: calc(var(--radius) + 0.25rem);
+  background: var(--card);
+}
+
+.item[data-status="error"] {
+  border-color: color-mix(in srgb, var(--destructive) 32%, var(--border));
+}
+
+.badge {
+  display: grid;
+  place-items: center;
+  min-width: 2.55rem;
+  min-height: 2.55rem;
+  padding: 0.2rem;
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--muted) 82%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.62rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.name {
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+  font-weight: 620;
+}
+
+.meta {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.progress {
+  grid-column: 1 / -1;
+  margin-top: 0.15rem;
+}
+
+.action {
+  justify-self: end;
+}

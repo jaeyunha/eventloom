@@ -18,6 +18,7 @@ import {
   TIMEZONE_OPTIONS,
 } from "./cfp-editor-model";
 import { CfpOptionListEditor } from "./cfp-option-list-editor";
+import { FileUpload } from "@/components/ui/file-upload";
 import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
 
 type CfpConfigurationUpdater = <K extends keyof CfpConfiguration>(
@@ -1189,7 +1190,28 @@ function renderPreviewField({
           })}
         </select>
       ) : field.type === "file_request" ? (
-        <input {...commonProps} type="file" />
+        <FileUpload
+          id={inputId}
+          name={field.id}
+          required={field.required}
+          describedBy={descriptionId}
+          title="Drop your files here or browse"
+          hint={field.placeholder ?? "Applicant file upload preview"}
+          files={
+            value
+              ? [
+                  {
+                    id: value,
+                    name: value,
+                    sizeLabel: "Preview selection",
+                    status: "selected",
+                    removable: false,
+                  },
+                ]
+              : []
+          }
+          onFilesSelected={(files) => onChange(files[0]?.name ?? "")}
+        />
       ) : (
         <input {...commonProps} type={field.type} />
       )}

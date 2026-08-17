@@ -28,7 +28,11 @@ export function WorkspaceShell({
   ...props
 }: WorkspaceShellProps) {
   return (
-    <div className={cn(styles.shell, className)} {...props} data-role-workspace-shell="true">
+    <div
+      className={cn(styles.shell, navigation == null && styles.shellWithoutNavigation, className)}
+      {...props}
+      data-role-workspace-shell="true"
+    >
       <a className={styles.skipLink} href={`#${mainId}`}>
         Skip to workspace content
       </a>
