@@ -2683,7 +2683,8 @@ describe("decision outcome projection", () => {
           onboarded.push(structuredClone(cloneable));
         },
         reconcileSessionDecision: async (input) => {
-          reconciled.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          reconciled.push(structuredClone(cloneable));
         },
       },
     });
