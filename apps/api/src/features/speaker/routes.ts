@@ -60,16 +60,18 @@ const uploadSchema = z.object({
   expectedLatestVersion: z.number().int().positive().optional(),
 });
 
-const organizerHeadshotUploadSchema = z.object({
-  participantId: z.string().trim().min(1),
-  submissionId: z.string().trim().min(1).optional(),
-  kind: z.literal("headshot"),
-  fileName: z.string(),
-  contentType: z.string().trim().min(1),
-  sizeBytes: z.number().int().positive(),
-  supersedesAssetId: z.string().trim().min(1).optional(),
-  expectedLatestVersion: z.number().int().positive().optional(),
-});
+const organizerHeadshotUploadSchema = z
+  .object({
+    participantId: z.string().trim().min(1).max(200),
+    submissionId: z.string().trim().min(1).max(200).optional(),
+    kind: z.literal("headshot"),
+    fileName: z.string().trim().min(1).max(120),
+    contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+    sizeBytes: z.number().int().positive().max(5 * 1024 * 1024),
+    supersedesAssetId: z.string().trim().min(1).max(200).optional(),
+    expectedLatestVersion: z.number().int().positive().optional(),
+  })
+  .strict();
 
 const finalizeAssetSchema = z.object({
   state: z.enum(["ready", "rejected"]),

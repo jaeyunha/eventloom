@@ -4782,9 +4782,9 @@ components:
         submissionId: { $ref: "#/components/schemas/Identifier" }
         taskId: { $ref: "#/components/schemas/Identifier" }
         kind: { type: string, enum: [headshot, slides, supporting_file] }
-        fileName: { type: string, maxLength: 512 }
-        contentType: { type: string, maxLength: 200 }
-        sizeBytes: { type: integer, minimum: 1 }
+        fileName: { type: string, minLength: 1, maxLength: 120 }
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        sizeBytes: { type: integer, minimum: 1, maximum: 5242880 }
         expectedLatestVersion: { $ref: "#/components/schemas/Version" }
         supersedesAssetId: { $ref: "#/components/schemas/Identifier" }
       additionalProperties: false
