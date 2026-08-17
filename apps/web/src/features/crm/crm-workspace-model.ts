@@ -87,7 +87,16 @@ export interface CrmPipelineEntry {
   readonly toStage: CrmPipelineStage;
   readonly note: string | null;
   readonly actorId: string;
+  readonly actorName: string;
   readonly createdAt: string;
+}
+
+export interface CrmPipelineUpdateInput {
+  readonly stage: CrmPipelineStage;
+  readonly expectedVersion: number;
+  readonly score?: number;
+  readonly rationale?: string;
+  readonly note?: string;
 }
 
 export interface CrmNote {
@@ -303,6 +312,7 @@ export interface CrmApi {
     readonly pipelineStage?: CrmPipelineStage | "";
     readonly status?: CrmContactStatus | "";
     readonly tags?: string;
+    readonly eventId?: string;
   }): Promise<readonly CrmContact[]>;
   getContact(contactId: string): Promise<CrmContact>;
   createContact(input: Record<string, unknown>): Promise<CrmContact>;
@@ -330,7 +340,7 @@ export interface CrmApi {
   ): Promise<CrmMergeResult>;
   getContactHistory(contactId: string): Promise<readonly CrmHistoryEntry[]>;
   getPipelineHistory(contactId: string): Promise<readonly CrmPipelineEntry[]>;
-  updatePipeline(contactId: string, stage: CrmPipelineStage, note?: string): Promise<CrmContact>;
+  updatePipeline(contactId: string, input: CrmPipelineUpdateInput): Promise<CrmContact>;
   listNotes(contactId: string): Promise<readonly CrmNote[]>;
   addNote(contactId: string, body: string): Promise<CrmNote>;
   addContactToEvent(
@@ -934,3 +944,16 @@ export function parseCsvPreview(csv: string): {
   };
 }
 export type CsvPreview = ReturnType<typeof parseCsvPreview>;
+export async function refreshSelectedContactAfterCollectionReload(input: {
+  readonly contactId: string | undefined;
+  readonly expectedSelectionGeneration: number;
+  readonly currentSelectionGeneration: () => number;
+  readonly getContact: (contactId: string) => Promise<CrmContact>;
+  readonly applyContact: (contact: CrmContact) => void;
+}): Promise<void> {
+  if (input.contactId === undefined) return;
+  const contact = await input.getContact(input.contactId);
+  if (input.currentSelectionGeneration() === input.expectedSelectionGeneration) {
+    input.applyContact(contact);
+  }
+}

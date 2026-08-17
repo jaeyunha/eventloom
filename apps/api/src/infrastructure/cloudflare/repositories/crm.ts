@@ -1,6 +1,7 @@
 import { CrmRepositoryConflictError } from "../../../features/crm/service";
 import type {
   CrmContact,
+  CrmContactTransitionAudit,
   CrmEventProjection,
   CrmHistoryEntry,
   CrmImportResult,
@@ -109,6 +110,7 @@ function pipelineFromRow(row: Row): CrmPipelineEntry {
     toStage: row.to_stage as CrmPipelineEntry["toStage"],
     note: nullableString(row.note),
     actorId: stringValue(row.actor_id),
+    actorName: stringValue(row.actor_name),
     createdAt: stringValue(row.created_at),
   };
 }
@@ -220,6 +222,12 @@ export class D1CrmRepository implements CrmRepository {
       clauses.push("contact.email = ? COLLATE NOCASE");
       values.push(filter.email);
     }
+    if (filter.eventId !== undefined) {
+      clauses.push(
+        "EXISTS (SELECT 1 FROM crm_participant_links link WHERE link.organization_id=contact.organization_id AND link.crm_contact_id=contact.id AND link.event_id=?)",
+      );
+      values.push(filter.eventId);
+    }
     if (filter.status !== undefined) {
       clauses.push("contact.status = ?");
       values.push(filter.status);
@@ -283,9 +291,22 @@ export class D1CrmRepository implements CrmRepository {
     return row === null ? null : contactFromRow(row, parseJson(String(row.tags_json), []));
   }
 
-  async saveContact(contact: CrmContact, expectedVersion: number | null): Promise<CrmContact> {
+  async saveContact(
+    contact: CrmContact,
+    expectedVersion: number | null,
+    transitionAudit?: CrmContactTransitionAudit,
+  ): Promise<CrmContact> {
     if (contact.version !== (expectedVersion ?? 0) + 1)
       throw new CrmRepositoryConflictError("The contact version is invalid.");
+    if (
+      transitionAudit !== undefined &&
+      (transitionAudit.pipeline.organizationId !== contact.organizationId ||
+        transitionAudit.pipeline.contactId !== contact.id ||
+        transitionAudit.history.organizationId !== contact.organizationId ||
+        transitionAudit.history.contactId !== contact.id)
+    ) {
+      throw new CrmRepositoryConflictError("The pipeline audit does not match the contact.");
+    }
     const domain =
       expectedVersion === null
         ? statement(
@@ -329,6 +350,62 @@ export class D1CrmRepository implements CrmRepository {
           [contact.organizationId, contact.id, tag],
         ),
       ),
+      ...(transitionAudit === undefined
+        ? []
+        : [
+            statement(
+              this.database,
+              "INSERT INTO crm_pipeline_history (id,organization_id,contact_id,source_crm_contact_id,merge_audit_id,from_stage,to_stage,note,actor_id,actor_name,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+              [
+                transitionAudit.pipeline.id,
+                transitionAudit.pipeline.organizationId,
+                transitionAudit.pipeline.contactId,
+                transitionAudit.pipeline.sourceCrmContactId ?? transitionAudit.pipeline.contactId,
+                transitionAudit.pipeline.mergeAuditId ?? null,
+                transitionAudit.pipeline.fromStage,
+                transitionAudit.pipeline.toStage,
+                transitionAudit.pipeline.note,
+                transitionAudit.pipeline.actorId,
+                transitionAudit.pipeline.actorName,
+                transitionAudit.pipeline.createdAt,
+              ],
+            ),
+            ...consequentialStatements(this.database, {
+              tenantId: transitionAudit.pipeline.organizationId,
+              action: "appended",
+              resourceType: "crm_pipeline_history",
+              resourceId: transitionAudit.pipeline.id,
+              resourceVersion: 1,
+              occurredAt: transitionAudit.pipeline.createdAt,
+              after: transitionAudit.pipeline,
+            }),
+            statement(
+              this.database,
+              "INSERT INTO crm_history (id,organization_id,contact_id,kind,event_id,session_id,title,detail,occurred_at,metadata_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+              [
+                transitionAudit.history.id,
+                transitionAudit.history.organizationId,
+                transitionAudit.history.contactId,
+                transitionAudit.history.kind,
+                transitionAudit.history.eventId,
+                transitionAudit.history.sessionId,
+                transitionAudit.history.title,
+                transitionAudit.history.detail,
+                transitionAudit.history.occurredAt,
+                json(transitionAudit.history.metadata),
+              ],
+            ),
+            ...consequentialStatements(this.database, {
+              tenantId: transitionAudit.history.organizationId,
+              eventId: transitionAudit.history.eventId,
+              action: "appended",
+              resourceType: "crm_history",
+              resourceId: transitionAudit.history.id,
+              resourceVersion: 1,
+              occurredAt: transitionAudit.history.occurredAt,
+              after: transitionAudit.history,
+            }),
+          ]),
       ...consequentialStatements(this.database, {
         tenantId: contact.organizationId,
         action:
@@ -554,7 +631,7 @@ export class D1CrmRepository implements CrmRepository {
         ),
         statement(
           this.database,
-          "INSERT INTO crm_pipeline_history (id,organization_id,contact_id,source_crm_contact_id,merge_audit_id,from_stage,to_stage,note,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO crm_pipeline_history (id,organization_id,contact_id,source_crm_contact_id,merge_audit_id,from_stage,to_stage,note,actor_id,actor_name,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
           [
             entry.id,
             entry.organizationId,
@@ -565,6 +642,7 @@ export class D1CrmRepository implements CrmRepository {
             entry.toStage,
             entry.note,
             entry.actorId,
+            entry.actorName,
             entry.createdAt,
           ],
         ),

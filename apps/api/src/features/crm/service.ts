@@ -10,6 +10,7 @@ import {
   type CrmContactSearch,
   type CrmContactSource,
   type CrmContactStatus,
+  type CrmContactTransitionAudit,
   type CrmDuplicateMatch,
   type CrmDuplicateReport,
   type CrmEventProjection,
@@ -55,6 +56,7 @@ export class CrmRepositoryConflictError extends Error {
   constructor(
     message = "The CRM record already exists or changed.",
     readonly details?: unknown,
+    readonly current?: CrmContact,
   ) {
     super(message);
     this.name = "CrmRepositoryConflictError";
@@ -260,10 +262,18 @@ function dependencyUnavailable(message = "The CRM repository is not configured."
   return new CrmServiceError("CRM_DEPENDENCY_UNAVAILABLE", message, 503);
 }
 
-function repositoryConflict(error: unknown): boolean {
+interface CrmRepositoryConflictLike {
+  readonly name: "CrmRepositoryConflictError";
+  readonly current?: CrmContact;
+}
+
+function repositoryConflict(error: unknown): error is CrmRepositoryConflictLike {
   return (
     error instanceof CrmRepositoryConflictError ||
-    (error instanceof Error && error.name === "CrmRepositoryConflictError")
+    (typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "CrmRepositoryConflictError")
   );
 }
 
@@ -768,6 +778,7 @@ function normalizeSearch(input: CrmContactSearch | undefined): CrmContactSearch 
   const output: CrmContactSearch = {
     ...(input.query === undefined ? {} : { query: text(input.query, "query", 500) }),
     ...(input.email === undefined ? {} : { email: text(input.email, "email", 320).toLowerCase() }),
+    ...(input.eventId === undefined ? {} : { eventId: identifier(input.eventId, "eventId") }),
     ...(input.tags === undefined ? {} : { tags: normalizeTags(input.tags, "tags") }),
     ...(input.pipelineStage === undefined ? {} : { pipelineStage: stage(input.pipelineStage) }),
     ...(input.status === undefined ? {} : { status: status(input.status) }),
@@ -918,30 +929,41 @@ export class CrmService {
     const contact = this.buildContact(organizationId, input, current, current.source);
     const expectedVersion = input.expectedVersion ?? current.version;
     if (expectedVersion !== current.version)
-      throw conflict("The contact changed. Reload it before saving.");
+      throw conflict("The contact changed. Reload it before saving.", { current: clone(current) });
     if (contact.email !== null && contact.email !== current.email) {
       const duplicate = await repository.findContactByEmail(organizationId, contact.email);
       if (duplicate !== null && duplicate.id !== current.id)
         throw conflict("A contact with this email already exists.");
     }
+    const transitionAudit =
+      contact.pipelineStage === current.pipelineStage
+        ? undefined
+        : this.pipelineTransitionAudit(
+            actor,
+            current,
+            contact.pipelineStage,
+            contact.updatedAt,
+            optionalText(input.pipelineNote, "pipelineNote", 2_000) ?? null,
+          );
     let saved: CrmContact;
     try {
-      saved = await repository.saveContact(contact, expectedVersion);
+      saved = await repository.saveContact(contact, expectedVersion, transitionAudit);
     } catch (error) {
-      if (repositoryConflict(error))
-        throw conflict("The contact changed. Reload it before saving.");
+      if (repositoryConflict(error)) {
+        const conflictCurrent =
+          error.current?.organizationId === organizationId && error.current.id === contactId
+            ? error.current
+            : undefined;
+        const authoritative =
+          conflictCurrent ?? (await repository.getContact(organizationId, contactId)) ?? current;
+        throw conflict(
+          "The contact changed. Reload it before saving.",
+          authoritative === null ? undefined : { current: clone(authoritative) },
+        );
+      }
       throw error;
     }
     assertTenant(saved, organizationId);
-    if (saved.pipelineStage !== current.pipelineStage) {
-      await this.appendPipelineChange(
-        actor,
-        current,
-        saved.pipelineStage,
-        saved.updatedAt,
-        optionalText(input.pipelineNote, "pipelineNote", 2_000) ?? null,
-      );
-    }
     return clone(saved);
   }
 
@@ -1918,14 +1940,39 @@ export class CrmService {
     const nextStage = stage(input.stage);
     assertActor(actor, organizationId);
     const current = await this.getContact(actor, organizationId, contactId);
+    const expectedVersion = input.expectedVersion ?? current.version;
+    if (expectedVersion !== current.version)
+      throw conflict("The contact changed. Reload it before saving.", { current: clone(current) });
     const note = optionalText(input.note, "note", 2_000) ?? null;
-    if (current.pipelineStage === nextStage) return current;
+    const score =
+      input.score === undefined || input.score === null
+        ? input.score
+        : Number.isFinite(input.score) && input.score >= 0 && input.score <= 100
+          ? input.score
+          : (() => {
+              throw invalid("score must be between 0 and 100.");
+            })();
+    const rationale =
+      input.rationale === undefined
+        ? undefined
+        : (optionalText(input.rationale, "rationale", 2_000) ?? null);
+    const hasScoring = score !== undefined || rationale !== undefined;
+    if (current.pipelineStage === nextStage && !hasScoring) return current;
     const saved = await this.updateContact(actor, {
       organizationId,
       contactId,
       pipelineStage: nextStage,
-      expectedVersion: current.version,
+      expectedVersion,
       pipelineNote: note,
+      ...(hasScoring
+        ? {
+            customFields: {
+              ...current.customFields,
+              ...(score === undefined ? {} : { pipelineScore: score }),
+              ...(rationale === undefined ? {} : { pipelineRationale: rationale }),
+            },
+          }
+        : {}),
     });
     return saved;
   }
@@ -2452,7 +2499,7 @@ export class CrmService {
         input.pipelineStage === undefined
           ? (current?.pipelineStage ?? "new")
           : stage(input.pipelineStage),
-      version: current?.version ?? 1,
+      version: current === undefined ? 1 : current.version + 1,
       createdAt: current?.createdAt ?? nowIso(this.#clock),
       updatedAt: nowIso(this.#clock),
     };
@@ -2461,37 +2508,38 @@ export class CrmService {
     return contact;
   }
 
-  private async appendPipelineChange(
+  private pipelineTransitionAudit(
     actor: CrmActor,
     current: CrmContact,
     nextStage: CrmPipelineStage,
     createdAt: string,
     note: string | null,
-  ): Promise<void> {
-    const repository = this.requireRepository();
-    const entry: CrmPipelineEntry = {
-      id: this.#generateId("pipeline"),
-      organizationId: current.organizationId,
-      contactId: current.id,
-      fromStage: current.pipelineStage,
-      toStage: nextStage,
-      note,
-      actorId: identifier(actor.userId, "actor userId"),
-      createdAt,
+  ): CrmContactTransitionAudit {
+    return {
+      pipeline: {
+        id: this.#generateId("pipeline"),
+        organizationId: current.organizationId,
+        contactId: current.id,
+        fromStage: current.pipelineStage,
+        toStage: nextStage,
+        note,
+        actorId: identifier(actor.userId, "actor userId"),
+        actorName: text(actor.actorName ?? actor.userId, "actor name", 320),
+        createdAt,
+      },
+      history: {
+        id: this.#generateId("history"),
+        organizationId: current.organizationId,
+        contactId: current.id,
+        kind: "pipeline",
+        eventId: null,
+        sessionId: null,
+        title: `Pipeline stage changed to ${nextStage}`,
+        detail: note,
+        occurredAt: createdAt,
+        metadata: { fromStage: current.pipelineStage, toStage: nextStage },
+      },
     };
-    await repository.appendPipeline(entry);
-    await repository.appendHistory({
-      id: this.#generateId("history"),
-      organizationId: current.organizationId,
-      contactId: current.id,
-      kind: "pipeline",
-      eventId: null,
-      sessionId: null,
-      title: `Pipeline stage changed to ${nextStage}`,
-      detail: note,
-      occurredAt: createdAt,
-      metadata: { fromStage: current.pipelineStage, toStage: nextStage },
-    });
   }
 
   private render(
@@ -2606,6 +2654,16 @@ export class InMemoryCrmRepository implements CrmRepository {
       .filter((contact) => {
         if (contact.organizationId !== organizationId) return false;
         if (filter.email !== undefined && contact.email !== filter.email) return false;
+        if (
+          filter.eventId !== undefined &&
+          ![...this.#projections.values()].some(
+            (projection) =>
+              projection.organizationId === organizationId &&
+              projection.eventId === filter.eventId &&
+              projection.crmContactId === contact.id,
+          )
+        )
+          return false;
         if (filter.status !== undefined && contact.status !== filter.status) return false;
         if (filter.pipelineStage !== undefined && contact.pipelineStage !== filter.pipelineStage)
           return false;
@@ -2649,12 +2707,35 @@ export class InMemoryCrmRepository implements CrmRepository {
     return found === undefined ? null : clone(found);
   }
 
-  async saveContact(contact: CrmContact, expectedVersion: number | null): Promise<CrmContact> {
+  async saveContact(
+    contact: CrmContact,
+    expectedVersion: number | null,
+    transitionAudit?: CrmContactTransitionAudit,
+  ): Promise<CrmContact> {
+    if (contact.version !== (expectedVersion ?? 0) + 1)
+      throw new CrmRepositoryConflictError("The contact version is invalid.");
     const key = this.contactKey(contact.organizationId, contact.id);
     const existing = this.#contacts.get(key);
     if (expectedVersion === null ? existing !== undefined : existing?.version !== expectedVersion)
-      throw new CrmRepositoryConflictError();
+      throw new CrmRepositoryConflictError(
+        "The CRM record already exists or changed.",
+        undefined,
+        existing === undefined ? undefined : clone(existing),
+      );
+    if (
+      transitionAudit !== undefined &&
+      (transitionAudit.pipeline.organizationId !== contact.organizationId ||
+        transitionAudit.pipeline.contactId !== contact.id ||
+        transitionAudit.history.organizationId !== contact.organizationId ||
+        transitionAudit.history.contactId !== contact.id)
+    ) {
+      throw new CrmRepositoryConflictError("The pipeline audit does not match the contact.");
+    }
     this.#contacts.set(key, clone(contact));
+    if (transitionAudit !== undefined) {
+      this.#pipeline.push(clone(transitionAudit.pipeline));
+      this.#history.push(clone(transitionAudit.history));
+    }
     return clone(contact);
   }
 

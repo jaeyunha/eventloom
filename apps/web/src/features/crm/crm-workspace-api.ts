@@ -101,6 +101,7 @@ export function createCrmApi(
       if (filter.pipelineStage) query.set("pipelineStage", filter.pipelineStage);
       if (filter.status) query.set("status", filter.status);
       if (filter.tags?.trim()) query.set("tags", filter.tags.trim());
+      if (filter.eventId?.trim()) query.set("eventId", filter.eventId.trim());
       const suffix = query.toString() ? `?${query.toString()}` : "";
       return request<readonly CrmContact[]>(`/contacts${suffix}`);
     },
@@ -158,10 +159,16 @@ export function createCrmApi(
         `/contacts/${encode(contactId, "contact ID")}/pipeline/history`,
       );
     },
-    updatePipeline(contactId, stage, note) {
+    updatePipeline(contactId, input) {
       return request<CrmContact>(
         `/contacts/${encode(contactId, "contact ID")}/pipeline`,
-        json({ stage, ...(note?.trim() ? { note: note.trim() } : {}) }),
+        json({
+          stage: input.stage,
+          expectedVersion: input.expectedVersion,
+          ...(input.score === undefined ? {} : { score: input.score }),
+          ...(input.rationale?.trim() ? { rationale: input.rationale.trim() } : {}),
+          ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+        }),
       );
     },
     listNotes(contactId) {

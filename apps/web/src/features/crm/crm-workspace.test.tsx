@@ -12,6 +12,7 @@ import {
   createCrmWorkspaceReadCoordinator,
   refreshCrmAnalyticsAfterContactSave,
   refreshCrmDuplicatesAfterContactSave,
+  refreshSelectedContactAfterCollectionReload,
 } from "./crm-workspace-model";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -519,6 +520,39 @@ describe("organization CRM workspace", () => {
 
     expect(markup.match(/Follow up once/gu)?.length).toBe(1);
   });
+  it("renders human-readable pipeline transition history", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CrmWorkspaceView, {
+        organizationId: contact.organizationId,
+        contacts: [contact],
+        selectedContact: contact,
+        segments: [],
+        events: [],
+        history: [],
+        pipelineHistory: [
+          {
+            id: "pipeline-history-1",
+            organizationId: contact.organizationId,
+            contactId: contact.id,
+            fromStage: "contacted",
+            toStage: "qualified",
+            note: "Invite to the infrastructure track.",
+            actorId: "owner-1",
+            actorName: "Owner Ada",
+            createdAt: contact.updatedAt,
+          },
+        ],
+        notes: [],
+        duplicates: null,
+        analytics: null,
+      }),
+    );
+
+    expect(markup).toContain("Owner Ada");
+    expect(markup).toContain("Previous stage: contacted");
+    expect(markup).toContain("New stage: qualified");
+    expect(markup).toContain("Note: Invite to the infrastructure track.");
+  });
   it("renders non-empty personalized outreach previews for display-name-only contacts", () => {
     const displayNameOnlyContacts = [
       {
@@ -715,6 +749,7 @@ describe("organization CRM workspace", () => {
       company: "Analytical Engines",
       pipelineStage: "qualified",
       status: "active",
+      eventId: event.id,
     });
     await api.getContact(contact.id);
     await api.createContact({ displayName: "Grace Hopper" });
@@ -730,7 +765,13 @@ describe("organization CRM workspace", () => {
     await api.mergeContacts(contact.id, ["contact/2"], "merge-key");
     await api.getContactHistory(contact.id);
     await api.getPipelineHistory(contact.id);
-    await api.updatePipeline(contact.id, "invited", "Invite sent");
+    await api.updatePipeline(contact.id, {
+      stage: "invited",
+      expectedVersion: contact.version,
+      score: 85,
+      rationale: "Strong platform-engineering track record.",
+      note: "Invite sent",
+    });
     await api.listNotes(contact.id);
     await api.addNote(contact.id, "Follow up next week");
     await api.addContactToEvent(contact.id, { eventId: event.id, role: "prospect" }, "event-key");
@@ -747,8 +788,15 @@ describe("organization CRM workspace", () => {
     await api.listEvents();
 
     expect(calls[0]?.url).toBe(
-      "https://api.example.test/api/admin/organizations/org%2Fone/crm/contacts?query=Ada&company=Analytical+Engines&pipelineStage=qualified&status=active",
+      "https://api.example.test/api/admin/organizations/org%2Fone/crm/contacts?query=Ada&company=Analytical+Engines&pipelineStage=qualified&status=active&eventId=event%2Fone",
     );
+    expect(JSON.parse(String(calls[12]?.init.body))).toEqual({
+      stage: "invited",
+      expectedVersion: contact.version,
+      score: 85,
+      rationale: "Strong platform-engineering track record.",
+      note: "Invite sent",
+    });
   });
 
   it("makes an empty directory action-first and hides data-dependent controls", () => {
@@ -997,5 +1045,41 @@ describe("CRM contact analytics refresh", () => {
       ),
     ).resolves.toEqual({ contactId: contact.id, matches: [] });
     expect(findDuplicates).toHaveBeenCalledWith(contact.id);
+  });
+});
+
+describe("CRM selected contact refresh", () => {
+  it("applies the authoritative selected contact after a collection reload", async () => {
+    const authoritativeContact = { ...contact, version: contact.version + 1 };
+    const applyContact = vi.fn();
+
+    await refreshSelectedContactAfterCollectionReload({
+      contactId: contact.id,
+      expectedSelectionGeneration: 4,
+      currentSelectionGeneration: () => 4,
+      getContact: vi.fn(async () => authoritativeContact),
+      applyContact,
+    });
+
+    expect(applyContact).toHaveBeenCalledWith(authoritativeContact);
+  });
+
+  it("does not replace a newer user selection with a stale refresh response", async () => {
+    const contactRead = deferred<CrmContact>();
+    let selectionGeneration = 4;
+    const applyContact = vi.fn();
+    const refresh = refreshSelectedContactAfterCollectionReload({
+      contactId: contact.id,
+      expectedSelectionGeneration: selectionGeneration,
+      currentSelectionGeneration: () => selectionGeneration,
+      getContact: vi.fn(() => contactRead.promise),
+      applyContact,
+    });
+
+    selectionGeneration += 1;
+    contactRead.resolve({ ...contact, version: contact.version + 1 });
+    await refresh;
+
+    expect(applyContact).not.toHaveBeenCalled();
   });
 });

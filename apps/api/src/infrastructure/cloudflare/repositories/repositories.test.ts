@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-
+import type { CrmContact, CrmPipelineEntry } from "../../../features/crm/types";
 import type { Event, EventAuditEntry } from "../../../features/events/types";
 import { EventRepositoryConflictError } from "../../../features/events/types";
 import type { Session, SessionAuditEntry, SessionSettings } from "../../../features/sessions/types";
 import { SessionRepositoryConflictError } from "../../../features/sessions/types";
+import { D1CrmRepository } from "./crm";
 import { D1EventRepository } from "./events";
 import { D1SessionRepository } from "./sessions";
 
@@ -113,6 +114,30 @@ const sessionAudit: SessionAuditEntry = {
   after: session,
 };
 
+const crmContact: CrmContact = {
+  id: "contact-1",
+  organizationId: "org-1",
+  firstName: "Ada",
+  lastName: "Lovelace",
+  displayName: "Ada Lovelace",
+  email: "ada@example.test",
+  phone: null,
+  company: null,
+  title: null,
+  website: null,
+  linkedinUrl: null,
+  notes: null,
+  tags: [],
+  customFields: {},
+  source: "manual",
+  status: "active",
+  mergedIntoId: null,
+  pipelineStage: "qualified",
+  version: 2,
+  createdAt: now,
+  updatedAt: now,
+};
+
 describe("D1 event repository commands", () => {
   it("batches tenant-scoped CAS, audit, and sync-job persistence", async () => {
     const db = database();
@@ -204,6 +229,51 @@ describe("D1 event repository commands", () => {
         audit: eventAudit,
       }),
     ).rejects.toBeInstanceOf(EventRepositoryConflictError);
+  });
+});
+
+describe("D1 CRM repository commands", () => {
+  it("aligns contact writes to the next expected version", async () => {
+    const db = database();
+    await new D1CrmRepository(db).saveContact(crmContact, 1);
+    expect(db.batch).toHaveBeenCalledOnce();
+    await expect(
+      new D1CrmRepository(database()).saveContact({ ...crmContact, version: 1 }, 1),
+    ).rejects.toMatchObject({
+      name: "CrmRepositoryConflictError",
+      message: "The contact version is invalid.",
+    });
+  });
+
+  it("filters contacts through event participant-link membership", async () => {
+    const db = database();
+    await new D1CrmRepository(db).listContacts("org-1", { eventId: "event-1" });
+    const query = db.statements.at(-1)?.bound;
+    expect(query?.query).toContain("FROM crm_participant_links link");
+    expect(query?.query).toContain("link.crm_contact_id=contact.id AND link.event_id=?");
+    expect(query?.values).toEqual(["org-1", "event-1", 500]);
+  });
+
+  it("persists pipeline actor names alongside immutable actor IDs", async () => {
+    const db = database();
+    const entry: CrmPipelineEntry = {
+      id: "pipeline-1",
+      organizationId: "org-1",
+      contactId: crmContact.id,
+      fromStage: "new",
+      toStage: "qualified",
+      note: "Strong fit",
+      actorId: "user-1",
+      actorName: "owner@example.test",
+      createdAt: now,
+    };
+    await new D1CrmRepository(db).appendPipeline(entry);
+    const insert = db.statements.find((item) =>
+      item.bound.query.startsWith("INSERT INTO crm_pipeline_history"),
+    )?.bound;
+    expect(insert?.query).toContain("actor_id,actor_name,created_at");
+    expect(insert?.values).toContain("user-1");
+    expect(insert?.values).toContain("owner@example.test");
   });
 });
 

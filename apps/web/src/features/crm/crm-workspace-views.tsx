@@ -59,6 +59,7 @@ import {
   parseCsvPreview,
   refreshCrmAnalyticsAfterContactSave,
   refreshCrmDuplicatesAfterContactSave,
+  refreshSelectedContactAfterCollectionReload,
   renderVariablePreview,
 } from "./crm-workspace-model";
 import {
@@ -394,6 +395,7 @@ type CrmContactSelectionAction =
       readonly type: "contact-saved";
       readonly contact: CrmContact;
     }
+  | { readonly type: "contact-refreshed"; readonly contact: CrmContact }
   | { readonly type: "pipeline-contact-updated"; readonly contact: CrmContact }
   | { readonly type: "note-added"; readonly note: CrmNote }
   | {
@@ -495,6 +497,14 @@ function crmContactSelectionReducer(
         ...state,
         selectedContact: action.contact,
         outreachRecipients: [action.contact],
+      };
+    case "contact-refreshed":
+      return {
+        ...state,
+        selectedContact: action.contact,
+        outreachRecipients: state.outreachRecipients.map((candidate) =>
+          candidate.id === action.contact.id ? action.contact : candidate,
+        ),
       };
     case "pipeline-contact-updated":
       return { ...state, selectedContact: action.contact };
@@ -2145,11 +2155,13 @@ interface CrmDirectoryControllerState {
   readonly analyticsLoading: boolean;
   readonly loading: boolean;
   readonly query: string;
+  readonly eventFilter: string;
   readonly companyFilter: string;
   readonly tagsFilter: string;
   readonly pipelineFilter: CrmPipelineStage | "";
   readonly statusFilter: CrmContactStatus | "";
   readonly setQuery: (value: string) => void;
+  readonly setEventFilter: (value: string) => void;
   readonly setCompanyFilter: (value: string) => void;
   readonly setTagsFilter: (value: string) => void;
   readonly setPipelineFilter: (value: CrmPipelineStage | "") => void;
@@ -2188,6 +2200,7 @@ function useCrmDirectoryController({
     analyticsLoading: initialAnalytics === undefined,
   });
   const [query, setQuery] = useState("");
+  const [eventFilter, setEventFilter] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
   const [tagsFilter, setTagsFilter] = useState("");
   const [pipelineFilter, setPipelineFilter] = useState<CrmPipelineStage | "">("");
@@ -2195,16 +2208,18 @@ function useCrmDirectoryController({
   const contactFilter = useMemo<CrmWorkspaceContactFilter>(
     () => ({
       query,
+      eventId: eventFilter,
       company: companyFilter,
       tags: tagsFilter,
       pipelineStage: pipelineFilter,
       status: statusFilter,
     }),
-    [companyFilter, pipelineFilter, query, statusFilter, tagsFilter],
+    [companyFilter, eventFilter, pipelineFilter, query, statusFilter, tagsFilter],
   );
   const contactFilterKey = useMemo(
-    () => JSON.stringify([query, companyFilter, tagsFilter, pipelineFilter, statusFilter]),
-    [companyFilter, pipelineFilter, query, statusFilter, tagsFilter],
+    () =>
+      JSON.stringify([query, eventFilter, companyFilter, tagsFilter, pipelineFilter, statusFilter]),
+    [companyFilter, eventFilter, pipelineFilter, query, statusFilter, tagsFilter],
   );
   const initialContactsRead = useRef<{ api: CrmApi; filterKey: string } | null>(
     initialContacts === undefined
@@ -2213,6 +2228,7 @@ function useCrmDirectoryController({
           api,
           filterKey: JSON.stringify([
             query,
+            eventFilter,
             companyFilter,
             tagsFilter,
             pipelineFilter,
@@ -2292,11 +2308,13 @@ function useCrmDirectoryController({
       directoryState.eventsLoading ||
       directoryState.analyticsLoading,
     query,
+    eventFilter,
     companyFilter,
     tagsFilter,
     pipelineFilter,
     statusFilter,
     setQuery,
+    setEventFilter,
     setCompanyFilter,
     setTagsFilter,
     setPipelineFilter,
@@ -2328,6 +2346,10 @@ interface CrmSelectionControllerState {
   readonly setOutreachRecipients: (value: CrmStateUpdate<readonly CrmContact[]>) => void;
   readonly dispatchContactSelection: Dispatch<CrmContactSelectionAction>;
   readonly selectContact: (contactId: string, manageBusy?: boolean) => Promise<void>;
+  readonly refreshSelectedContact: (
+    contactId: string | undefined,
+    expectedSelectionGeneration: number,
+  ) => Promise<void>;
 }
 
 function useCrmSelectionController({
@@ -2396,6 +2418,17 @@ function useCrmSelectionController({
     },
     [api, busyLeaseRef, selectionGeneration, setBusy, setError, setStatusMessage],
   );
+  const refreshSelectedContact = useCallback(
+    (contactId: string | undefined, expectedSelectionGeneration: number) =>
+      refreshSelectedContactAfterCollectionReload({
+        contactId,
+        expectedSelectionGeneration,
+        currentSelectionGeneration: () => selectionGeneration.current,
+        getContact: (selectedContactId) => api.getContact(selectedContactId),
+        applyContact: (contact) => dispatchContactSelection({ type: "contact-refreshed", contact }),
+      }),
+    [api, selectionGeneration],
+  );
   return {
     ...contactSelectionState,
     setHistory: (value) => dispatchContactSelection({ type: "set-history", value }),
@@ -2406,6 +2439,7 @@ function useCrmSelectionController({
       dispatchContactSelection({ type: "set-outreach-recipients", value }),
     dispatchContactSelection,
     selectContact,
+    refreshSelectedContact,
   };
 }
 
@@ -2427,6 +2461,9 @@ function useCrmImportController({
   busyLeaseRef,
   loadContacts,
   loadAnalytics,
+  selectedContactId,
+  selectionGeneration,
+  refreshSelectedContact,
 }: {
   readonly api: CrmApi;
   readonly setBusy: CrmBusySetter;
@@ -2435,6 +2472,12 @@ function useCrmImportController({
   readonly busyLeaseRef: MutableRefObject<number>;
   readonly loadContacts: () => Promise<void>;
   readonly loadAnalytics: () => Promise<void>;
+  readonly selectedContactId: string | undefined;
+  readonly selectionGeneration: MutableRefObject<number>;
+  readonly refreshSelectedContact: (
+    contactId: string | undefined,
+    expectedSelectionGeneration: number,
+  ) => Promise<void>;
 }): CrmImportControllerState {
   const [importResult, setImportResult] = useState<CrmImportResult | null>(null);
   const [importPreviewResult, setImportPreviewResult] = useState<CrmImportPreviewResult | null>(
@@ -2487,13 +2530,18 @@ function useCrmImportController({
     const existingIdentity = importIdentityRef.current;
     const key = existingIdentity?.csv === csv ? existingIdentity.key : idempotencyKey("crm-import");
     importIdentityRef.current = { csv, key };
+    const selectionIntent = selectionGeneration.current;
     try {
       const result = await api.importContacts(csv, key);
       setImportResult(result);
       setStatusMessage(
         `Import ${result.id}: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped, ${result.errors} errors${result.idempotent ? " (idempotent replay)" : ""}.`,
       );
-      await Promise.all([loadContacts(), loadAnalytics()]);
+      await Promise.all([
+        loadContacts(),
+        loadAnalytics(),
+        refreshSelectedContact(selectedContactId, selectionIntent),
+      ]);
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
@@ -2790,7 +2838,10 @@ function useCrmPipelineActions({
     const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     try {
-      const next = await api.updatePipeline(contactId, stage);
+      const next = await api.updatePipeline(contactId, {
+        stage,
+        expectedVersion: contact.version,
+      });
       dispatchDirectory({ type: "replace-contact", contact: next });
       if (selectedContact?.id === next.id)
         dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
@@ -2824,17 +2875,13 @@ function useCrmPipelineActions({
       .filter(Boolean)
       .join(" · ");
     try {
-      const next =
-        contact.pipelineStage === input.stage && enrollmentNote
-          ? await api.updateContact(input.contactId, {
-              customFields: {
-                ...contact.customFields,
-                ...(input.score.trim() ? { pipelineScore: input.score.trim() } : {}),
-                ...(input.rationale.trim() ? { pipelineRationale: input.rationale.trim() } : {}),
-              },
-              expectedVersion: contact.version,
-            })
-          : await api.updatePipeline(input.contactId, input.stage, enrollmentNote);
+      const next = await api.updatePipeline(input.contactId, {
+        stage: input.stage,
+        expectedVersion: contact.version,
+        ...(input.score.trim() ? { score: Number(input.score.trim()) } : {}),
+        ...(input.rationale.trim() ? { rationale: input.rationale.trim() } : {}),
+        ...(enrollmentNote ? { note: enrollmentNote } : {}),
+      });
       dispatchDirectory({ type: "replace-contact", contact: next });
       if (selectedContact?.id === next.id)
         dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
@@ -2857,7 +2904,11 @@ function useCrmPipelineActions({
     setBusy(true);
     setError(null);
     try {
-      const next = await api.updatePipeline(selectedContact.id, stage, note);
+      const next = await api.updatePipeline(selectedContact.id, {
+        stage,
+        expectedVersion: selectedContact.version,
+        ...(note.trim() ? { note: note.trim() } : {}),
+      });
       dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
       dispatchDirectory({ type: "replace-contact", contact: next });
       const [nextPipelineHistory] = await Promise.all([
@@ -3152,6 +3203,9 @@ export function useCrmWorkspaceController(
     busyLeaseRef,
     loadContacts: directory.loadContacts,
     loadAnalytics: directory.loadAnalytics,
+    selectedContactId: selection.selectedContact?.id,
+    selectionGeneration,
+    refreshSelectedContact: selection.refreshSelectedContact,
   });
   const merge = useCrmMergeController({
     api: directory.api,
@@ -3253,6 +3307,18 @@ export function useCrmWorkspaceController(
   async function selectContactAndReset(contactId: string): Promise<void> {
     await selection.selectContact(contactId);
   }
+  async function refreshWorkspace(): Promise<void> {
+    const selectedContactId = selection.selectedContact?.id;
+    const selectionIntent = selectionGeneration.current;
+    try {
+      await Promise.all([
+        directory.refresh(),
+        selection.refreshSelectedContact(selectedContactId, selectionIntent),
+      ]);
+    } catch (reason) {
+      if (selectionGeneration.current === selectionIntent) setError(messageFromError(reason));
+    }
+  }
   return {
     organizationId: props.organizationId,
     contacts: directory.contacts,
@@ -3275,12 +3341,15 @@ export function useCrmWorkspaceController(
     statusFilter: directory.statusFilter,
     selectedContactId: selection.selectedContact?.id ?? null,
     selectedContactIds: selection.selectedContactIds,
-    onQueryChange: directory.setQuery,
+    onQueryChange: (query) => {
+      directory.setQuery(query);
+      directory.setEventFilter("");
+    },
     onCompanyChange: directory.setCompanyFilter,
     onTagsChange: directory.setTagsFilter,
     onPipelineFilterChange: directory.setPipelineFilter,
     onStatusFilterChange: directory.setStatusFilter,
-    onRefresh: () => void directory.refresh(),
+    onRefresh: () => void refreshWorkspace(),
     onSelectContact: (contactId) => void selectContactAndReset(contactId),
     onSelectionChange: (contactIds) => {
       const selected = new Set(contactIds);
@@ -3329,7 +3398,8 @@ export function useCrmWorkspaceController(
     onSendOutreach: outreach.sendOutreach,
     outreachResults: selection.outreachResults,
     onAnalyticsEventDrillThrough: (eventId) => {
-      directory.setQuery(eventId);
+      directory.setQuery("");
+      directory.setEventFilter(eventId);
       setStatusMessage(`Directory filter set to event ${eventId}.`);
     },
   };
