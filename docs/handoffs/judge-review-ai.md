@@ -6,7 +6,7 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact pushed head: `7a2296277f23a1e14c73d55aa09a890a8a6e4680`
+- Exact pushed head: `564d69d368a3c404c3eac39734044a22dfb5eb10`
 - PR: https://github.com/jaeyunha/eventloom/pull/34
 - Issue: https://github.com/jaeyunha/eventloom/issues/47
 - PR is open, not merged, and no production deployment was performed.
@@ -37,7 +37,7 @@
 - Merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63, and #66
   remains present.
 
-## Exact-head verification at 7a229627
+## Exact-head verification at 564d69d3
 
 - Focused matrix: PASS — 10 files, 305 passed, 1 skipped before the final
   rationale-threshold-only correction; the targeted rationale and partial
@@ -62,11 +62,11 @@
 
 These must all inspect the same final pushed head and PASS before merge:
 
-- [ ] Security — exact `7a2296277f23a1e14c73d55aa09a890a8a6e4680`
-- [ ] Code quality — exact `7a2296277f23a1e14c73d55aa09a890a8a6e4680`
-- [ ] Functional/visual QA — exact `7a2296277f23a1e14c73d55aa09a890a8a6e4680`
-- [ ] Context/dependencies — exact `7a2296277f23a1e14c73d55aa09a890a8a6e4680`
-- [ ] Goal/compliance — exact `7a2296277f23a1e14c73d55aa09a890a8a6e4680`
+- [ ] Security — exact `564d69d368a3c404c3eac39734044a22dfb5eb10`
+- [ ] Code quality — exact `564d69d368a3c404c3eac39734044a22dfb5eb10`
+- [ ] Functional/visual QA — exact `564d69d368a3c404c3eac39734044a22dfb5eb10`
+- [ ] Context/dependencies — exact `564d69d368a3c404c3eac39734044a22dfb5eb10`
+- [ ] Goal/compliance — exact `564d69d368a3c404c3eac39734044a22dfb5eb10`
 
 ## Remaining tasks
 
