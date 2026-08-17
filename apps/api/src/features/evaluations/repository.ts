@@ -273,7 +273,7 @@ function planScheduleState(plan: EvaluationPlan): EvaluationPlanScheduleState {
       id: round.id,
       predecessorRoundId: round.predecessorRoundId,
       revision: round.revision ?? 1,
-      opensAt: round.opensAt ?? null,
+      opensAt: round.opensAt,
       closesAt: round.closesAt,
     })),
   };
