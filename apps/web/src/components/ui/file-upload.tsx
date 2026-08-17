@@ -183,10 +183,16 @@ export function FileUpload({
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    aria-label={item.status === "uploading" ? `Cancel ${item.name}` : `Remove ${item.name}`}
+                    aria-label={
+                      item.status === "uploading" ? `Cancel ${item.name}` : `Remove ${item.name}`
+                    }
                     onClick={() => onRemove(item.id)}
                   >
-                    {item.status === "uploading" ? <X aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
+                    {item.status === "uploading" ? (
+                      <X aria-hidden="true" />
+                    ) : (
+                      <Trash2 aria-hidden="true" />
+                    )}
                   </Button>
                 ) : (
                   <span />

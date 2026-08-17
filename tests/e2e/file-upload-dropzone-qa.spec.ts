@@ -27,9 +27,13 @@ test("captures the shared drop-zone on portal files and task upload", async ({
   });
   await expect(page.getByText("runbook.pdf", { exact: true })).toBeVisible();
   await expect(page.getByText("PDF", { exact: true }).first()).toBeVisible();
-  await page.locator("[data-file-upload]").first().locator("..").screenshot({
-    path: `${evidenceDir}/portal-files-selected.png`,
-  });
+  await page
+    .locator("[data-file-upload]")
+    .first()
+    .locator("..")
+    .screenshot({
+      path: `${evidenceDir}/portal-files-selected.png`,
+    });
 
   await page.goto("/portal/tasks?event=event-evaluator");
   await expect(page.getByRole("heading", { level: 1, name: "Requests & tasks" })).toBeVisible({
