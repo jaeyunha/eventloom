@@ -1,19 +1,20 @@
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1.25rem;
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  padding: 1.5rem clamp(1rem, 3vw, 2rem) 3rem;
+  gap: 1.5rem;
+  width: min(100%, 96rem);
+  max-width: 96rem;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1rem, 3vw, 2.5rem) 3rem;
   color: var(--foreground);
 }
 
 .header {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 1.5rem;
+  padding-bottom: 0.25rem;
 }
 
 .headerCopy {

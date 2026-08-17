@@ -604,6 +604,11 @@
   font-weight: 650;
 }
 
+.multiSelect {
+  display: grid;
+  gap: var(--space-2);
+}
+
 .tagOptions {
   display: flex;
   flex-wrap: wrap;
@@ -614,6 +619,41 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
+}
+.selectedTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.selectedTag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding: 0.25rem 0.5rem 0.25rem 0.7rem;
+  border: 1px solid color-mix(in oklab, var(--color-accent) 30%, var(--color-border));
+  border-radius: 999px;
+  background: var(--color-accent-mist);
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.selectedTag button {
+  display: grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+.selectedTag button:hover {
+  background: color-mix(in oklab, var(--color-accent) 18%, transparent);
+  color: var(--color-ink);
 }
 
 .required {
@@ -742,26 +782,32 @@
 }
 
 .errorSummary {
-  margin: 0 0 var(--space-4);
-  padding: var(--space-3) var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-5);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid color-mix(in oklab, var(--destructive) 28%, transparent);
-  border-left: 3px solid var(--destructive);
+  border-left: 4px solid var(--destructive);
   border-radius: var(--radius-sm);
   background: color-mix(in oklab, var(--destructive) 6%, var(--color-surface));
   color: var(--destructive);
   font-size: 0.8125rem;
   line-height: 1.5;
+  text-align: left;
 }
 
 .errorSummary strong {
   display: block;
-  margin-bottom: 0.1rem;
+  margin: 0;
   font-weight: 700;
 }
 
 .errorSummary ul {
+  display: grid;
+  gap: 0.2rem;
   margin: 0;
-  padding-left: var(--space-5);
+  padding: 0;
+  list-style: none;
 }
 
 .twoColumns {

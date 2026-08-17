@@ -1124,7 +1124,26 @@ function SearchableMultiField({
     `${option.label} ${option.description ?? ""}`.toLocaleLowerCase().includes(normalizedQuery),
   );
   return (
-    <div>
+    <div className={styles.multiSelect}>
+      {value.length > 0 ? (
+        <div className={styles.selectedTags}>
+          {value.map((selectedValue) => {
+            const option = fieldOptions(field).find((item) => item.value === selectedValue);
+            return (
+              <span className={styles.selectedTag} key={selectedValue}>
+                {option?.label ?? selectedValue}
+                <button
+                  aria-label={`Remove ${option?.label ?? selectedValue}`}
+                  onClick={() => onChange(value.filter((item) => item !== selectedValue))}
+                  type="button"
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
       <label className={styles.srOnly} htmlFor={id}>
         Search {field.label} options
       </label>
@@ -1132,7 +1151,7 @@ function SearchableMultiField({
         aria-describedby={describedBy}
         id={id}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search options…"
+        placeholder={value.length > 0 ? "Add another option…" : "Search options…"}
         type="search"
         value={query}
       />
@@ -1150,8 +1169,8 @@ function SearchableMultiField({
                 )
               }
               type="checkbox"
-            />{" "}
-            {option.label}
+            />
+            <span>{option.label}</span>
           </label>
         ))}
       </div>
