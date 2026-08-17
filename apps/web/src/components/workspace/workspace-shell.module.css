@@ -6,6 +6,10 @@
   color: var(--foreground);
 }
 
+.shellWithoutNavigation {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .desktopNavigation {
   min-width: 0;
   min-height: 0;

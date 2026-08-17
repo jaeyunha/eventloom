@@ -52,7 +52,8 @@ export function speakerSecondaryLoadKey(
     loading ||
     roster === null ||
     roster.organizationId !== organizationId ||
-    roster.eventId !== eventId
+    roster.eventId !== eventId ||
+    roster.speakers.length === 0
   ) {
     return null;
   }

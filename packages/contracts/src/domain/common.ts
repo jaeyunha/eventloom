@@ -68,12 +68,17 @@ export const validationIssueSchema = z.object({
   message: z.string().trim().min(1),
 });
 
+export const apiErrorDetailsSchema = z.union([
+  z.array(validationIssueSchema),
+  z.record(z.string(), z.unknown()),
+]);
+
 export const apiErrorResponseSchema = z.object({
   error: z.object({
     code: apiErrorCodeSchema,
     message: z.string().trim().min(1),
     traceId: traceIdSchema,
-    details: z.array(validationIssueSchema).optional(),
+    details: apiErrorDetailsSchema.optional(),
     retryAfterSeconds: z.int().positive().optional(),
   }),
 });

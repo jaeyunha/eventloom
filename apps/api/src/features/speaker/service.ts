@@ -65,6 +65,7 @@ import type {
   SpeakerReminderRecord,
   SpeakerReminderTask,
   SpeakerRepository,
+  SpeakerTaskRepositoryAudit,
   SpeakerRosterEntry,
   SpeakerRosterEnvelope,
   SpeakerRosterMember,
@@ -99,8 +100,8 @@ export type SpeakerServiceErrorCode =
   | "INVALID_TASK_TRANSITION"
   | "TASK_DEPENDENCY_INCOMPLETE"
   | "TASK_NOT_ACTIVE"
-  | "TASK_REMINDERS_NOT_EDITABLE"
   | "TASK_ASSET_NOT_READY"
+  | "TASK_REMINDERS_NOT_EDITABLE"
   | "UPLOAD_POLICY_VIOLATION"
   | "ASSET_UPLOAD_RETRY_INVALID"
   | "ASSET_FINALIZATION_INVALID"
@@ -494,6 +495,29 @@ function normalizeReminderOffsets(values: readonly number[]): number[] {
   }
   return [...values].sort((left, right) => left - right);
 }
+
+function reminderCadenceWindow(
+  deadlineAt: string | null,
+  offsets: readonly number[],
+  referenceNow: Date,
+): string {
+  const dueTime = deadlineAt === null ? Number.NaN : Date.parse(deadlineAt);
+  if (!Number.isFinite(dueTime)) return "unscheduled";
+  const thresholds = [
+    ...new Set([
+      dueTime,
+      ...offsets
+        .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
+        .map((offset) => dueTime - offset * 60_000),
+    ]),
+  ].sort((left, right) => left - right);
+  const active = thresholds.filter((threshold) => threshold <= referenceNow.getTime()).at(-1);
+  const firstThreshold = thresholds[0] ?? dueTime;
+  return active === undefined
+    ? `before:${new Date(firstThreshold).toISOString()}`
+    : new Date(active).toISOString();
+}
+
 function exportArchiveComponent(value: string | undefined, fallback: string): string {
   const normalized = stripFileNameControls((value ?? "").normalize("NFC").replace(/[\\/]/gu, "-"))
     .replace(/\.\.+/gu, "-")
@@ -2638,11 +2662,7 @@ export class SpeakerService {
 
   async updateOrganizerTask(
     input: SpeakerTaskUpdateInput,
-    audit?: {
-      id: string;
-      action: "speaker_task.reminder_offsets_updated";
-      previousReminderOffsetsMinutes: readonly number[];
-    },
+    audit?: SpeakerTaskRepositoryAudit,
   ): Promise<SpeakerTask> {
     const scope = await this.requireOrganizerScope(input.eventId, input.accountId);
     assertExpectedVersion(input.expectedVersion);
@@ -4264,6 +4284,17 @@ export class SpeakerService {
     taskIds?: readonly string[];
     recipientIds?: readonly string[];
   }): Promise<SpeakerReminderPreview> {
+    const previewNow = this.now();
+    const eligibility = await this.previewReminderEligibility({
+      eventId: input.eventId,
+      accountId: input.accountId,
+      ...(input.taskIds === undefined ? {} : { taskIds: input.taskIds }),
+      ...(input.recipientIds === undefined ? {} : { recipientIds: input.recipientIds }),
+      now: previewNow,
+    });
+    const eligibilityByTask = new Map(
+      eligibility.items.map((item) => [item.taskId, item] as const),
+    );
     const matrix = await this.listDeliverables(input.eventId, input.accountId, {
       status: "incomplete",
     });
@@ -4289,6 +4320,15 @@ export class SpeakerService {
         title: row.task.title,
         ...(row.task.dueAt === undefined ? {} : { dueAt: row.task.dueAt }),
         participantId: row.participantId,
+        ...(eligibilityByTask.get(row.task.id) === undefined
+          ? {}
+          : {
+              cadenceWindow: reminderCadenceWindow(
+                eligibilityByTask.get(row.task.id)?.deadlineAt ?? null,
+                eligibilityByTask.get(row.task.id)?.reminderOffsetsMinutes ?? [],
+                previewNow,
+              ),
+            }),
       };
       if (existing === undefined) {
         byRecipient.set(row.participantId, {

@@ -28,4 +28,59 @@ describe("foundation contracts", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts structured conflict details inside the stable error envelope", () => {
+    expect(
+      apiErrorSchema.parse({
+        error: {
+          code: "CONFLICT",
+          message: "The contact changed.",
+          traceId,
+          details: {
+            current: {
+              id: "contact-1",
+              version: 2,
+            },
+          },
+        },
+      }),
+    ).toMatchObject({
+      error: {
+        code: "CONFLICT",
+        details: {
+          current: {
+            id: "contact-1",
+            version: 2,
+          },
+        },
+      },
+    });
+  });
+
+  it("accepts coded validation issues inside the stable error envelope", () => {
+    expect(
+      apiErrorSchema.parse({
+        error: {
+          code: "VALIDATION_FAILED",
+          message: "The CRM request is invalid.",
+          traceId,
+          details: [
+            {
+              path: ["body", "email"],
+              code: "invalid_format",
+              message: "Invalid email address",
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      error: {
+        details: [
+          {
+            code: "invalid_format",
+          },
+        ],
+      },
+    });
+  });
 });

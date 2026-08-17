@@ -24,9 +24,14 @@ export const organizationCapabilitySchema = z
   .regex(/^[a-z][a-z0-9_.:-]*$/u);
 export type OrganizationCapability = z.infer<typeof organizationCapabilitySchema>;
 
+export const organizationEntitlementCapabilities = {
+  eventCreation: "events.create",
+} as const satisfies Record<string, OrganizationCapability>;
+
 export const organizationEntitlementLimitsSchema = z
   .object({
     activeEvents: z.int().nonnegative().nullable(),
+    organizerSeats: z.int().nonnegative().nullable(),
   })
   .strict();
 export type OrganizationEntitlementLimits = z.infer<typeof organizationEntitlementLimitsSchema>;

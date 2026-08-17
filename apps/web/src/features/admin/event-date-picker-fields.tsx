@@ -2,6 +2,7 @@
 
 import type { TimeDisambiguation } from "@eventloom/contracts";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ interface EventDatePickerFieldsProps extends EventDateSelectionValue {
   readonly eyebrow: string;
   readonly title: string;
   readonly description: string;
+  readonly headerAside?: ReactNode;
   readonly startLabel: string;
   readonly endLabel: string;
   readonly startTimeLabel: string;
@@ -476,6 +478,7 @@ function renderDatePickerDetails({
   endTimeLabel,
   defaultStartTime,
   defaultEndTime,
+  headerAside,
   timeHint,
   constraints,
   timeZone,
@@ -503,6 +506,7 @@ function renderDatePickerDetails({
   readonly endTimeLabel: string;
   readonly defaultStartTime: string;
   readonly defaultEndTime: string;
+  readonly headerAside?: ReactNode;
   readonly timeHint: string;
   readonly constraints: TemporalConstraints;
   readonly timeZone?: string | undefined;
@@ -617,7 +621,10 @@ function renderDatePickerDetails({
               </div>
             )}
           </div>
-          <p className={styles.timeHint}>{timeHint}</p>
+          <div className={styles.scheduleFooter}>
+            <p className={styles.timeHint}>{timeHint}</p>
+            {headerAside}
+          </div>
         </>
       ) : null}
     </div>
@@ -647,6 +654,7 @@ export function EventDatePickerFields({
   layout,
   clearable,
   disabled,
+  headerAside,
   eyebrow,
   title,
   description,
@@ -790,18 +798,24 @@ export function EventDatePickerFields({
       data-selection-mode={selectionMode}
     >
       <div className={styles.heading}>
-        <div>
+        <div className={styles.headingCopy}>
           <span className={styles.eyebrow}>{eyebrow}</span>
           <h3 id={`${id}-title`}>{title}</h3>
           <p>{description}</p>
-        </div>
-        <div className={styles.headingActions}>
           {clearable && (startDate !== "" || endDate !== "" || scheduleDates.length > 0) ? (
-            <Button type="button" variant="ghost" onClick={clearSelection} disabled={disabled}>
+            <Button
+              className={styles.clearDate}
+              type="button"
+              variant="ghost"
+              onClick={clearSelection}
+              disabled={disabled}
+            >
               Clear {isSingleSelection ? "date" : "dates"}
             </Button>
           ) : null}
-          {showModeToggle ? (
+        </div>
+        {showModeToggle ? (
+          <div className={styles.headingActions}>
             <ToggleGroup
               aria-label="Event date selection mode"
               className={styles.modeToggle}
@@ -820,8 +834,8 @@ export function EventDatePickerFields({
                 Individual days
               </ToggleGroupItem>
             </ToggleGroup>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
 
       {renderDatePickerSummary({
@@ -885,6 +899,7 @@ export function EventDatePickerFields({
               endsAt,
               timeHint,
               timeZone,
+              headerAside,
             })
           : null}
       </div>

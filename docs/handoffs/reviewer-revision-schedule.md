@@ -11,13 +11,16 @@ a post-rebase migration consolidation checkpoint.
 
 ## Checkpoint correction
 
-- Enables SQLite foreign-key enforcement in migrations `0035` through `0039`
+- Enables SQLite foreign-key enforcement in migrations `0035` through `0040`
   with `PRAGMA foreign_keys = ON`.
 - Consolidates the unshipped candidate-predicate refinements from migrations
-  `0040` and `0041` into migrations `0036` and `0037`.
-- Deletes the now-redundant `0040` and `0041` migration files.
+  `0040` and `0041` into migrations `0037` and `0038` (migration `0036` is
+  reserved by the evaluation export jobs migration on `main`).
+- Deletes the now-redundant `0040_refine_review_plan_lineage_repair_candidates.sql`
+  and `0041_truncated_review_plan_lineage_repair_candidates.sql` files before
+  renumbering the synchronization migrations around the export-jobs migration.
 - Updates the compound compare-and-swap evaluation repository fixture to apply
-  migrations `0035`, `0038`, and `0039`.
+  migrations `0035`, `0039`, and `0040`.
 - Updates the lineage migration test and release runbook to the final
   five-migration sequence.
 
@@ -42,10 +45,12 @@ was run for this retirement checkpoint.
 
 ## Known risks and remaining work
 
-1. Confirm that consolidating unshipped migrations `0040` and `0041` is valid
-   for every environment; do not rewrite migrations that were already applied.
+1. Confirm that consolidating the unshipped candidate migrations
+   `0040_refine_review_plan_lineage_repair_candidates.sql` and
+   `0041_truncated_review_plan_lineage_repair_candidates.sql` is valid for
+   every environment; do not rewrite migrations that were already applied.
 2. Run the broader evaluation and migration test set plus repository checks.
-3. Apply migrations `0035` through `0039` to the target D1 environment in
+3. Apply migrations `0035` through `0040` to the target D1 environment in
    strict order.
 4. Inspect and resolve every row in
    `review_plan_lineage_repairs_required`; do not declare migration completion

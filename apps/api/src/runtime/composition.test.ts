@@ -881,7 +881,7 @@ describe("integrated local runtime composition", () => {
       APP_ENV: "local",
       RUNTIME_PROFILE: "integrated",
       WEB_ORIGIN: "http://127.0.0.1:3015",
-      API_ORIGIN: "https://production-origin-must-be-ignored.example",
+      API_ORIGIN: "http://127.0.0.1:8787",
       AIRTABLE_BASE_ID: "production-base-must-not-be-used",
       AIRTABLE_BASE_DEV_ID: "development-base",
       BETTER_AUTH_SECRET: "production-secret-must-not-be-used",
@@ -906,6 +906,35 @@ describe("integrated local runtime composition", () => {
       CALENDAR_FROM_EMAIL: "schedule@local.example.test",
       CALENDAR_UID_DOMAIN: "calendar.local.example.test",
     });
+  });
+
+  it("accepts isolated loopback origins and derives their cache invalidation target", () => {
+    const webOrigin = "http://product-evaluation-loop.localhost:3045";
+    const apiOrigin = "http://127.0.0.1:8987";
+    const { CACHE_INVALIDATION_URL: _cacheInvalidationUrl, ...baseBindings } = bindingsFor(
+      new FakeAirtableTransport(),
+    );
+    const bindings = {
+      ...baseBindings,
+      WEB_ORIGIN: webOrigin,
+      API_ORIGIN: apiOrigin,
+    };
+
+    expect(runtimeBindingsForEnvironment(bindings)).toMatchObject({
+      WEB_ORIGIN: webOrigin,
+      API_ORIGIN: apiOrigin,
+      CACHE_INVALIDATION_URL: `${webOrigin}/api/internal/cache-invalidation`,
+    });
+    expect(inspectProductionRuntime(bindings)).toEqual({
+      success: true,
+      issues: [],
+    });
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        WEB_ORIGIN: "https://not-local.example.test",
+      }).success,
+    ).toBe(false);
   });
 
   it("boots local D1 authority without AIRTABLE_BASE_DEV_ID", () => {
@@ -3464,7 +3493,8 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       rounds: [
         {
           id: roundId,
-          opensAt: null,
+          sequence: 1,
+          opensAt: now,
           closesAt: "2026-08-10T13:00:00.000Z",
         },
       ],
@@ -3683,7 +3713,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       blindReview: false,
       closesAt: null,
       assignmentRule: { reviewsPerSubmission: 20, maxAssignmentsPerReviewer: 20 },
-      rounds: [{ id: roundId, opensAt: null, closesAt: null }],
+      rounds: [{ id: roundId, sequence: 1, opensAt: now, closesAt: null }],
       version: 3,
       createdAt: now,
       updatedAt: now,
@@ -3894,6 +3924,28 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     const now = "2026-08-10T12:00:00.000Z";
     const later = "2026-08-10T12:10:00.000Z";
     const transport = new FormulaRecordingTransport();
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      recordId: "rec00000000000300",
+      fields: {
+        "Application ID": planId,
+        "Rounds JSON": JSON.stringify({
+          id: planId,
+          tenantId,
+          eventId,
+          name: "Suggestion plan",
+          status: "open",
+          blindReview: false,
+          closesAt: null,
+          assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 10 },
+          rounds: [{ id: roundId, sequence: 1, opensAt: now, closesAt: null }],
+          version: 4,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      },
+    });
     const assignment = {
       id: assignmentId,
       tenantId,

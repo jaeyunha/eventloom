@@ -107,8 +107,8 @@ export function ReviewerQueueDetail({
                 type="button"
                 variant="ghost"
               >
-                <Maximize2 data-icon="inline-start" aria-hidden="true" />
-                Full page
+                <Maximize2 className={styles.sheetFullPageIcon} aria-hidden="true" />
+                <span className={styles.sheetFullPageLabel}>Full page</span>
               </Button>
             ) : (
               <Button asChild size="sm" variant="ghost">
@@ -117,8 +117,8 @@ export function ReviewerQueueDetail({
                   href={fullPageHref}
                   title="Open as full page"
                 >
-                  <Maximize2 data-icon="inline-start" aria-hidden="true" />
-                  Full page
+                  <Maximize2 className={styles.sheetFullPageIcon} aria-hidden="true" />
+                  <span className={styles.sheetFullPageLabel}>Full page</span>
                 </a>
               </Button>
             )}

@@ -67,9 +67,10 @@ describe("event entitlement admission", () => {
           organizationId: "org-a",
           revision: 1,
           state: "active",
-          capabilities: [],
+          capabilities: ["events.create"],
           limits: {
             activeEvents,
+            organizerSeats: null,
           },
           notBefore: "2026-08-01T00:00:00.000Z",
           expiresAt: null,

@@ -1,7 +1,6 @@
 "use client";
 import { RefreshCw, UserPlus } from "lucide-react";
 import {
-  type ChangeEvent,
   type FormEvent,
   useCallback,
   useEffect,
@@ -1244,6 +1243,7 @@ function useSpeakerWorkspaceController({
       api === null ||
       roster === null ||
       loading ||
+      roster.speakers.length === 0 ||
       !progressSectionVisible ||
       roster.organizationId !== organizationId ||
       roster.eventId !== eventId
@@ -1937,16 +1937,9 @@ function useSpeakerWorkspaceController({
       dispatchProfileHeadshotDetails({ type: "save-busy-changed", busy: false });
     }
   }
-  async function previewCsv(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-    const input = event.currentTarget;
-    const file = input.files?.[0];
-    if (!file) {
-      input.value = "";
-      return;
-    }
+  async function previewCsv(file: File): Promise<void> {
     const requestId = importRequestRef.current + 1;
     importRequestRef.current = requestId;
-    input.value = "";
     dispatchImportTaskInvitation({ type: "import-preview-started", fileName: file.name });
     importIdempotencyKeyRef.current = null;
     dispatchRoster({ type: "notice-set", message: null });
@@ -2438,11 +2431,7 @@ function useSpeakerWorkspaceController({
   function markHeadshotPreviewFailed(): void {
     dispatchProfileHeadshotDetails({ type: "headshot-preview-marked-failed" });
   }
-  async function uploadOrganizerHeadshot(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-    const input = event.currentTarget;
-    const file = input.files?.[0];
-    input.value = "";
-    if (file === undefined) return;
+  async function uploadOrganizerHeadshot(file: File): Promise<void> {
     const validationError = validateOrganizerHeadshotFile(file);
     if (validationError !== null) {
       dispatchProfileHeadshotDetails({
@@ -2678,7 +2667,7 @@ function useSpeakerWorkspaceController({
                   type: "headshot-session-selected",
                   submissionId,
                 }),
-              onUpload: (event) => void uploadOrganizerHeadshot(event),
+              onUpload: (file) => void uploadOrganizerHeadshot(file),
               mutationStatus: headshotMutationStatus,
               mutationMessage: headshotMutationMessage,
             },
@@ -2707,7 +2696,7 @@ function useSpeakerWorkspaceController({
             fileName: importFileName,
             preview: importPreview,
             onOpenChange: (open) => dispatchRoster({ type: "csv-dialog-changed", open }),
-            onPreview: (event) => void previewCsv(event),
+            onPreview: (file) => void previewCsv(file),
             onCommit: () => void commitCsv(),
           },
           onQueryChange: (nextQuery) => dispatchRoster({ type: "query-changed", query: nextQuery }),

@@ -144,9 +144,14 @@ function inspectWebOrigin(
   }
 
   if (environment === "local") {
-    const localHost = origin.hostname === "localhost" || origin.hostname === "127.0.0.1";
+    const hostname = origin.hostname.toLowerCase();
+    const localHost =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname.endsWith(".localhost") ||
+      hostname === "[::1]";
     if (!localHost || (origin.protocol !== "http:" && origin.protocol !== "https:")) {
-      return "local WEB_ORIGIN must use localhost or 127.0.0.1";
+      return "local WEB_ORIGIN must use a loopback hostname";
     }
     return null;
   }

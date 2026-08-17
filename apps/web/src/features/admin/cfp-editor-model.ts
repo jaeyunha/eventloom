@@ -80,8 +80,7 @@ export function fieldStorageKey(field: Pick<CfpFormField, "id" | "key">): string
 
 export function isCanonicalTitleField(field: Pick<CfpFormField, "id" | "key">): boolean {
   return (
-    field.id === CANONICAL_TITLE_FIELD_KEY ||
-    fieldStorageKey(field) === CANONICAL_TITLE_FIELD_KEY
+    field.id === CANONICAL_TITLE_FIELD_KEY || fieldStorageKey(field) === CANONICAL_TITLE_FIELD_KEY
   );
 }
 
@@ -91,9 +90,7 @@ export function isKeyLockedField(
   return field.keyLocked === true || isCanonicalTitleField(field);
 }
 
-export function isSystemOwnedField(
-  field: Pick<CfpFormField, "id" | "key" | "system">,
-): boolean {
+export function isSystemOwnedField(field: Pick<CfpFormField, "id" | "key" | "system">): boolean {
   return field.system === true || isCanonicalTitleField(field);
 }
 
@@ -308,10 +305,15 @@ const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
     options: [],
   },
 ];
+function coreTitleField(): CfpFormField {
+  const field = CORE_PROPOSAL_FIELDS.find((candidate) => candidate.id === "title");
+  if (field === undefined) throw new Error("The core CFP title field is missing.");
+  return field;
+}
 
 function asCanonicalTitleField(
   field: CfpFormField,
-  fallback: CfpFormField = CORE_PROPOSAL_FIELDS[0]!,
+  fallback: CfpFormField = coreTitleField(),
 ): CfpFormField {
   return {
     ...fallback,
@@ -352,11 +354,12 @@ export function repairCanonicalTitleFields(fields: CfpFormField[]): CfpFormField
 
   const titleLike = fields.filter((field) => looksLikeTitleField(field));
   if (titleLike.length === 1) {
-    const target = titleLike[0]!;
+    const target = titleLike[0];
+    if (target === undefined) return fields;
     return fields.map((field) => (field.id === target.id ? asCanonicalTitleField(field) : field));
   }
 
-  return [asCanonicalTitleField(CORE_PROPOSAL_FIELDS[0]!), ...fields];
+  return [asCanonicalTitleField(coreTitleField()), ...fields];
 }
 
 export function withCoreProposalFields(fields: CfpFormField[]): CfpFormField[] {
@@ -440,10 +443,18 @@ export const TIMEZONE_OPTIONS = [
   "UTC",
   "America/Los_Angeles",
   "America/New_York",
+  "America/Toronto",
+  "America/Sao_Paulo",
   "Europe/London",
   "Europe/Berlin",
+  "Europe/Paris",
+  "Africa/Johannesburg",
+  "Asia/Dubai",
   "Asia/Singapore",
-];
+  "Asia/Seoul",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+] as const;
 
 function validCfpTimeZone(value: string): boolean {
   try {

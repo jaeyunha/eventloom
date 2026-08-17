@@ -13,6 +13,7 @@ interface OrganizationEntitlementRow {
   readonly state: string;
   readonly capabilities_json: string;
   readonly active_event_limit: number | null;
+  readonly organizer_seat_limit: number | null;
   readonly not_before: string;
   readonly expires_at: string | null;
 }
@@ -26,6 +27,7 @@ function entitlementFromRow(row: OrganizationEntitlementRow): OrganizationEntitl
     capabilities: JSON.parse(row.capabilities_json),
     limits: {
       activeEvents: row.active_event_limit,
+      organizerSeats: row.organizer_seat_limit,
     },
     notBefore: row.not_before,
     expiresAt: row.expires_at,
@@ -41,7 +43,7 @@ export class D1OrganizationEntitlementRepository
     const row = await this.database
       .prepare(
         `SELECT organization_id, schema_version, revision, state, capabilities_json,
-                active_event_limit, not_before, expires_at
+                active_event_limit, organizer_seat_limit, not_before, expires_at
            FROM organization_entitlements
           WHERE organization_id = ?
           LIMIT 1`,
@@ -57,28 +59,55 @@ export class D1OrganizationEntitlementRepository
   ): Promise<OrganizationEntitlement> {
     const parsed = organizationEntitlementSchema.parse(entitlement);
     const capabilitiesJson = JSON.stringify(parsed.capabilities);
+    const current = await this.getEntitlement(parsed.organizationId);
+    if (current !== null && JSON.stringify(current) === JSON.stringify(parsed)) {
+      const priorAudit = await this.database
+        .prepare("SELECT id FROM audit_events WHERE id = ? LIMIT 1")
+        .bind(audit.id)
+        .first<{ readonly id: string }>();
+      if (priorAudit !== null) return current;
+      throw new OrganizationEntitlementConflictError(
+        "The organization entitlement revision is stale.",
+      );
+    }
     try {
       await this.database.batch([
+        guard(
+          this.database,
+          `(? = 0 AND NOT EXISTS (
+             SELECT 1
+             FROM organization_entitlements
+             WHERE organization_id = ?
+           ))
+           OR (? > 0 AND EXISTS (
+             SELECT 1
+             FROM organization_entitlements
+             WHERE organization_id = ?
+               AND revision = ?
+           ))`,
+          [
+            audit.expectedRevision,
+            parsed.organizationId,
+            audit.expectedRevision,
+            parsed.organizationId,
+            audit.expectedRevision,
+          ],
+        ),
         this.database
           .prepare(
             `INSERT INTO organization_entitlements (
                organization_id, schema_version, revision, state, capabilities_json,
-               active_event_limit, not_before, expires_at, created_at, updated_at
+               active_event_limit, organizer_seat_limit, not_before, expires_at,
+               created_at, updated_at
              )
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-             WHERE ? = 0
-                OR EXISTS (
-                  SELECT 1
-                  FROM organization_entitlements
-                  WHERE organization_id = ?
-                    AND revision = ?
-                )
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
              ON CONFLICT(organization_id) DO UPDATE SET
                schema_version = excluded.schema_version,
                revision = excluded.revision,
                state = excluded.state,
                capabilities_json = excluded.capabilities_json,
                active_event_limit = excluded.active_event_limit,
+               organizer_seat_limit = excluded.organizer_seat_limit,
                not_before = excluded.not_before,
                expires_at = excluded.expires_at,
                updated_at = excluded.updated_at
@@ -92,13 +121,11 @@ export class D1OrganizationEntitlementRepository
             parsed.state,
             capabilitiesJson,
             parsed.limits.activeEvents,
+            parsed.limits.organizerSeats,
             parsed.notBefore,
             parsed.expiresAt,
             audit.occurredAt,
             audit.occurredAt,
-            audit.expectedRevision,
-            parsed.organizationId,
-            audit.expectedRevision,
             audit.expectedRevision,
           ),
         guard(
@@ -112,6 +139,7 @@ export class D1OrganizationEntitlementRepository
                AND state = ?
                AND capabilities_json = ?
                AND active_event_limit IS ?
+               AND organizer_seat_limit IS ?
                AND not_before = ?
                AND expires_at IS ?
            )`,
@@ -122,6 +150,7 @@ export class D1OrganizationEntitlementRepository
             parsed.state,
             capabilitiesJson,
             parsed.limits.activeEvents,
+            parsed.limits.organizerSeats,
             parsed.notBefore,
             parsed.expiresAt,
           ],

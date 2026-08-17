@@ -584,9 +584,7 @@ function answerBoolean(answers: Record<string, unknown>, key: string): boolean {
   return answers[key] === true;
 }
 
-function promoteCanonicalTitleAnswers(
-  answers: Record<string, unknown>,
-): Record<string, unknown> {
+function promoteCanonicalTitleAnswers(answers: Record<string, unknown>): Record<string, unknown> {
   const currentTitle = answers.title;
   if (typeof currentTitle === "string" && currentTitle.trim().length > 0) {
     return answers;
@@ -602,7 +600,9 @@ function promoteCanonicalTitleAnswers(
     );
   });
   if (titleLikeKeys.length !== 1) return answers;
-  const candidate = answers[titleLikeKeys[0]!];
+  const titleLikeKey = titleLikeKeys[0];
+  if (titleLikeKey === undefined) return answers;
+  const candidate = answers[titleLikeKey];
   if (typeof candidate !== "string" || candidate.trim().length === 0) return answers;
   return { ...answers, title: candidate };
 }
@@ -625,9 +625,7 @@ function draftFromSubmission(eventSlug: string, submission: CfpServerSubmission)
     },
     submission: {
       title: answerString(answers, "title"),
-      description:
-        answerString(answers, "abstract") ||
-        answerString(answers, "description"),
+      description: answerString(answers, "abstract") || answerString(answers, "description"),
       format: answerString(answers, "format"),
       tags: Array.isArray(answers.tags)
         ? answers.tags.filter((value): value is string => typeof value === "string")
@@ -2260,24 +2258,16 @@ export function CfpComplete({
           Check your speaker status dashboard for the submission and any tasks that need to be
           completed.
         </p>
-        {completionIdentity?.canEdit ? (
-          <Button
-            className={styles.textButton}
-            onClick={editSubmission}
-            type="button"
-            variant="ghost"
-          >
-            Edit submission
+        <div className={styles.completionActions}>
+          {completionIdentity?.canEdit ? (
+            <Button onClick={editSubmission} type="button" variant="outline">
+              Edit submission
+            </Button>
+          ) : null}
+          <Button onClick={submitAnotherSession} type="button" variant="outline">
+            Submit another session
           </Button>
-        ) : null}
-        <Button
-          className={styles.textButton}
-          onClick={submitAnotherSession}
-          type="button"
-          variant="ghost"
-        >
-          Submit another session
-        </Button>
+        </div>
         <Button
           className={styles.primaryButton}
           onClick={() =>
@@ -2285,7 +2275,7 @@ export function CfpComplete({
           }
           type="button"
         >
-          View submission status dashboard
+          View submission
         </Button>
       </div>
     </PublicCfpShell>

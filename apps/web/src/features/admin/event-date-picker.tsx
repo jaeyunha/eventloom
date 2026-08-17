@@ -1,6 +1,7 @@
 "use client";
 
 import type { TimeDisambiguation } from "@eventloom/contracts";
+import type { ReactNode } from "react";
 import { EventDatePickerFields } from "./event-date-picker-fields";
 
 export type EventDateMode = "range" | "individual";
@@ -38,6 +39,7 @@ export interface EventDatePickerProps extends EventDateSelectionValue {
   readonly eyebrow?: string;
   readonly title?: string;
   readonly description?: string;
+  readonly headerAside?: ReactNode;
   readonly startLabel?: string;
   readonly endLabel?: string;
   readonly startTimeLabel?: string;
@@ -76,6 +78,7 @@ export function EventDatePicker({
   description = "Use a continuous span or choose only the days that belong to the event.",
   startLabel = "Starts",
   endLabel = "Ends",
+  headerAside,
   startTimeLabel = "Start time",
   endTimeLabel = "End time",
   defaultStartTime = "09:00",
@@ -111,6 +114,7 @@ export function EventDatePicker({
       title={title}
       description={description}
       startLabel={startLabel}
+      headerAside={headerAside}
       endLabel={endLabel}
       startTimeLabel={startTimeLabel}
       endTimeLabel={endTimeLabel}

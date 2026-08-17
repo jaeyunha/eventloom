@@ -6,6 +6,7 @@ describe("neutralSpeakerDisplayName", () => {
     expect(neutralSpeakerDisplayName("p-1", "Ada", "Grace")).toBe("Ada");
     expect(neutralSpeakerDisplayName("p-1", undefined, "", "  ", "Grace")).toBe("Grace");
     expect(neutralSpeakerDisplayName("p-1", null, "  Ada  ")).toBe("  Ada  ");
+    expect(neutralSpeakerDisplayName("participant-1", "Ada Lovelace")).toBe("Ada Lovelace");
   });
 
   it("rejects blank labels and labels equal to the participant id", () => {
@@ -16,5 +17,7 @@ describe("neutralSpeakerDisplayName", () => {
     expect(neutralSpeakerDisplayName("p-1", "p-1")).toBe(NEUTRAL_SPEAKER_LABEL);
     expect(neutralSpeakerDisplayName("p-1", "  p-1  ", "Ada")).toBe("Ada");
     expect(neutralSpeakerDisplayName(undefined, "")).toBe(NEUTRAL_SPEAKER_LABEL);
+    expect(neutralSpeakerDisplayName("participant-1", "", "participant-1")).toBe("Speaker");
+    expect(neutralSpeakerDisplayName("participant-1", " participant-1 ")).toBe("Speaker");
   });
 });

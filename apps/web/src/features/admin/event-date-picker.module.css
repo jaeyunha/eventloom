@@ -33,6 +33,24 @@
   font-size: 0.8rem;
   line-height: 1.5;
 }
+.headingCopy {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 0;
+}
+.clearDate {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 2rem;
+  margin: 0.45rem 0 0;
+  padding-inline: 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+}
+.clearDate:hover {
+  color: var(--foreground);
+}
 
 .headingActions {
   display: flex;
@@ -252,7 +270,7 @@
 
 .details {
   display: grid;
-  align-content: start;
+  align-content: stretch;
   gap: 1rem;
   padding: 1rem 1.15rem 1.15rem;
   border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -325,14 +343,29 @@
   height: 0.75rem;
 }
 
+.scheduleFooter {
+  display: grid;
+  align-content: end;
+  gap: 0.75rem;
+  min-height: 0;
+  margin-top: 0.75rem;
+}
 .timeHint {
   margin: 0;
   color: var(--muted-foreground);
   font-size: 0.73rem;
   line-height: 1.55;
 }
+.scheduleFooter > :global(.eventScheduleTimezone) {
+  width: min(18rem, 100%);
+  justify-self: end;
+}
 
 @media (max-width: 50rem) {
+  .scheduleFooter > :global(.eventScheduleTimezone) {
+    width: 100%;
+    margin-left: 0;
+  }
   .heading {
     display: grid;
   }

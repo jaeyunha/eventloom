@@ -54,6 +54,29 @@ describe("event date selection", () => {
     expect(markup).not.toContain('type="time"');
   });
 
+  it("places a compact clear action under the schedule copy", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EventDatePicker, {
+        mode: "single",
+        startsAt: "2026-08-24T17:00",
+        endsAt: "2026-08-24T17:00",
+        scheduleDates: [],
+        clearable: true,
+        showModeToggle: false,
+        eyebrow: "Plan schedule",
+        title: "Overall review deadline",
+        description: "Update the deadline without exposing browser-native date controls.",
+        onChange: () => undefined,
+      }),
+    );
+
+    expect(markup).toMatch(
+      /headingCopy[\s\S]*Plan schedule[\s\S]*Overall review deadline[\s\S]*Clear date/,
+    );
+    expect(markup).toContain("clearDate");
+    expect(markup).not.toMatch(/headingActions[\s\S]*Clear date/);
+  });
+
   it("disables dates before the minimum and the selected open date while choosing close", () => {
     expect(isEventDateDisabled("2026-08-15", "2026-08-16")).toBe(true);
     expect(isEventDateDisabled("2026-08-16", "2026-08-16")).toBe(false);

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TemporalPicker } from "@/components/ui/temporal-picker";
 import styles from "./admin-shell.module.css";
+import { TIMEZONE_OPTIONS } from "./cfp-editor-model";
 import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
 import type { OrganizerEventEditorProps, OrganizerEventsData } from "./organizer-overview";
 import {
@@ -195,46 +196,39 @@ function OrganizerEventEditor({
           </span>
         </label>
       </div>
-      <div className={styles.eventTwoColumn}>
-        <label
-          className={`${styles.eventField} ${styles.eventFieldFull}`}
-          htmlFor="organizer-event-time-zone"
-        >
-          <span className={styles.eventFieldLabel}>Event time zone</span>
-          <Input
-            id="organizer-event-time-zone"
-            name="timeZone"
-            type="text"
-            list="organizer-event-time-zones"
-            value={values.timeZone}
-            placeholder="America/Los_Angeles"
-            required
-            onChange={(formEvent) => {
-              const timeZone = formEvent.target.value;
-              setValues((current) => ({
-                ...current,
-                timeZone,
-                startDisambiguation: undefined,
-                endDisambiguation: undefined,
-                cfpOpenDisambiguation: undefined,
-                cfpCloseDisambiguation: undefined,
-              }));
-              if (formError) setFormError(null);
-            }}
-          />
-          <span className={styles.eventFieldDescription}>
-            All event and agenda times are entered and shown in this time zone.
-          </span>
-          <datalist id="organizer-event-time-zones">
-            <option value="UTC" />
-            <option value="America/Los_Angeles" />
-            <option value="America/New_York" />
-            <option value="Europe/London" />
-            <option value="Asia/Tokyo" />
-          </datalist>
-        </label>
-      </div>
       <EventDatePicker
+        headerAside={
+          <label className={styles.eventScheduleTimezone} htmlFor="organizer-event-time-zone">
+            <span className={styles.eventFieldLabel}>Event time zone</span>
+            <select
+              id="organizer-event-time-zone"
+              name="timeZone"
+              value={values.timeZone}
+              required
+              onChange={(formEvent) => {
+                const timeZone = formEvent.target.value;
+                setValues((current) => ({
+                  ...current,
+                  timeZone,
+                  startDisambiguation: undefined,
+                  endDisambiguation: undefined,
+                  cfpOpenDisambiguation: undefined,
+                  cfpCloseDisambiguation: undefined,
+                }));
+                if (formError) setFormError(null);
+              }}
+            >
+              {!TIMEZONE_OPTIONS.includes(values.timeZone as (typeof TIMEZONE_OPTIONS)[number]) ? (
+                <option value={values.timeZone}>{values.timeZone}</option>
+              ) : null}
+              {TIMEZONE_OPTIONS.map((timeZone) => (
+                <option key={timeZone} value={timeZone}>
+                  {timeZone}
+                </option>
+              ))}
+            </select>
+          </label>
+        }
         mode={values.dateMode}
         startsAt={values.startsAt}
         endsAt={values.endsAt}
@@ -273,11 +267,12 @@ function OrganizerEventEditor({
           type="text"
           value={values.venue}
           maxLength={2_000}
-          placeholder="Pier 27, San Francisco or Online"
+          placeholder="Venue name · street address · city"
           onChange={(formEvent) => updateValue("venue", formEvent.target.value)}
         />
         <span className={styles.eventFieldDescription}>
-          Shown on the event. Session rooms and join links can be more specific.
+          Use a venue name and address, or enter Online. A map API is not required for this field.
+          Add a map link later without changing the event location.
         </span>
       </label>
       <details className={styles.eventAdvanced} open={values.cfpEnabled || undefined}>

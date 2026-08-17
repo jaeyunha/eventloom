@@ -518,7 +518,8 @@ function normalizeCanonicalTitleFields(form: CfpForm): CfpForm {
 
   const titleLike = form.submissionFields.filter((field) => looksLikeTitleField(field));
   if (titleLike.length !== 1) return form;
-  const target = titleLike[0]!;
+  const target = titleLike[0];
+  if (target === undefined) return form;
   return {
     ...form,
     submissionFields: form.submissionFields.map((field) =>
