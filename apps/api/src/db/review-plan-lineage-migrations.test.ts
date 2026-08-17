@@ -50,8 +50,7 @@ describe("review plan lineage migrations", () => {
       database.executeScript(migration("0037_review_plan_lineage_repair_triggers.sql"));
       database.executeScript(migration("0038_review_plan_revision_sync_lock.sql"));
       database.executeScript(migration("0039_review_plan_revision_sync_token.sql"));
-      database.executeScript(migration("0040_refine_review_plan_lineage_repair_candidates.sql"));
-      database.executeScript(migration("0041_truncated_review_plan_lineage_repair_candidates.sql"));
+
       database.executeScript(`
         INSERT INTO review_plans (
           organization_id, event_id, id, name, status, blind_review, closes_at,
@@ -152,17 +151,6 @@ describe("review plan lineage migrations", () => {
       database.executeScript(migration("0037_review_plan_lineage_repair_triggers.sql"));
       database.executeScript(migration("0038_review_plan_revision_sync_lock.sql"));
       database.executeScript(migration("0039_review_plan_revision_sync_token.sql"));
-      database.executeScript(`
-        INSERT INTO review_plan_lineage_repairs_required (
-          organization_id, event_id, plan_id, round_id, reason
-        ) VALUES
-          ('org-1', 'event-1', 'plan-summit-revision-planning', '', 'missing_predecessor_plan'),
-          (
-            'org-1', 'event-1', 'plan-summit-revision-planning',
-            'round-revision-planning', 'missing_predecessor_round'
-          );
-      `);
-      database.executeScript(migration("0040_refine_review_plan_lineage_repair_candidates.sql"));
 
       const remainingTriggers = await database
         .prepare(
@@ -239,8 +227,6 @@ describe("review plan lineage migrations", () => {
       database.executeScript(migration("0037_review_plan_lineage_repair_triggers.sql"));
       database.executeScript(migration("0038_review_plan_revision_sync_lock.sql"));
       database.executeScript(migration("0039_review_plan_revision_sync_token.sql"));
-      database.executeScript(migration("0040_refine_review_plan_lineage_repair_candidates.sql"));
-      database.executeScript(migration("0041_truncated_review_plan_lineage_repair_candidates.sql"));
 
       const repairs = await database
         .prepare(

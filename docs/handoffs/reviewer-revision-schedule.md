@@ -3,18 +3,23 @@
 ## Checkpoint purpose
 
 This branch contains the committed reviewer revision-lineage implementation plus
-an uncommitted post-rebase migration correction.
+a post-rebase migration consolidation checkpoint.
 
 - Branch: `fix/reviewer-revision-schedule`
 - Discovery head: `dc203d9d8711`
 - Checkpoint type: preserved work in progress; not deployed migration evidence
 
-## Uncommitted correction
+## Checkpoint correction
 
-- Enables SQLite foreign-key enforcement in migrations `0035` through `0041`
+- Enables SQLite foreign-key enforcement in migrations `0035` through `0039`
   with `PRAGMA foreign_keys = ON`.
+- Consolidates the unshipped candidate-predicate refinements from migrations
+  `0040` and `0041` into migrations `0036` and `0037`.
+- Deletes the now-redundant `0040` and `0041` migration files.
 - Updates the compound compare-and-swap evaluation repository fixture to apply
   migrations `0035`, `0038`, and `0039`.
+- Updates the lineage migration test and release runbook to the final
+  five-migration sequence.
 
 The retirement diff is limited to:
 
@@ -23,9 +28,9 @@ The retirement diff is limited to:
 - `apps/api/migrations/0037_review_plan_lineage_repair_triggers.sql`
 - `apps/api/migrations/0038_review_plan_revision_sync_lock.sql`
 - `apps/api/migrations/0039_review_plan_revision_sync_token.sql`
-- `apps/api/migrations/0040_refine_review_plan_lineage_repair_candidates.sql`
-- `apps/api/migrations/0041_truncated_review_plan_lineage_repair_candidates.sql`
 - `apps/api/src/infrastructure/cloudflare/repositories/evaluations.test.ts`
+- `apps/api/src/db/review-plan-lineage-migrations.test.ts`
+- `docs/release-runbook.md`
 
 ## Verification captured at retirement
 
@@ -37,10 +42,10 @@ was run for this retirement checkpoint.
 
 ## Known risks and remaining work
 
-1. Review whether the pragma in migration `0041` should precede its initial
-   trigger-drop statements for consistency.
+1. Confirm that consolidating unshipped migrations `0040` and `0041` is valid
+   for every environment; do not rewrite migrations that were already applied.
 2. Run the broader evaluation and migration test set plus repository checks.
-3. Apply migrations `0035` through `0041` to the target D1 environment in
+3. Apply migrations `0035` through `0039` to the target D1 environment in
    strict order.
 4. Inspect and resolve every row in
    `review_plan_lineage_repairs_required`; do not declare migration completion
