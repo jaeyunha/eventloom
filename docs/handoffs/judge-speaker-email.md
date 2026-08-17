@@ -15,18 +15,18 @@ current github/main. This lane remains source-only: do not deploy production.
 | Repository | [`jaeyunha/eventloom`](https://github.com/jaeyunha/eventloom) |
 | Local branch | `judge-speaker-email` |
 | Worktree | `/Users/jaeyunha/wt/open-sessionboard/judge-speaker-email` |
-| Current committed HEAD | `d7506032a3399ec8d28a552eb4025fdc187f70af` |
+| Current committed HEAD | Live PR #62 head; see the PR body for the exact SHA |
 | Integrated `github/main` | `5de02118b194c429bee50bf3eac9acd5ffeecf1e` |
 | Merge base | `5de02118b194c429bee50bf3eac9acd5ffeecf1e` |
-| Remote branch | `github/judge-speaker-email` at `d7506032a3399ec8d28a552eb4025fdc187f70af` |
+| Remote branch | `github/judge-speaker-email` (live tip tracked by PR #62) |
 | Upstream | `github/judge-speaker-email` |
 | Pull request | [#62](https://github.com/jaeyunha/eventloom/pull/62), final five-review gate pending |
 | GitHub handoff issue | [#53](https://github.com/jaeyunha/eventloom/issues/53) |
 
 The earlier retirement checkpoint remains historical. The active branch integrates
 current `github/main` and contains the verified canonicalization fix; PR #62 is the
-only active delivery record for this staging checkpoint. No production deployment is
-part of this lane.
+authoritative live SHA and delivery record for this staging checkpoint. No production
+deployment is part of this lane.
 
 ## Objective and Scope
 
