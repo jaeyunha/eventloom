@@ -119,7 +119,10 @@ Use separate backend-only credentials:
   `POST /api/internal/organizations` and
   `PUT /api/internal/organizations/:organizationId/entitlement` via
   `Authorization: Bearer <token>`. The request supplies the stable owner user ID
-  and a provider-neutral organization entitlement. Reusing the same
+  and a provider-neutral organization entitlement. Managed event creation
+  requires the `events.create` capability; `limits.activeEvents` and
+  `limits.organizerSeats` bound non-retired events and owner/admin seats,
+  respectively. Reusing the same
   `Idempotency-Key` with the same payload returns the original result.
 
 Local development defaults to `self-hosted`. Staging and production Wrangler

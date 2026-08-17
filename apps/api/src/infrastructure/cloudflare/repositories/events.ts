@@ -253,6 +253,7 @@ export class D1EventRepository implements EventRepository {
                     SELECT COUNT(*)
                       FROM events existing_event
                      WHERE existing_event.organization_id = ?
+                       AND existing_event.legacy_retired_at IS NULL
                   ) <= entitlement.active_event_limit
                 )
            )`,
@@ -482,6 +483,7 @@ export class D1EventRepository implements EventRepository {
                   SELECT COUNT(*)
                     FROM events existing_event
                    WHERE existing_event.organization_id = ?
+                     AND existing_event.legacy_retired_at IS NULL
                 ) < entitlement.active_event_limit
               )
          ) THEN 1 ELSE 0 END AS allowed`,

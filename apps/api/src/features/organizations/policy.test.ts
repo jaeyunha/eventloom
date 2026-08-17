@@ -17,9 +17,10 @@ const entitlement = (
   organizationId: "org-a",
   revision: 4,
   state: "active",
-  capabilities: ["api"],
+  capabilities: ["events.create"],
   limits: {
     activeEvents: 3,
+    organizerSeats: null,
   },
   notBefore: "2026-08-17T00:00:00.000Z",
   expiresAt: "2027-08-17T00:00:00.000Z",
@@ -55,6 +56,17 @@ describe("organization policy", () => {
     await expect(policy.authorizeEventCreation("org-a")).resolves.toEqual({
       kind: "entitled",
       entitlement: entitlement(),
+    });
+  });
+
+  it("requires the event creation capability in managed mode", async () => {
+    const repository = new InMemoryOrganizationEntitlementRepository([
+      entitlement({ capabilities: ["api"] }),
+    ]);
+    const policy = new ManagedOrganizationPolicy(repository, { clock: () => now });
+
+    await expect(policy.authorizeEventCreation("org-a")).rejects.toMatchObject({
+      code: "CAPABILITY_NOT_GRANTED",
     });
   });
 
@@ -95,7 +107,7 @@ describe("organization policy", () => {
     const next = entitlement({
       revision: 2,
       state: "restricted",
-      limits: { activeEvents: 0 },
+      limits: { activeEvents: 0, organizerSeats: null },
     });
     await expect(
       repository.putEntitlement(next, {

@@ -709,6 +709,18 @@ function randomToken(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function secretEquals(candidate: string | null, expected: string): boolean {
+  if (candidate === null) return false;
+  const candidateBytes = new TextEncoder().encode(candidate);
+  const expectedBytes = new TextEncoder().encode(expected);
+  let difference = candidateBytes.length ^ expectedBytes.length;
+  const length = Math.max(candidateBytes.length, expectedBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (candidateBytes[index] ?? 0) ^ (expectedBytes[index] ?? 0);
+  }
+  return difference === 0;
+}
+
 function repositoryConflict(error: unknown): boolean {
   return error instanceof Error && /constraint|unique|duplicate/i.test(error.message);
 }
@@ -950,9 +962,9 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
           .prepare(
             `INSERT INTO organization_entitlements (
                organization_id, schema_version, revision, state, capabilities_json,
-               active_event_limit, not_before, expires_at,
+               active_event_limit, organizer_seat_limit, not_before, expires_at,
                created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             input.entitlement.organizationId,
@@ -961,6 +973,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
             input.entitlement.state,
             JSON.stringify(input.entitlement.capabilities),
             input.entitlement.limits.activeEvents,
+            input.entitlement.limits.organizerSeats,
             input.entitlement.notBefore,
             input.entitlement.expiresAt,
             input.organization.createdAt,
@@ -2669,6 +2682,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
   });
   const memberService = new MemberService({
     identity: new D1MemberIdentityRepository(bindings.DB),
+    organizationEntitlements: entitlementRepository,
     auth: new D1MemberAuthBoundary(bindings.DB, bindings.WEB_ORIGIN),
     invitationDelivery: new CloudflareMemberInvitationDelivery(
       bindings.DB,
@@ -2733,7 +2747,10 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
           organizationBootstrap: {
             service: memberService,
             authenticate: (request: Request) =>
-              request.headers.get("x-eventloom-bootstrap-token") === provisioningToken,
+              secretEquals(
+                request.headers.get("x-eventloom-bootstrap-token"),
+                provisioningToken,
+              ),
           },
         }
       : {}),
@@ -2743,7 +2760,10 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
             service: memberService,
             entitlements: entitlementRepository,
             authenticate: (request: Request) =>
-              request.headers.get("authorization") === `Bearer ${provisioningToken}`,
+              secretEquals(
+                request.headers.get("authorization"),
+                `Bearer ${provisioningToken}`,
+              ),
           },
         }
       : {}),

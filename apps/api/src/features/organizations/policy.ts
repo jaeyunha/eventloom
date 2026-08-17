@@ -1,4 +1,7 @@
-import type { OrganizationEntitlement } from "@eventloom/contracts";
+import {
+  type OrganizationEntitlement,
+  organizationEntitlementCapabilities,
+} from "@eventloom/contracts";
 
 export interface OrganizationEntitlementRepository {
   getEntitlement(organizationId: string): Promise<OrganizationEntitlement | null>;
@@ -41,7 +44,8 @@ export type OrganizationPolicyErrorCode =
   | "ENTITLEMENT_MISSING"
   | "ORGANIZATION_RESTRICTED"
   | "ENTITLEMENT_NOT_ACTIVE"
-  | "ENTITLEMENT_EXPIRED";
+  | "ENTITLEMENT_EXPIRED"
+  | "CAPABILITY_NOT_GRANTED";
 
 export class OrganizationPolicyError extends Error {
   readonly code: OrganizationPolicyErrorCode;
@@ -57,6 +61,7 @@ export class InMemoryOrganizationEntitlementRepository
   implements OrganizationEntitlementCommandRepository
 {
   readonly #entitlements: Map<string, OrganizationEntitlement>;
+  readonly #audits = new Map<string, OrganizationEntitlement>();
 
   constructor(seed: readonly OrganizationEntitlement[] = []) {
     this.#entitlements = new Map(
@@ -79,7 +84,13 @@ export class InMemoryOrganizationEntitlementRepository
           "The entitlement revision is already associated with another payload.",
         );
       }
-      return structuredClone(current);
+      const prior = this.#audits.get(audit.id);
+      if (prior !== undefined && JSON.stringify(prior) === JSON.stringify(entitlement)) {
+        return structuredClone(current);
+      }
+      throw new OrganizationEntitlementConflictError(
+        "The organization entitlement revision is stale.",
+      );
     }
     if (
       (current === undefined && audit.expectedRevision !== 0) ||
@@ -91,6 +102,7 @@ export class InMemoryOrganizationEntitlementRepository
       );
     }
     this.#entitlements.set(entitlement.organizationId, structuredClone(entitlement));
+    this.#audits.set(audit.id, structuredClone(entitlement));
     return structuredClone(entitlement);
   }
 }
@@ -162,6 +174,12 @@ export class ManagedOrganizationPolicy implements OrganizationPolicy {
       throw new OrganizationPolicyError(
         "ENTITLEMENT_EXPIRED",
         "The organization entitlement has expired.",
+      );
+    }
+    if (!entitlement.capabilities.includes(organizationEntitlementCapabilities.eventCreation)) {
+      throw new OrganizationPolicyError(
+        "CAPABILITY_NOT_GRANTED",
+        "The organization entitlement does not grant event creation.",
       );
     }
 
