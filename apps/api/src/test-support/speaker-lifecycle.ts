@@ -50,7 +50,7 @@ const migrationNames = [
   "0028_remove_event_status.sql",
   "0029_agenda_validation_revision.sql",
   "0033_private_download_capabilities.sql",
-  "0042_program_publication_reservations.sql",
+  "0034_program_publication_reservations.sql",
   "0035_event_retirement_compatibility.sql",
   "0036_evaluation_export_jobs.sql",
   "0037_immutable_speaker_projection_snapshots.sql",

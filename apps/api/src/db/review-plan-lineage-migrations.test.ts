@@ -45,8 +45,8 @@ describe("review plan lineage migrations", () => {
         );
       `);
 
-      database.executeScript(migration("0044_review_plan_revision_lineage.sql"));
-      database.executeScript(migration("0045_review_plan_lineage_repairs.sql"));
+      database.executeScript(migration("0035_review_plan_revision_lineage.sql"));
+      database.executeScript(migration("0037_review_plan_lineage_repairs.sql"));
       database.executeScript(migration("0038_review_plan_lineage_repair_triggers.sql"));
       database.executeScript(migration("0039_review_plan_revision_sync_lock.sql"));
       database.executeScript(migration("0040_review_plan_revision_sync_token.sql"));
@@ -146,8 +146,8 @@ describe("review plan lineage migrations", () => {
           '2026-08-31T00:00:00.000Z', 0, 'none', NULL
         );
       `);
-      database.executeScript(migration("0044_review_plan_revision_lineage.sql"));
-      database.executeScript(migration("0045_review_plan_lineage_repairs.sql"));
+      database.executeScript(migration("0035_review_plan_revision_lineage.sql"));
+      database.executeScript(migration("0037_review_plan_lineage_repairs.sql"));
       database.executeScript(migration("0038_review_plan_lineage_repair_triggers.sql"));
       database.executeScript(migration("0039_review_plan_revision_sync_lock.sql"));
       database.executeScript(migration("0040_review_plan_revision_sync_token.sql"));
@@ -222,8 +222,8 @@ describe("review plan lineage migrations", () => {
           );
       `);
 
-      database.executeScript(migration("0044_review_plan_revision_lineage.sql"));
-      database.executeScript(migration("0045_review_plan_lineage_repairs.sql"));
+      database.executeScript(migration("0035_review_plan_revision_lineage.sql"));
+      database.executeScript(migration("0037_review_plan_lineage_repairs.sql"));
       database.executeScript(migration("0038_review_plan_lineage_repair_triggers.sql"));
       database.executeScript(migration("0039_review_plan_revision_sync_lock.sql"));
       database.executeScript(migration("0040_review_plan_revision_sync_token.sql"));

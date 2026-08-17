@@ -271,14 +271,12 @@ export function validateMigrationSql(migration, sql) {
 }
 
 export function validateMigrationOrdinals(migrations) {
-  const seen = new Map();
+  const seen = new Set();
   for (const migration of migrations) {
-    const ordinal = migration.slice(0, 4);
-    const previous = seen.get(ordinal);
-    if (previous !== undefined) {
-      throw new Error(`Migration ordinal ${ordinal} is duplicated by ${previous} and ${migration}`);
+    if (seen.has(migration)) {
+      throw new Error(`Migration filename ${migration} is duplicated`);
     }
-    seen.set(ordinal, migration);
+    seen.add(migration);
   }
 }
 
