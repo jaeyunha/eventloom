@@ -3599,14 +3599,17 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     );
     integrationRepository.refresh();
   });
-  const speakerProjections = new Map<string, PublishedSpeakerProjection>();
+  const speakerProjections = new Map<string, Map<string, PublishedSpeakerProjection>>();
   const speakerHeadshots = new Map<
     string,
     Map<
       string,
-      { assetId: string } & Pick<
-        PrivateAssetCapabilityBinding,
-        "objectKey" | "contentType" | "sizeBytes"
+      Map<
+        string,
+        { assetId: string } & Pick<
+          PrivateAssetCapabilityBinding,
+          "objectKey" | "contentType" | "sizeBytes"
+        >
       >
     >
   >();
@@ -3638,11 +3641,26 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   };
   const publishedSpeakerRoutes = {
     getProgramPublicationManifest: manifestForSlug,
-    async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
-      return speakerProjections.get(eventSlug) ?? null;
+    async getPublishedSpeakers(
+      eventSlug: string,
+      speakerProjectionId?: string,
+      speakerRevisionNumber?: number,
+    ): Promise<PublishedSpeakerProjection | null> {
+      if (speakerProjectionId === undefined || speakerRevisionNumber === undefined) return null;
+      const projection = speakerProjections.get(eventSlug)?.get(speakerProjectionId) ?? null;
+      return projection?.revision.number === speakerRevisionNumber ? projection : null;
     },
-    async getPublishedSpeakerHeadshot(eventSlug: string, speakerId: string) {
-      const binding = speakerHeadshots.get(eventSlug)?.get(speakerId);
+    async getPublishedSpeakerHeadshot(
+      eventSlug: string,
+      speakerId: string,
+      _programRevision?: number,
+      speakerProjectionId?: string,
+      speakerRevisionNumber?: number,
+    ) {
+      if (speakerProjectionId === undefined || speakerRevisionNumber === undefined) return null;
+      const projection = speakerProjections.get(eventSlug)?.get(speakerProjectionId);
+      if (projection?.revision.number !== speakerRevisionNumber) return null;
+      const binding = speakerHeadshots.get(eventSlug)?.get(speakerProjectionId)?.get(speakerId);
       if (binding === undefined) return null;
       const published = privateAssetGateway.readPublishedObject(binding);
       if (published === null) return null;
@@ -3734,8 +3752,15 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             ];
       }),
     );
-    const servedSpeakers = speakerProjections.get(event.slug)?.speakers;
-    const servedHeadshots = speakerHeadshots.get(event.slug);
+    const servedProjectionId = current?.servedManifest?.speakerProjectionId;
+    const servedSpeakers =
+      servedProjectionId === undefined
+        ? undefined
+        : speakerProjections.get(event.slug)?.get(servedProjectionId)?.speakers;
+    const servedHeadshots =
+      servedProjectionId === undefined
+        ? undefined
+        : speakerHeadshots.get(event.slug)?.get(servedProjectionId);
     const headshots =
       trigger === "approved-content-change" && servedHeadshots !== undefined
         ? new Map(
@@ -3798,6 +3823,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       speakers,
       headshots: Object.fromEntries(headshots),
     });
+    const speakerProjectionId = `${revision.id}:${speakerHash}`;
     const nextSpeakerProjection: PublishedSpeakerProjection = {
       event: {
         slug: event.slug,
@@ -3808,7 +3834,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         venueName: event.venue,
       },
       revision: {
-        id: revision.id,
+        id: speakerProjectionId,
         number: revision.revisionNumber,
         publishedAt: revision.publishedAt,
       },
@@ -3832,7 +3858,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       agendaProjectionId: revision.id,
       agendaRevisionNumber: revision.revisionNumber,
       agendaSourceHash: agendaHash,
-      speakerProjectionId: revision.id,
+      speakerProjectionId,
       speakerRevisionNumber: revision.revisionNumber,
       speakerSourceHash: speakerHash,
       approvedContentRevision: revision.revisionNumber,
@@ -3852,11 +3878,17 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     if (releaseId === null || pendingRevision === null) {
       throw new Error("The reserved local publication is missing pending release metadata.");
     }
-    const previousSpeakerProjection = speakerProjections.get(event.slug);
+    const previousSpeakerProjections = speakerProjections.get(event.slug);
     const previousSpeakerHeadshots = speakerHeadshots.get(event.slug);
     try {
-      speakerProjections.set(event.slug, nextSpeakerProjection);
-      speakerHeadshots.set(event.slug, headshots);
+      speakerProjections.set(
+        event.slug,
+        new Map(previousSpeakerProjections).set(speakerProjectionId, nextSpeakerProjection),
+      );
+      speakerHeadshots.set(
+        event.slug,
+        new Map(previousSpeakerHeadshots).set(speakerProjectionId, headshots),
+      );
       await publicationService.completeRebuild({
         organizationId: event.organizationId,
         eventId: event.id,
@@ -3866,10 +3898,10 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         reservationOwnerId,
       });
     } catch (error) {
-      if (previousSpeakerProjection === undefined) {
+      if (previousSpeakerProjections === undefined) {
         speakerProjections.delete(event.slug);
       } else {
-        speakerProjections.set(event.slug, previousSpeakerProjection);
+        speakerProjections.set(event.slug, previousSpeakerProjections);
       }
       if (previousSpeakerHeadshots === undefined) {
         speakerHeadshots.delete(event.slug);

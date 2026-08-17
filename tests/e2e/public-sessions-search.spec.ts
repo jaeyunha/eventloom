@@ -130,3 +130,70 @@ test("public agenda and itinerary remain usable on mobile", async ({ page }, tes
     path: testInfo.outputPath("public-itinerary-mobile.png"),
   });
 });
+
+test("public refresh tokens preserve panel geometry and readable metadata", async ({ page }) => {
+  await page.goto("/embed/demo-event/sessions");
+
+  const styles = await page.locator("[class*='embedRoot']").evaluate((root) => {
+    const computed = getComputedStyle(root);
+    const first = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (element === null) return null;
+      const style = getComputedStyle(element);
+      return {
+        borderRadius: style.borderRadius,
+        boxShadow: style.boxShadow,
+        color: style.color,
+      };
+    };
+    return {
+      radius3: computed.getPropertyValue("--pub-radius-3").trim(),
+      radius4: computed.getPropertyValue("--pub-radius-4").trim(),
+      shadow1: computed.getPropertyValue("--pub-shadow-1").trim(),
+      shadow2: computed.getPropertyValue("--pub-shadow-2").trim(),
+      subtle: computed.getPropertyValue("--pub-subtle").trim(),
+      muted: computed.getPropertyValue("--pub-muted").trim(),
+      masthead: first("[class*='embedMasthead']"),
+      filters: first("[class*='filters']"),
+      sessionCard: first("[class*='publicSessionCard']"),
+      sessionTime: first("[class*='publicSessionTime']"),
+    };
+  });
+
+  expect(styles.radius3).not.toBe("");
+  expect(styles.radius4).not.toBe("");
+  expect(styles.shadow1).not.toBe("");
+  expect(styles.shadow2).not.toBe("");
+  expect(styles.subtle).toBe(styles.muted);
+  expect(styles.masthead?.borderRadius).toBe("12px");
+  expect(styles.masthead?.boxShadow).not.toBe("none");
+  expect(styles.filters?.borderRadius).toBe("12px");
+  expect(styles.filters?.boxShadow).not.toBe("none");
+  expect(styles.sessionCard?.borderRadius).toContain("12px");
+  expect(styles.sessionCard?.boxShadow).not.toBe("none");
+  expect(styles.sessionTime?.borderRadius).toBe("8px");
+
+  await page.goto("/embed/demo-event/sessions?theme=dark");
+  const darkStyles = await page.locator("[class*='embedRoot']").evaluate((root) => {
+    const computed = getComputedStyle(root);
+    const masthead = document.querySelector<HTMLElement>("[class*='embedMasthead']");
+    const mastheadStyle = masthead === null ? null : getComputedStyle(masthead);
+    return {
+      radius3: computed.getPropertyValue("--pub-radius-3").trim(),
+      radius4: computed.getPropertyValue("--pub-radius-4").trim(),
+      shadow1: computed.getPropertyValue("--pub-shadow-1").trim(),
+      shadow2: computed.getPropertyValue("--pub-shadow-2").trim(),
+      subtle: computed.getPropertyValue("--pub-subtle").trim(),
+      muted: computed.getPropertyValue("--pub-muted").trim(),
+      mastheadRadius: mastheadStyle?.borderRadius,
+      mastheadShadow: mastheadStyle?.boxShadow,
+    };
+  });
+  expect(darkStyles.radius3).not.toBe("");
+  expect(darkStyles.radius4).not.toBe("");
+  expect(darkStyles.shadow1).not.toBe("");
+  expect(darkStyles.shadow2).not.toBe("");
+  expect(darkStyles.subtle).toBe(darkStyles.muted);
+  expect(darkStyles.mastheadRadius).toBe("12px");
+  expect(darkStyles.mastheadShadow).not.toBe("none");
+});

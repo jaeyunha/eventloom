@@ -68,7 +68,6 @@ export function EmbedFrame({
           "--pub-ink": textColor,
           "--pub-ink-secondary": `color-mix(in srgb, ${textColor} 82%, transparent)`,
           "--pub-muted": `color-mix(in srgb, ${textColor} 68%, transparent)`,
-          "--pub-subtle": `color-mix(in srgb, ${textColor} 52%, transparent)`,
         }
       : {}),
   } as CSSProperties;

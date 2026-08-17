@@ -1162,8 +1162,8 @@ interface AgendaCacheState {
   readonly bypassed: Set<string>;
   readonly generations: Map<string, number>;
   readonly persistence: Map<string, Promise<void>>;
-  readonly minimumRevisions: Map<string, number>;
-  readonly latestRevisions: Map<string, number>;
+  readonly minimumCacheRevisions: Map<string, number>;
+  readonly latestCacheRevisions: Map<string, number>;
 }
 
 const agendaCacheStates = new WeakMap<object, AgendaCacheState>();
@@ -1190,8 +1190,8 @@ function agendaCacheState(engine: AgendaEngine): AgendaCacheState {
     bypassed: new Set(),
     generations: new Map(),
     persistence: new Map(),
-    minimumRevisions: new Map(),
-    latestRevisions: new Map(),
+    minimumCacheRevisions: new Map(),
+    latestCacheRevisions: new Map(),
   };
   agendaCacheStates.set(key, created);
   return created;
@@ -1382,9 +1382,9 @@ function writeAgendaCacheResponse(
   path: string,
   entry: AgendaCacheEntry,
 ): void {
-  if ((state.minimumRevisions.get(path) ?? 0) > entry.revisionNumber) return;
-  if ((state.latestRevisions.get(path) ?? 0) > entry.revisionNumber) return;
-  state.latestRevisions.set(path, entry.revisionNumber);
+  if ((state.minimumCacheRevisions.get(path) ?? 0) > entry.cacheRevision) return;
+  if ((state.latestCacheRevisions.get(path) ?? 0) > entry.cacheRevision) return;
+  state.latestCacheRevisions.set(path, entry.cacheRevision);
   const generation = nextAgendaCacheGeneration(state, path);
   state.bypassed.delete(path);
   rememberAgendaCacheEntry(state, path, entry);
@@ -1397,6 +1397,7 @@ export async function invalidatePublishedAgendaCache(
   engine: AgendaEngine,
   eventId: string,
   revision: PublishedAgendaRevision,
+  cacheRevision?: number,
 ): Promise<void> {
   const state = agendaCacheStates.get(engine as unknown as object);
   const paths = new Set<string>();
@@ -1428,9 +1429,12 @@ export async function invalidatePublishedAgendaCache(
     for (const path of paths) {
       state.bypassed.add(path);
       nextAgendaCacheGeneration(state, path);
-      state.minimumRevisions.set(
+      state.minimumCacheRevisions.set(
         path,
-        Math.max(state.minimumRevisions.get(path) ?? 0, revision.revisionNumber),
+        Math.max(
+          state.minimumCacheRevisions.get(path) ?? 0,
+          cacheRevision ?? revision.revisionNumber,
+        ),
       );
     }
     while (state.bypassed.size > PUBLIC_AGENDA_CACHE_MAX_BYPASS_ENTRIES) {

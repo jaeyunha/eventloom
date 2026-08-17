@@ -10,7 +10,7 @@ commit, review, and PR links are maintained in
 
 - Repository: `jaeyunha/eventloom`
 - Branch: `judge-public-widgets`
-- Integrated base before final delivery: `a9d0019eac57aa90503a6623011e570e22620fcf`
+- Integrated base before final delivery: `5de02118b194c429bee50bf3eac9acd5ffeecf1e`
 - Checkpoint commit:
   `06299a29a52e8706e5951bf35d06bbe1c26963f9`
 - The base includes PR #42 feature head:
@@ -46,8 +46,10 @@ agenda caching, and removal of stale `Draft event` copy.
   foreign keys. Canonical D1 publication now stages those publicly unreachable projections before
   reservation while keeping manifest advancement last. Speaker projection IDs combine the agenda
   revision ID and speaker source hash, and migration
-  `0036_immutable_speaker_projection_snapshots.sql` permits multiple immutable snapshots for an
+  `0037_immutable_speaker_projection_snapshots.sql` permits multiple immutable snapshots for an
   expired or failed reservation retry without mutating an older orphan.
+- PR #61 contributes `0036_evaluation_export_jobs.sql`; the immutable speaker snapshot migration
+  is numbered `0037` to keep migration ordinals unique.
 - Migration `0035_event_retirement_compatibility.sql` reconciles deployment-window drift and keeps
   rollback-only `events.status` synchronized with `legacy_retired_at`.
 
@@ -69,21 +71,22 @@ evidence only and must not be committed.
 
 ## Final local verification
 
-- `make check` — passed after the final GitHub main integration and browser-test edit.
+- `make check` — passed after the final agenda-cache and migration repairs.
 - `make test` — passed; the final runtime phase completed 10 of 10 tests.
-- Focused retirement/public-widget Vitest gate — 14 files and 222 tests passed.
-- `node --test scripts/db/event-status-migration.test.mjs` — 1 test passed with recursive
-  triggers enabled.
+- Focused retirement/public-widget Vitest gate — 5 files and 93 tests passed.
+- Migration validation and lifecycle tests — 9 tests passed, including duplicate-ordinal rejection
+  and recursive-trigger retirement checks.
 - `bun run --filter @eventloom/api build` — passed as a Wrangler dry run.
 - `bun run --filter @eventloom/web build` — passed.
-- Final Chromium run on dedicated ports `62470`-`62472` — 4 tests passed:
-  session search, mobile agenda/itinerary, public headshots, and organizer `Event record` copy.
-- Independent code-quality, security, hands-on QA, context/history, visual-systems, and
-  visual-fidelity reviews passed after their blocking findings were repaired.
+- Final Chromium run on dedicated ports `62540`-`62542` — 5 tests passed:
+  session search, mobile agenda/itinerary, light/dark refresh tokens, public headshots, and
+  organizer `Event record` copy.
+- Fresh goal, code-quality, security, hands-on QA, and context reviews passed; visual-system and
+  visual-fidelity reviews also passed with the token and mobile-layout repairs.
 
 ## Constraints
 
-- Do not merge or deploy this lane as part of its delivery.
+- Merge the PR only after the final committed candidate is green; do not deploy production.
 - Fetch GitHub main again immediately before the final commit and record the exact base/head.
 - Preserve PR #42 reservation, completion, failure rollback, and cache invalidation semantics.
 - Keep the retained rebase autostash until its contents are explicitly audited; it is not part of

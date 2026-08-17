@@ -1792,6 +1792,56 @@ describe("anonymous published agenda feeds", () => {
       expect(getPublishedAgendaRevision).toHaveBeenCalledTimes(2);
     },
   );
+  it("repopulates agenda cache after rollback selects a lower child revision", async () => {
+    const revisionFour = publicRevision();
+    const revisionFive = {
+      ...revisionFour,
+      id: "revision-public-5",
+      revisionNumber: 5,
+      publishedAt: "2026-08-09T12:00:00.000Z",
+    };
+    let manifest = {
+      ...servedManifest(revisionFive),
+      id: "program-publication-5",
+      revision: 5,
+      cacheRevision: 5,
+    };
+    const getPublishedAgendaRevision = vi.fn(async (_eventId: string, revisionNumber: number) =>
+      revisionNumber === revisionFive.revisionNumber ? revisionFive : revisionFour,
+    );
+    const app = publicAppFor(
+      { getPublishedAgendaRevision } as unknown as AgendaEngine,
+      async () => ({
+        slug: "open-systems",
+        name: "Open Systems Summit",
+        timeZone: revisionFour.timeZone,
+        startsAt: "2026-09-18T16:00:00.000Z",
+        endsAt: "2026-09-18T23:00:00.000Z",
+        startsOn: "2026-09-18",
+        endsOn: "2026-09-18",
+        scheduleDates: ["2026-09-18"],
+        venueName: "Pier 27",
+      }),
+      undefined,
+      async () => manifest,
+      async () => revisionFour.eventId,
+    );
+
+    const first = await app.request("/api/public/events/open-systems/agenda.json");
+    expect(first.status).toBe(200);
+    manifest = {
+      ...servedManifest(revisionFour),
+      id: "program-publication-6",
+      revision: 6,
+      cacheRevision: 6,
+    };
+
+    const rollback = await app.request("/api/public/events/open-systems/agenda.json");
+    expect(rollback.status).toBe(200);
+    const cachedRollback = await app.request("/api/public/events/open-systems/agenda.json");
+    expect(cachedRollback.status).toBe(200);
+    expect(getPublishedAgendaRevision).toHaveBeenCalledTimes(2);
+  });
   it.each(["agenda", "agenda.json", "agenda.ics"])(
     "rejects a primed Cache API %s entry in a new isolate after the served manifest advances",
     async (suffix) => {
