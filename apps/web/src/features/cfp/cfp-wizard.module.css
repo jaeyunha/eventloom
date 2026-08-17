@@ -610,15 +610,41 @@
 }
 
 .tagOptions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
+  display: grid;
+  gap: 0.25rem;
 }
 
-.tagOptions label {
+.tagOptions button {
   display: flex;
+  width: 100%;
+  min-height: 2.5rem;
   align-items: center;
-  gap: var(--space-1);
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.tagOptions button:hover,
+.tagOptions button:focus-visible {
+  border-color: var(--color-accent);
+  background: var(--color-accent-mist);
+}
+
+.tagOptions button small {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+}
+
+.tagEmpty {
+  color: var(--color-muted);
+  font-size: 0.8125rem;
 }
 .selectedTags {
   display: flex;

@@ -1120,8 +1120,10 @@ function SearchableMultiField({
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const selectedValueSet = useMemo(() => new Set(value), [value]);
-  const options = fieldOptions(field).filter((option) =>
-    `${option.label} ${option.description ?? ""}`.toLocaleLowerCase().includes(normalizedQuery),
+  const options = fieldOptions(field).filter(
+    (option) =>
+      !selectedValueSet.has(option.value) &&
+      `${option.label} ${option.description ?? ""}`.toLocaleLowerCase().includes(normalizedQuery),
   );
   return (
     <div className={styles.multiSelect}>
@@ -1155,25 +1157,30 @@ function SearchableMultiField({
         type="search"
         value={query}
       />
-      <div className={styles.tagOptions}>
-        {options.map((option) => (
-          <label key={option.value}>
-            <input
-              checked={selectedValueSet.has(option.value)}
-              disabled={option.disabled}
-              onChange={() =>
-                onChange(
-                  selectedValueSet.has(option.value)
-                    ? value.filter((item) => item !== option.value)
-                    : [...value, option.value],
-                )
-              }
-              type="checkbox"
-            />
-            <span>{option.label}</span>
-          </label>
-        ))}
-      </div>
+      {normalizedQuery ? (
+        <div aria-label={`${field.label} options`} className={styles.tagOptions} role="listbox">
+          {options.length > 0 ? (
+            options.map((option) => (
+              <button
+                aria-selected={false}
+                disabled={option.disabled}
+                key={option.value}
+                role="option"
+                type="button"
+                onClick={() => {
+                  onChange([...value, option.value]);
+                  setQuery("");
+                }}
+              >
+                <span>{option.label}</span>
+                {option.description ? <small>{option.description}</small> : null}
+              </button>
+            ))
+          ) : (
+            <span className={styles.tagEmpty}>No matching options</span>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
