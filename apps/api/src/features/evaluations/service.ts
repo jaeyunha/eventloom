@@ -933,7 +933,7 @@ function isReviewForRoundRevision(
 }
 
 function isReviewableSubmission(submission: Readonly<{ status?: string | undefined }>): boolean {
-  return submission.status !== "withdrawn";
+  return submission.status !== "draft" && submission.status !== "withdrawn";
 }
 
 function gradingRevision(plan: EvaluationPlan): number {
@@ -1125,7 +1125,9 @@ export class EvaluationService {
         listedSubmissions
           .filter(
             (submission) =>
-              submission.tenantId === actor.tenantId && submission.eventId === normalizedEventId,
+              submission.tenantId === actor.tenantId &&
+              submission.eventId === normalizedEventId &&
+              isReviewableSubmission(submission),
           )
           .map((submission) => [submission.id, submission] as const),
       ).values(),
@@ -1148,9 +1150,9 @@ export class EvaluationService {
         decision.eventId === normalizedEventId &&
         decision.planId === plan.id,
     );
-    const activeSubmissions = [...submissions]
-      .filter((submission) => submission.status !== "withdrawn")
-      .sort((left, right) => left.id.localeCompare(right.id));
+    const activeSubmissions = [...submissions].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
     const activeSubmissionIdSet = new Set(activeSubmissions.map((submission) => submission.id));
     const effectiveAssignments = effectiveAssignmentsForPlan(plan, assignments, reviews).filter(
       (assignment) => activeSubmissionIdSet.has(assignment.submissionId),

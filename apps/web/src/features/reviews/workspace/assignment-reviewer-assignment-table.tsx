@@ -3,6 +3,7 @@
 import styles from "../review-workspace.module.css";
 import { AssignmentStatusBadge } from "./assignment-assignment-status-badge";
 import type { ReviewerAssignmentController } from "./assignment-reviewer-assignment-controller";
+import { participantDisplayLabel } from "./model-participant-display-label";
 import { reviewerDisplayLabel } from "./model-reviewer-display-label";
 
 export function ReviewerAssignmentTable({
@@ -18,7 +19,7 @@ export function ReviewerAssignmentTable({
     setSelectedAssignmentId,
   } = controller;
   if (seed.assignments.length === 0) {
-    return <p className={styles.fieldHint}>No reviewer assignments have been persisted yet.</p>;
+    return <p className={styles.fieldHint}>No reviewer assignments yet.</p>;
   }
   return (
     <div className={styles.tableWrap}>
@@ -26,25 +27,26 @@ export function ReviewerAssignmentTable({
         <caption>Active reviewer assignments and protected history</caption>
         <thead>
           <tr>
-            <th scope="col">Submission</th>
+            <th scope="col">Proposal</th>
             <th scope="col">Reviewer</th>
             <th scope="col">Round</th>
-            <th scope="col">Status / lineage</th>
-            <th scope="col">Atomic replacement</th>
+            <th scope="col">Status</th>
+            <th scope="col">Action</th>
           </tr>
         </thead>
         <tbody>
           {visibleAssignments.map((assignment) => {
             const aggregate = submissionById.get(assignment.submissionId);
             const round = roundById.get(assignment.roundId);
+            const participantNames = participantDisplayLabel(aggregate?.participants);
             const reviewer = reviewerDisplayLabel(assignment.reviewerId, reviewerMembers);
             const protectedHistory =
               assignment.status === "abstained" || assignment.status === "superseded";
             return (
               <tr key={assignment.id}>
-                <th scope="row" data-label="Submission">
-                  <strong>{aggregate?.title ?? "Untitled submission"}</strong>
-                  <span>{aggregate?.reference ?? "Submission"}</span>
+                <th scope="row" data-label="Proposal">
+                  <strong>{aggregate?.title ?? "No title"}</strong>
+                  {participantNames ? <span>{participantNames}</span> : null}
                 </th>
                 <td data-label="Reviewer">
                   <strong>{reviewer}</strong>
@@ -53,16 +55,13 @@ export function ReviewerAssignmentTable({
                 <td data-label="Status">
                   <AssignmentStatusBadge status={assignment.status} />
                   {assignment.predecessorAssignmentId || assignment.successorAssignmentId ? (
-                    <span className={styles.fieldHint}>
-                      predecessor: {assignment.predecessorAssignmentId ?? "none"} · successor:{" "}
-                      {assignment.successorAssignmentId ?? "none"}
-                    </span>
+                    <span className={styles.fieldHint}>Replacement history preserved</span>
                   ) : null}
                   {assignment.supersededReason ? (
                     <span className={styles.fieldHint}>Reason: {assignment.supersededReason}</span>
                   ) : null}
                 </td>
-                <td data-label="History">
+                <td data-label="Action">
                   <button
                     className={styles.secondaryButton}
                     type="button"

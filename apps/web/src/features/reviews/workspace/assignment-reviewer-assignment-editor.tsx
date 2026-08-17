@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import styles from "../review-workspace.module.css";
 import { AssignmentStatusBadge } from "./assignment-assignment-status-badge";
 import type { ReviewerAssignmentController } from "./assignment-reviewer-assignment-controller";
+import { participantDisplayLabel } from "./model-participant-display-label";
 
 export function ReviewerAssignmentEditor({
   controller,
@@ -33,6 +34,7 @@ export function ReviewerAssignmentEditor({
       </option>,
     );
   }
+  const participantNames = participantDisplayLabel(selectedAggregate?.participants);
   return (
     <section
       ref={assignmentEditorRef}
@@ -44,9 +46,7 @@ export function ReviewerAssignmentEditor({
       <div className={styles.sectionHeading}>
         <div>
           <p className={styles.sectionEyebrow}>Selected assignment</p>
-          <h3 id="assignment-editor-heading">
-            {selectedAggregate?.title ?? "Untitled submission"}
-          </h3>
+          <h3 id="assignment-editor-heading">{selectedAggregate?.title ?? "No title"}</h3>
         </div>
         <AssignmentStatusBadge status={selectedAssignment.status} />
       </div>
@@ -59,10 +59,12 @@ export function ReviewerAssignmentEditor({
           <dt>Round</dt>
           <dd>{selectedRound?.name ?? "Round unavailable"}</dd>
         </div>
-        <div>
-          <dt>Reference</dt>
-          <dd>{selectedAggregate?.reference ?? "Submission"}</dd>
-        </div>
+        {participantNames ? (
+          <div>
+            <dt>Participants</dt>
+            <dd>{participantNames}</dd>
+          </div>
+        ) : null}
       </dl>
       {selectedProtectedHistory ? (
         <p className={styles.fieldHint}>
