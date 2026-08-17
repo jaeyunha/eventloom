@@ -356,8 +356,8 @@ test("keeps submission content legible in dark mode", async ({ page }, testInfo)
   await Promise.all([page.waitForURL(/\/submissions\/[^/]+$/u), firstSubmission.click()]);
 
   const readableSubmissionText = [
-    page.getByText("Submission content", { exact: true }),
-    page.locator('section[aria-labelledby="abstract-heading"] > p'),
+    page.getByText("Submission overview", { exact: true }),
+    page.locator('section[aria-labelledby="submission-overview-heading"] p').first(),
     page.locator('section[aria-labelledby="timeline-heading"] ol p').first(),
   ];
   await expect(page.locator("html")).toHaveClass(/dark/);
@@ -371,7 +371,9 @@ test("keeps submission content legible in dark mode", async ({ page }, testInfo)
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobileAbstract = page.locator('section[aria-labelledby="abstract-heading"] > p');
+  const mobileAbstract = page
+    .locator('section[aria-labelledby="submission-overview-heading"] p')
+    .first();
   await expect(mobileAbstract).toBeVisible();
   await mobileAbstract.scrollIntoViewIfNeeded();
   await page.screenshot({
