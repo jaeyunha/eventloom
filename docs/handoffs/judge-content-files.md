@@ -16,7 +16,7 @@ continues from the pushed head and must not rely on its stale base/head values.
 - Exact current GitHub-main base incorporated:
   `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
 - Exact current pushed head:
-  `13e4627454a6d61b2136d45e127ef1259073f093`
+  `d5e304a25f8ea772871eace95771c84d2dc7d285`
 - All current verification in this document is product-scoped and refers to
   this exact head and the `c5fc50256d10be142e1c9e142d1f78f6980ca2e3` base.
 
