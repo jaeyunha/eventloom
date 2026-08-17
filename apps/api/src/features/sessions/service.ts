@@ -1040,12 +1040,7 @@ export class SessionService {
       input.description === undefined
         ? current.description
         : optionalText(input.description, "description", 20_000);
-    const contentChanged = nextTitle !== current.title || nextDescription !== current.description;
-    const nextContentStatus =
-      requestedContentStatus ??
-      (contentChanged
-        ? "Needs changes"
-        : (currentContentStatus ?? (sameStatus(nextStatus, "Accepted") ? "Approved" : undefined)));
+    const copyChanged = nextTitle !== current.title || nextDescription !== current.description;
     const referenceInput: Partial<CreateSessionInput> & { eventId: string } = { eventId };
     if (input.roomId !== undefined) referenceInput.roomId = input.roomId;
     if (input.trackId !== undefined) referenceInput.trackId = input.trackId;
@@ -1077,6 +1072,23 @@ export class SessionService {
             return currentReference === undefined ? { id } : { ...currentReference };
           })
         : normalized.speakerRoster;
+    const speakerContentChanged =
+      nextSpeakerIds.length !== current.speakerIds.length ||
+      nextSpeakerIds.some((id, index) => id !== current.speakerIds[index]) ||
+      nextSpeakerRoster.length !== current.speakerRoster.length ||
+      nextSpeakerRoster.some((reference, index) => {
+        const previous = current.speakerRoster[index];
+        return (
+          previous === undefined ||
+          reference.id !== previous.id ||
+          reference.displayName !== previous.displayName
+        );
+      });
+    const nextContentStatus =
+      requestedContentStatus ??
+      (copyChanged || speakerContentChanged
+        ? "Needs changes"
+        : (currentContentStatus ?? (sameStatus(nextStatus, "Accepted") ? "Approved" : undefined)));
     const nextRoomId = input.roomId === undefined ? current.roomId : normalized.roomId;
     const nextFormatId = input.formatId === undefined ? current.formatId : normalized.formatId;
     const nextLevelId = input.levelId === undefined ? current.levelId : normalized.levelId;
@@ -1113,7 +1125,12 @@ export class SessionService {
     if (nextFormatId === undefined) delete candidate.formatId;
     if (nextLevelId === undefined) delete candidate.levelId;
     if (nextTrackId === undefined) delete candidate.trackId;
-    if (acceptedSessionFieldsEqual(current, candidate)) return sessionProjection(current);
+    if (acceptedSessionFieldsEqual(current, candidate)) {
+      if (requestedContentStatus === "Approved") {
+        await this.synchronizeAgenda(actor, eventId);
+      }
+      return sessionProjection(current);
+    }
 
     const now = this.instant();
     const auditId = this.#generateId();
@@ -1787,7 +1804,8 @@ export class SessionService {
         record,
       ),
     );
-    if (resourceType === "track") await this.synchronizeAgenda(actor, eventId);
+    if (resourceType === "track" || resourceType === "format")
+      await this.synchronizeAgenda(actor, eventId);
     return clone(record);
   }
 
@@ -1878,7 +1896,8 @@ export class SessionService {
         next,
       ),
     );
-    if (resourceType === "track") await this.synchronizeAgenda(actor, eventId);
+    if (resourceType === "track" || resourceType === "format")
+      await this.synchronizeAgenda(actor, eventId);
     return clone(next);
   }
 
@@ -1928,7 +1947,8 @@ export class SessionService {
         undefined,
       ),
     );
-    if (resourceType === "track") await this.synchronizeAgenda(actor, eventId);
+    if (resourceType === "track" || resourceType === "format")
+      await this.synchronizeAgenda(actor, eventId);
     return clone(current as T);
   }
 

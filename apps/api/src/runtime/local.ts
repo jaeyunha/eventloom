@@ -127,6 +127,7 @@ import type {
 import type { CloudflareAiProviders } from "../integrations/ai";
 import type { CalendarIntegrationOptions } from "../integrations/calendar";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
+import { invalidatePublishedAgendaCache } from "../routes/agenda";
 import type {
   IntegrationAdminRouteDependencies,
   IntegrationApiKeyCreation,
@@ -142,7 +143,10 @@ import type {
   OrganizerOverviewEvent,
   OrganizerOverviewRouteDependencies,
 } from "../routes/organizer-overview";
-import type { PublishedSpeakerProjection } from "../routes/public-speakers";
+import {
+  invalidatePublishedSpeakerCache,
+  type PublishedSpeakerProjection,
+} from "../routes/public-speakers";
 import { createLocalCfpService, seedLocalCfpForm } from "./cfp";
 import { createRuntimeEventRoleInvitationAdapters } from "./d1";
 import { seedLocalCfpScenario } from "./local-cfp-scenario";
@@ -1606,9 +1610,10 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
 
 function localAgendaEngine(
   eventRepository: InMemoryEventRepository,
+  mutationLock: InMemoryAgendaMutationLock,
   suggestionProvider?: CloudflareAiProviders["agenda"],
 ): AgendaEngine {
-  return new AgendaEngine(new InMemoryAgendaRepository(), new InMemoryAgendaMutationLock(), {
+  return new AgendaEngine(new InMemoryAgendaRepository(), mutationLock, {
     clock: { now: () => new Date(SEEDED_AT) },
     idGenerator: {
       nextId: (() => {
@@ -2619,9 +2624,16 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         async enqueue(input) {
           const state = await publicationRepository.getState(input.organizationId, input.eventId);
           if (state === null) throw new Error("The pending program publication was not stored.");
+          const reservationOwnerId = state.releases.find(
+            (release) => release.id === input.releaseId && release.revision === input.revision,
+          )?.reservationOwnerId;
+          if (reservationOwnerId === null || reservationOwnerId === undefined) {
+            throw new Error("The pending program publication is missing reservation ownership.");
+          }
           await publicationService.completeRebuild({
             ...input,
             expectedPublicationVersion: state.version,
+            reservationOwnerId,
           });
           return { id: input.releaseId };
         },
@@ -2637,8 +2649,12 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const sessionRepository = new LocalSessionRepository(speakerRepository);
-  const agendaEngine = localAgendaEngine(eventRepository, aiProviders?.agenda);
+  const agendaMutationLock = new InMemoryAgendaMutationLock();
+  const agendaEngine = localAgendaEngine(eventRepository, agendaMutationLock, aiProviders?.agenda);
   let sessionService!: SessionService;
+  let completeApprovedRevision:
+    | ((eventId: string, revision: PublishedAgendaRevision) => Promise<void>)
+    | undefined;
   const agendaCatalogSynchronizer = new AgendaCatalogSynchronizer({
     engine: agendaEngine,
     catalogReader: {
@@ -2646,10 +2662,40 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
     minimumTravelMinutes: 10,
     actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+    maxRetries: 8,
   });
+  const contentPropagatingAgendaCatalogSynchronizer = {
+    ensureInitialized: agendaCatalogSynchronizer.ensureInitialized.bind(agendaCatalogSynchronizer),
+    async synchronize(input: {
+      readonly tenantId: string;
+      readonly eventId: string;
+      readonly actorId?: string;
+      readonly timeZone?: string;
+      readonly minimumTravelMinutes?: number;
+    }) {
+      const synchronized = await agendaCatalogSynchronizer.synchronizePublishedContent(
+        input,
+        (current) =>
+          agendaEngine.refreshPublishedContent({
+            eventId: input.eventId,
+            actorId: input.actorId ?? LOCAL_ORGANIZER_ACCOUNT_ID,
+            expectedCatalogVersion: current.draft.version,
+            catalog: current.catalog,
+            async afterRefresh(refresh) {
+              if (refresh.revision === null) return;
+              if (completeApprovedRevision === undefined) {
+                throw new Error("Approved public revision handoff is not initialized.");
+              }
+              await completeApprovedRevision(input.eventId, refresh.revision);
+            },
+          }),
+      );
+      return synchronized.draft;
+    },
+  };
   sessionService = new SessionService(sessionRepository, {
     clock: () => new Date(SEEDED_AT),
-    agendaCatalogSynchronizer,
+    agendaCatalogSynchronizer: contentPropagatingAgendaCatalogSynchronizer,
   });
   const organizerEventActor = {
     organizationId: LOCAL_ORGANIZATION_ID,
@@ -3472,50 +3518,117 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         throw error;
       }
       if (revision === null) return null;
-      await materializePublication(event.id, revision);
+      await agendaMutationLock.runExclusive(event.id, async () => {
+        const latest = await agendaEngine.getPublishedAgenda(event.id);
+        if (latest !== null) await materializePublication(event.id, latest);
+      });
       manifest =
         (await publicationRepository.getState(event.organizationId, event.id))?.servedManifest ??
         null;
     }
     return manifest;
   };
+  const publishedSpeakerRoutes = {
+    getProgramPublicationManifest: manifestForSlug,
+    async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
+      return speakerProjections.get(eventSlug) ?? null;
+    },
+  };
   const materializePublication = async (
     eventId: string,
     revision: PublishedAgendaRevision,
+    trigger: "approved-content-change" | "released-schedule-change" = "released-schedule-change",
   ): Promise<void> => {
     const event = await eventRepository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
     if (event === null) throw new Error("The published event could not be loaded.");
+    const currentAgenda = await agendaEngine.getPublishedAgenda(eventId);
+    if (currentAgenda === null || currentAgenda.id !== revision.id) return;
+    const current = await publicationRepository.getState(event.organizationId, event.id);
+    const servedAgendaRevision = current?.servedManifest?.agendaRevisionNumber;
+    if (servedAgendaRevision !== undefined && servedAgendaRevision >= revision.revisionNumber) {
+      return;
+    }
     const sessions = await sessionRepository.listSessions(LOCAL_ORGANIZATION_ID, event.id);
     const sessionById = new Map(sessions.map((session) => [session.id, session]));
-    const speakerSessions = new Map<string, Array<{ id: string; title: string }>>();
+    const speakerSessions = new Map<
+      string,
+      Array<{ id: string; title: string; trackNames: readonly string[] }>
+    >();
+    const approvedSpeakerNameById = new Map<string, string>();
     for (const entry of revision.entries) {
       const session = sessionById.get(entry.sessionId);
       if (session === undefined) continue;
-      for (const participantId of session.speakerIds) {
+      for (const [speakerIndex, participantId] of session.speakerIds.entries()) {
         const entries = speakerSessions.get(participantId) ?? [];
-        entries.push({ id: session.id, title: session.title });
+        entries.push({
+          id: session.id,
+          title: entry.metadata?.title ?? session.title,
+          trackNames: entry.metadata?.trackNames ?? [],
+        });
         speakerSessions.set(participantId, entries);
+        const approvedSpeakerName =
+          entry.metadata?.speakerNames[speakerIndex] ??
+          session.speakerRoster.find((reference) => reference.id === participantId)?.displayName;
+        if (approvedSpeakerName !== undefined) {
+          approvedSpeakerNameById.set(participantId, approvedSpeakerName);
+        }
       }
     }
     const profiles = await speakerRepository.listProfiles(event.id, [...speakerSessions.keys()]);
-    const speakers = profiles.map((profile) => {
-      const speakerSessionList = speakerSessions.get(profile.participantId) ?? [];
-      return {
-        id: profile.participantId,
-        displayName: profile.displayName,
-        pronouns: null,
-        jobTitle: profile.jobTitle ?? null,
-        organization: profile.company ?? null,
-        biography: profile.biography,
-        photoUrl: null,
-        sessionIds: speakerSessionList.map((session) => session.id),
-        sessionTitles: speakerSessionList.map((session) => session.title),
-        trackNames: [],
-      };
-    });
+    const profileById = new Map(profiles.map((profile) => [profile.participantId, profile]));
+    const servedSpeakers = speakerProjections.get(event.slug)?.speakers;
+    const speakers =
+      trigger === "approved-content-change" && servedSpeakers !== undefined
+        ? [...speakerSessions.entries()]
+            .map(([participantId, speakerSessionList]) => {
+              const served = servedSpeakers.find((speaker) => speaker.id === participantId);
+              const sessionIds = speakerSessionList.map((session) => session.id);
+              const sessionTitles = speakerSessionList.map((session) => session.title);
+              const trackNames = [
+                ...new Set(speakerSessionList.flatMap((session) => session.trackNames)),
+              ].sort();
+              return served === undefined
+                ? {
+                    id: participantId,
+                    displayName: approvedSpeakerNameById.get(participantId) ?? participantId,
+                    pronouns: null,
+                    jobTitle: null,
+                    organization: null,
+                    biography: "",
+                    photoUrl: null,
+                    sessionIds,
+                    sessionTitles,
+                    trackNames,
+                  }
+                : {
+                    ...served,
+                    sessionIds,
+                    sessionTitles,
+                    trackNames,
+                  };
+            })
+            .sort((left, right) => left.displayName.localeCompare(right.displayName))
+        : [...speakerSessions.entries()].map(([participantId, speakerSessionList]) => {
+            const profile = profileById.get(participantId);
+            return {
+              id: participantId,
+              displayName:
+                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? participantId,
+              pronouns: null,
+              jobTitle: profile?.jobTitle ?? null,
+              organization: profile?.company ?? null,
+              biography: profile?.biography ?? "",
+              photoUrl: null,
+              sessionIds: speakerSessionList.map((session) => session.id),
+              sessionTitles: speakerSessionList.map((session) => session.title),
+              trackNames: [
+                ...new Set(speakerSessionList.flatMap((session) => session.trackNames)),
+              ].sort(),
+            };
+          });
     const agendaHash = await sourceHash(revision);
     const speakerHash = await sourceHash(speakers);
-    speakerProjections.set(event.slug, {
+    const nextSpeakerProjection: PublishedSpeakerProjection = {
       event: {
         slug: event.slug,
         name: event.name,
@@ -3531,34 +3644,91 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
       speakers,
       sourceHash: speakerHash,
+    };
+    const actor = {
+      organizationId: event.organizationId,
+      userId: revision.publishedBy,
+      role: "owner" as const,
+      kind: "human" as const,
+    };
+    const latestAgenda = await agendaEngine.getPublishedAgenda(eventId);
+    if (latestAgenda === null || latestAgenda.id !== revision.id) return;
+    const reservationOwnerId = `local-publication:${eventId}`;
+    const pending = await publicationService.reserveRebuild(actor, {
+      organizationId: event.organizationId,
+      eventId: event.id,
+      trigger:
+        current?.servedManifest === null || current === null ? "initial-publication" : trigger,
+      agendaProjectionId: revision.id,
+      agendaRevisionNumber: revision.revisionNumber,
+      agendaSourceHash: agendaHash,
+      speakerProjectionId: revision.id,
+      speakerRevisionNumber: revision.revisionNumber,
+      speakerSourceHash: speakerHash,
+      approvedContentRevision: revision.revisionNumber,
+      approvedProfileRevision:
+        trigger === "approved-content-change"
+          ? (current?.servedManifest?.approvedProfileRevision ?? revision.revisionNumber)
+          : revision.revisionNumber,
+      releasedAssetRevision:
+        trigger === "approved-content-change"
+          ? (current?.servedManifest?.releasedAssetRevision ?? revision.revisionNumber)
+          : revision.revisionNumber,
+      parentServedRevision: current?.servedRevision ?? null,
+      reservationOwnerId,
     });
-    const current = await publicationRepository.getState(event.organizationId, event.id);
-    await publicationService.requestRebuild(
-      {
-        organizationId: event.organizationId,
-        userId: revision.publishedBy,
-        role: "owner",
-        kind: "human",
-      },
-      {
+    const releaseId = pending.pendingReleaseId;
+    const pendingRevision = pending.pendingRevision;
+    if (releaseId === null || pendingRevision === null) {
+      throw new Error("The reserved local publication is missing pending release metadata.");
+    }
+    const previousSpeakerProjection = speakerProjections.get(event.slug);
+    try {
+      speakerProjections.set(event.slug, nextSpeakerProjection);
+      await publicationService.completeRebuild({
         organizationId: event.organizationId,
         eventId: event.id,
-        trigger:
-          current?.servedManifest === null || current === null
-            ? "initial-publication"
-            : "released-schedule-change",
-        agendaProjectionId: revision.id,
-        agendaRevisionNumber: revision.revisionNumber,
-        agendaSourceHash: agendaHash,
-        speakerProjectionId: revision.id,
-        speakerRevisionNumber: revision.revisionNumber,
-        speakerSourceHash: speakerHash,
-        approvedContentRevision: revision.revisionNumber,
-        approvedProfileRevision: revision.revisionNumber,
-        releasedAssetRevision: revision.revisionNumber,
-        parentServedRevision: current?.servedRevision ?? null,
-      },
-    );
+        releaseId,
+        revision: pendingRevision,
+        expectedPublicationVersion: pending.version,
+        reservationOwnerId,
+      });
+    } catch (error) {
+      if (previousSpeakerProjection === undefined) {
+        speakerProjections.delete(event.slug);
+      } else {
+        speakerProjections.set(event.slug, previousSpeakerProjection);
+      }
+      try {
+        await publicationService.failRebuild({
+          organizationId: event.organizationId,
+          eventId: event.id,
+          releaseId,
+          revision: pendingRevision,
+          expectedPublicationVersion: pending.version,
+          reservationOwnerId,
+          reason: error instanceof Error ? error.message : "Local publication handoff failed.",
+        });
+      } catch (failure) {
+        throw new AggregateError([error, failure], "Local publication handoff cleanup failed.");
+      }
+      throw error;
+    }
+  };
+  const publicAgendaEngine = agendaEngineAfterSeed(agendaEngine, programGraphSeeded);
+  completeApprovedRevision = async (eventId, revision) => {
+    await materializePublication(eventId, revision, "approved-content-change");
+    const event = await eventRepository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
+    const publication = await publicationRepository.getState(LOCAL_ORGANIZATION_ID, eventId);
+    if (event !== null) {
+      await invalidatePublishedSpeakerCache(
+        publishedSpeakerRoutes,
+        event.slug,
+        publication?.servedRevision ?? undefined,
+        publication?.servedManifest?.cacheRevision,
+      );
+    }
+    await invalidatePublishedAgendaCache(publicAgendaEngine, eventId, revision);
   };
   return {
     access: {
@@ -3747,7 +3917,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
     },
     agenda: {
-      engine: agendaEngineAfterSeed(agendaEngine, programGraphSeeded),
+      engine: publicAgendaEngine,
       calendarUidDomain: LOCAL_CALENDAR_OPTIONS.uidDomain,
       async organizationIdForEvent(eventId) {
         await fixtureGraphReady;
@@ -3829,12 +3999,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         };
       },
     },
-    publishedSpeakers: {
-      getProgramPublicationManifest: manifestForSlug,
-      async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
-        return speakerProjections.get(eventSlug) ?? null;
-      },
-    },
+    publishedSpeakers: publishedSpeakerRoutes,
     publishedEvents: {
       async listPublishedEvents() {
         await programGraphSeeded;
