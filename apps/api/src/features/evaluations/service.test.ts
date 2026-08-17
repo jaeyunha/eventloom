@@ -3062,6 +3062,31 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(secondRevision.rounds[0]?.predecessorRoundId).toBe(opened.rounds[0]?.id);
   });
 
+  it("requires an explicit grading lock before inserting a revision", async () => {
+    const { repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const unlocked = {
+      ...plan,
+      gradingRevision: undefined,
+      gradingLockedAt: undefined,
+    };
+    await repository.putPlan(unlocked, plan.version);
+    const revision = {
+      ...unlocked,
+      id: "unlocked-revision",
+      predecessorPlanId: unlocked.id,
+      status: "draft" as const,
+      version: 1,
+    };
+
+    await expect(
+      repository.putPlan(revision, null, {
+        predecessorPlanId: unlocked.id,
+        expectedVersion: unlocked.version,
+        lineageVersions: [],
+      }),
+    ).rejects.toThrow("The evaluation plan changed since it was loaded.");
+  });
+
   it("keeps revision lineage linear and blocks non-tip lifecycle changes", async () => {
     const { service, plan } = await fixture({ reviewsPerSubmission: 1 });
     await service.revisePlanToDraft(organizer, plan.id, {
