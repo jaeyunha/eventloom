@@ -1324,7 +1324,7 @@ test("reviewers renders a bounded assignment index with one replacement editor",
   await expect(page.getByRole("combobox", { name: "Round" }).locator("option:checked")).toHaveText(
     targetRoundName ?? "",
   );
-  await expect(page.getByRole("combobox", { name: "Submission" })).toHaveValue(
+  await expect(page.getByRole("combobox", { name: "Proposal" })).toHaveValue(
     targetSubmissionId ?? "",
   );
 

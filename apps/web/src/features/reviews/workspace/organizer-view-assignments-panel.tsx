@@ -34,7 +34,7 @@ export function OrganizerAssignmentsPanel({
           <h2 id="assignments-unavailable-heading">Open the plan before assigning reviewers</h2>
           <p>
             Finish the rounds, dates, and scorecards in Setup, save the draft, and open the plan.
-            Round review teams and submission assignments will become available here.
+            Round review teams and proposal assignments will become available here.
           </p>
           <Button type="button" onClick={() => setView("setup")}>
             Finish plan setup
