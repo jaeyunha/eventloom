@@ -15,12 +15,12 @@ current github/main. This lane remains source-only: do not deploy production.
 | Repository | [`jaeyunha/eventloom`](https://github.com/jaeyunha/eventloom) |
 | Local branch | `judge-speaker-email` |
 | Worktree | `/Users/jaeyunha/wt/open-sessionboard/judge-speaker-email` |
-| Current committed HEAD | `91304614e37fc3764896587e664dfa32e3884c43` |
+| Current committed HEAD | `d7506032a3399ec8d28a552eb4025fdc187f70af` |
 | Integrated `github/main` | `5de02118b194c429bee50bf3eac9acd5ffeecf1e` |
 | Merge base | `5de02118b194c429bee50bf3eac9acd5ffeecf1e` |
-| Remote branch | `github/judge-speaker-email` at `91304614e37fc3764896587e664dfa32e3884c43` |
+| Remote branch | `github/judge-speaker-email` at `d7506032a3399ec8d28a552eb4025fdc187f70af` |
 | Upstream | `github/judge-speaker-email` |
-| Pull request | [#62](https://github.com/jaeyunha/eventloom/pull/62), staging verification in progress |
+| Pull request | [#62](https://github.com/jaeyunha/eventloom/pull/62), final five-review gate pending |
 | GitHub handoff issue | [#53](https://github.com/jaeyunha/eventloom/issues/53) |
 
 The earlier retirement checkpoint remains historical. The active branch integrates
