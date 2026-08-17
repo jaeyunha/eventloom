@@ -2,8 +2,8 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1.5rem;
-  width: min(100%, 96rem);
-  max-width: 96rem;
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
   padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1rem, 3vw, 2.5rem) 3rem;
   color: var(--foreground);
