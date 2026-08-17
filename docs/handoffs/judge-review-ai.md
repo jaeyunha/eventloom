@@ -6,7 +6,7 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3` (`github/main`)
-- Exact pushed head: `c85136ab975a27821ec66da60620c7a7a2ada3dc`
+- Exact pushed head: `991a20fc444002dd2a34b7d38ef70e4f40f2c11b`
 - PR: https://github.com/jaeyunha/eventloom/pull/34
 - Issue: https://github.com/jaeyunha/eventloom/issues/47
 - PR is open and not merged. No production deployment was performed.
@@ -31,10 +31,16 @@ confirmation. Completed behavior includes:
   human Accept/Edit/Reject confirmation.
 - Pending AI numeric suggestions are excluded from unrelated reviewer
   autosaves; only explicitly human-confirmed scores are serialized.
+- Schedule-only plan updates preserve review-write admission through a separate
+  mutable plan-version CAS.
+- Partial multi-criterion edits keep the suggestion actionable until every
+  candidate is resolved.
+- Naturally worded, submission-grounded rationales remain accepted without
+  accepting arbitrary filler.
 - Preservation of merged Eventloom work from PRs #31, #33, #40, #60, #61, #62,
   #63, and #66 through the c5fc502 integration.
 
-## Exact-head verification at c85136ab
+## Exact-head verification at 991a20fc
 
 - Focused matrix: PASS — 8 files, 297 passed, 1 skipped.
 - Authority-focused service/D1/composition suites: PASS — 198 passed.
@@ -50,25 +56,25 @@ confirmation. Completed behavior includes:
   `apps/web/src/features/admin/cfp-editor-sections.tsx`, and
   `apps/web/src/features/cfp/cfp-wizard.tsx`. All lane-owned changed files are
   formatter-clean; those three files were not modified by this lane.
-- Full repository build passed. `make test` has one unchanged Work Hub failure,
-  and `make check` has three canonical-main formatter failures.
+- Full repository build passed and `make check` passes. `make test` still has
+  current-main configuration/migration failures outside this lane.
 
 ## Five independent final reviews
 
 All five must inspect the same exact pushed head and PASS before merge:
 
-- [ ] Security — exact `c85136ab975a27821ec66da60620c7a7a2ada3dc`
-- [ ] Code quality — exact `c85136ab975a27821ec66da60620c7a7a2ada3dc`
-- [ ] Functional/visual QA — exact `c85136ab975a27821ec66da60620c7a7a2ada3dc`
-- [ ] Context/dependencies — exact `c85136ab975a27821ec66da60620c7a7a2ada3dc`
-- [ ] Goal/compliance — exact `c85136ab975a27821ec66da60620c7a7a2ada3dc`
+- [ ] Security — exact `991a20fc444002dd2a34b7d38ef70e4f40f2c11b`
+- [ ] Code quality — exact `991a20fc444002dd2a34b7d38ef70e4f40f2c11b`
+- [ ] Functional/visual QA — exact `991a20fc444002dd2a34b7d38ef70e4f40f2c11b`
+- [ ] Context/dependencies — exact `991a20fc444002dd2a34b7d38ef70e4f40f2c11b`
+- [ ] Goal/compliance — exact `991a20fc444002dd2a34b7d38ef70e4f40f2c11b`
 
 The lane must not merge until each checkbox is updated with a PASS verdict
 and exact-head evidence.
 
 ## Remaining tasks
 
-- [ ] Finish the five independent reviews on exact c85136ab.
+- [ ] Finish the five independent reviews on exact 991a20fc.
 - [ ] Record five PASS verdicts and evidence in this handoff and PR body.
 - [ ] Rerun full relevant gates and classify canonical-main-only formatter
   failures without modifying unrelated main files.
