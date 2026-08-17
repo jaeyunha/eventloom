@@ -87,6 +87,7 @@ export function mapPlan(
       rubric: { name: round.rubric.name, criteria: round.rubric.criteria },
     })),
     aggregates,
+    submittedReviews: [],
     assignments,
     progress: {
       totalAssignments: assignments.length,
