@@ -182,46 +182,39 @@ function OrganizerEventEditor({
           </span>
         </label>
       </div>
-      <div className={styles.eventTwoColumn}>
-        <label
-          className={`${styles.eventField} ${styles.eventFieldFull}`}
-          htmlFor="organizer-event-time-zone"
-        >
-          <span className={styles.eventFieldLabel}>Event time zone</span>
-          <select
-            id="organizer-event-time-zone"
-            name="timeZone"
-            value={values.timeZone}
-            required
-            onChange={(formEvent) => {
-              const timeZone = formEvent.target.value;
-              setValues((current) => ({
-                ...current,
-                timeZone,
-                startDisambiguation: undefined,
-                endDisambiguation: undefined,
-                cfpOpenDisambiguation: undefined,
-                cfpCloseDisambiguation: undefined,
-              }));
-              if (formError) setFormError(null);
-            }}
-          >
-            {!TIMEZONE_OPTIONS.includes(values.timeZone as (typeof TIMEZONE_OPTIONS)[number]) ? (
-              <option value={values.timeZone}>{values.timeZone}</option>
-            ) : null}
-            {TIMEZONE_OPTIONS.map((timeZone) => (
-              <option key={timeZone} value={timeZone}>
-                {timeZone}
-              </option>
-            ))}
-          </select>
-          <span className={styles.eventFieldDescription}>
-            Choose the event clock used for schedules and deadlines. You can change this before
-            saving the event.
-          </span>
-        </label>
-      </div>
       <EventDatePicker
+        headerAside={
+          <label className={styles.eventScheduleTimezone} htmlFor="organizer-event-time-zone">
+            <span className={styles.eventFieldLabel}>Event time zone</span>
+            <select
+              id="organizer-event-time-zone"
+              name="timeZone"
+              value={values.timeZone}
+              required
+              onChange={(formEvent) => {
+                const timeZone = formEvent.target.value;
+                setValues((current) => ({
+                  ...current,
+                  timeZone,
+                  startDisambiguation: undefined,
+                  endDisambiguation: undefined,
+                  cfpOpenDisambiguation: undefined,
+                  cfpCloseDisambiguation: undefined,
+                }));
+                if (formError) setFormError(null);
+              }}
+            >
+              {!TIMEZONE_OPTIONS.includes(values.timeZone as (typeof TIMEZONE_OPTIONS)[number]) ? (
+                <option value={values.timeZone}>{values.timeZone}</option>
+              ) : null}
+              {TIMEZONE_OPTIONS.map((timeZone) => (
+                <option key={timeZone} value={timeZone}>
+                  {timeZone}
+                </option>
+              ))}
+            </select>
+          </label>
+        }
         mode={values.dateMode}
         startsAt={values.startsAt}
         endsAt={values.endsAt}

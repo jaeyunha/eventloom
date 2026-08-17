@@ -2,6 +2,7 @@
 
 import type { TimeDisambiguation } from "@eventloom/contracts";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ interface EventDatePickerFieldsProps extends EventDateSelectionValue {
   readonly eyebrow: string;
   readonly title: string;
   readonly description: string;
+  readonly headerAside?: ReactNode;
   readonly startLabel: string;
   readonly endLabel: string;
   readonly startTimeLabel: string;
@@ -647,6 +649,7 @@ export function EventDatePickerFields({
   layout,
   clearable,
   disabled,
+  headerAside,
   eyebrow,
   title,
   description,
@@ -796,6 +799,7 @@ export function EventDatePickerFields({
           <p>{description}</p>
         </div>
         <div className={styles.headingActions}>
+          {headerAside}
           {clearable && (startDate !== "" || endDate !== "" || scheduleDates.length > 0) ? (
             <Button type="button" variant="ghost" onClick={clearSelection} disabled={disabled}>
               Clear {isSingleSelection ? "date" : "dates"}
