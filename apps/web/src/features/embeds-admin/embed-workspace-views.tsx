@@ -151,7 +151,7 @@ export function PublicationStatus({
       <CollapsibleContent forceMount className={workspaceStyles.publicationDetailsContent}>
         <div className={workspaceStyles.statusGrid}>
           <div className={workspaceStyles.statusItem}>
-            <span className={workspaceStyles.statusLabel}>Draft event</span>
+            <span className={workspaceStyles.statusLabel}>Event record</span>
             <strong>
               {eventVersion === null || eventVersion === undefined
                 ? "Version not loaded"

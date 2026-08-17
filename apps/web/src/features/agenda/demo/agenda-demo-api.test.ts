@@ -159,6 +159,10 @@ describe("local agenda demo API", () => {
         entryIds: ["entry_keynote", "entry_session_review"],
       }),
     ]);
+    await api.validate({
+      eventId: "evt_demo",
+      expectedVersion: conflicted.draft.version,
+    });
     await expect(
       api.publish({ eventId: "evt_demo", expectedVersion: conflicted.draft.version }),
     ).rejects.toMatchObject({
@@ -186,17 +190,27 @@ describe("local agenda demo API", () => {
       diff: { added: 2, changed: 0, removed: 0 },
     });
 
+    await api.validate({
+      eventId: "evt_demo",
+      expectedVersion: resolved.draft.version,
+    });
     const published = await api.publish({
       eventId: "evt_demo",
       expectedVersion: resolved.draft.version,
     });
-    expect(published.draft.version).toBe(resolved.draft.version + 1);
+    expect(published.draft.version).toBe(resolved.draft.version);
     expect(published.currentPublishedRevision).toMatchObject({
       number: 2,
       sessionCount: 3,
       current: true,
     });
     expect(published.revisions).toHaveLength(2);
+    const retry = await api.publish({
+      eventId: "evt_demo",
+      expectedVersion: resolved.draft.version,
+    });
+    expect(retry.currentPublishedRevision).toMatchObject({ number: 2, current: true });
+    expect(retry.revisions).toHaveLength(2);
   });
 
   it("requires capacity warnings to be explicitly overridden before publication", async () => {
@@ -232,6 +246,10 @@ describe("local agenda demo API", () => {
       ],
     });
 
+    await api.validate({
+      eventId: "evt_demo",
+      expectedVersion: overridden.draft.version,
+    });
     await expect(
       api.publish({ eventId: "evt_demo", expectedVersion: overridden.draft.version }),
     ).resolves.toMatchObject({ currentPublishedRevision: { number: 2 } });

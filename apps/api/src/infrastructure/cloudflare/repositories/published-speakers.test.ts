@@ -1,7 +1,14 @@
 import type { D1Database, D1PreparedStatement, R2Bucket } from "@cloudflare/workers-types";
 import { describe, expect, it } from "vitest";
+import type { PublishedAgendaRevision } from "../../../features/agenda/types";
+import type { EventRepository, ProgramPublicationRepository } from "../../../features/events/types";
+import type { SpeakerAsset, SpeakerRepository } from "../../../features/speaker/types";
 import { publishedSpeakerPhotoPath } from "../../../routes/public-speakers";
-import { D1PublishedSpeakerProjectionStore } from "./published-speakers";
+import {
+  D1PublishedSpeakerProjectionStore,
+  type PublishedSpeakerProjectionRecord,
+  selectReleasedSpeakerHeadshot,
+} from "./published-speakers";
 
 function objectBody(bytes: Uint8Array, contentType: string) {
   return {
@@ -18,7 +25,149 @@ function objectBody(bytes: Uint8Array, contentType: string) {
   };
 }
 
+function releasedHeadshot(id: string): SpeakerAsset {
+  return {
+    id,
+    tenantId: "org-1",
+    eventId: "event-1",
+    participantId: "participant-1",
+    kind: "headshot",
+    objectKey: `headshots/${id}.png`,
+    fileName: `${id}.png`,
+    contentType: "image/png",
+    sizeBytes: 1,
+    state: "ready",
+    reviewState: "approved",
+    releasedVersionId: id,
+    createdAt: "2026-08-15T00:00:00.000Z",
+  };
+}
+
+describe("selectReleasedSpeakerHeadshot", () => {
+  const input = {
+    tenantId: "org-1",
+    eventId: "event-1",
+    participantId: "participant-1",
+  };
+
+  it("keeps unversioned asset families distinct for an explicit selection", () => {
+    const selected = releasedHeadshot("selected");
+
+    expect(
+      selectReleasedSpeakerHeadshot([releasedHeadshot("other"), selected], {
+        ...input,
+        selectedAssetId: selected.id,
+      })?.id,
+    ).toBe(selected.id);
+  });
+
+  it("does not infer a fallback across multiple unversioned asset families", () => {
+    expect(
+      selectReleasedSpeakerHeadshot([releasedHeadshot("first"), releasedHeadshot("second")], input),
+    ).toBeUndefined();
+  });
+
+  it("fails closed when an explicit selection does not resolve", () => {
+    expect(
+      selectReleasedSpeakerHeadshot([releasedHeadshot("released")], {
+        ...input,
+        selectedAssetId: "missing",
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("D1PublishedSpeakerProjectionStore", () => {
+  it("clears requested headshot bindings when release revalidation fails", async () => {
+    const writes: Array<{ sql: string; values: unknown[] }> = [];
+    const database = {
+      prepare(sql: string) {
+        const statement = {
+          bind(...values: unknown[]) {
+            writes.push({ sql, values });
+            return statement;
+          },
+        } as unknown as D1PreparedStatement;
+        return statement;
+      },
+      async batch() {
+        return [];
+      },
+    } as unknown as D1Database;
+    const unreleased = releasedHeadshot("unreleased");
+    delete unreleased.releasedVersionId;
+    const store = new D1PublishedSpeakerProjectionStore(
+      database,
+      {} as unknown as EventRepository,
+      {} as unknown as ProgramPublicationRepository,
+      {
+        async listAssets() {
+          return [unreleased];
+        },
+      } as unknown as SpeakerRepository,
+      {} as R2Bucket,
+    );
+    const projection: PublishedSpeakerProjectionRecord = {
+      id: "speaker-revision-1",
+      organizationId: "org-1",
+      eventId: "event-1",
+      event: {
+        slug: "event-1",
+        name: "Event",
+        timeZone: "UTC",
+        startsOn: "2026-08-15",
+        endsOn: "2026-08-16",
+        venueName: null,
+      },
+      revision: {
+        id: "speaker-revision-1",
+        number: 1,
+        publishedAt: "2026-08-15T00:00:00.000Z",
+      },
+      speakers: [
+        {
+          id: "participant-1",
+          displayName: "Alex Rivera",
+          pronouns: null,
+          jobTitle: null,
+          organization: null,
+          biography: "",
+          photoUrl: publishedSpeakerPhotoPath("event-1", "participant-1"),
+          sessionIds: [],
+          sessionTitles: [],
+          trackNames: [],
+        },
+      ],
+      headshots: {
+        "participant-1": {
+          assetId: unreleased.id,
+          objectKey: unreleased.objectKey,
+          contentType: "image/png",
+          sizeBytes: unreleased.sizeBytes,
+        },
+      },
+    };
+    const agenda: PublishedAgendaRevision = {
+      id: "agenda-revision-1",
+      eventId: "event-1",
+      revisionNumber: 1,
+      sourceDraftVersion: 1,
+      timeZone: "UTC",
+      entries: [],
+      warningOverrides: [],
+      publishedAt: "2026-08-15T00:00:00.000Z",
+      publishedBy: "organizer-1",
+      rollbackOfRevisionId: null,
+    };
+
+    await store.putPublishedSpeakers(projection, agenda, "source-hash");
+
+    const speakerWrite = writes.find(({ sql }) =>
+      sql.includes("program_speaker_projection_entries"),
+    );
+    expect(speakerWrite?.values.slice(8, 13)).toEqual([null, null, null, null, null]);
+  });
+
   it("serves the headshot object pinned by the published projection", async () => {
     const eventSlug = "immutable-event";
     const eventId = "event-1";
@@ -39,6 +188,7 @@ describe("D1PublishedSpeakerProjectionStore", () => {
         state: "ready",
         reviewState: "approved",
         approvedVersionId: "asset-published",
+        releasedVersionId: "asset-published",
         objectKey: "headshots/published.png",
         contentType: "image/png",
         sizeBytes: pinnedBytes.byteLength,
@@ -161,6 +311,7 @@ describe("D1PublishedSpeakerProjectionStore", () => {
         state: "ready",
         reviewState: "approved",
         approvedVersionId: "asset-replacement",
+        releasedVersionId: "asset-replacement",
         objectKey: "headshots/replacement.png",
         contentType: "image/png",
         sizeBytes: replacementBytes.byteLength,

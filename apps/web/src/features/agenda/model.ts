@@ -56,6 +56,14 @@ export function eventDates(startsOn: string, endsOn: string): readonly string[] 
   return dates;
 }
 
+export function eventScheduleDates(
+  event: Pick<AgendaWorkspaceData["event"], "startsOn" | "endsOn" | "scheduleDates">,
+): readonly string[] {
+  return event.scheduleDates?.length
+    ? [...event.scheduleDates]
+    : eventDates(event.startsOn, event.endsOn);
+}
+
 export function resolveAgendaPlacementDate(selectedDay: string, eventStart: string): string {
   return selectedDay === "" ? eventStart : selectedDay;
 }
@@ -151,7 +159,13 @@ export function publicationReadiness(
   if (data.draft.entries.length === 0) {
     reasons.push("Schedule at least one accepted session.");
   }
-  if (!preview || preview.draftVersion !== data.draft.version) {
+  if (
+    !preview ||
+    preview.draftVersion !== data.draft.version ||
+    preview.validatedAt === null ||
+    data.validation?.draftVersion !== data.draft.version ||
+    data.validation.validatedAt !== preview.validatedAt
+  ) {
     reasons.push("Validate the current draft before publishing.");
   } else {
     if (preview.conflicts.length > 0) {

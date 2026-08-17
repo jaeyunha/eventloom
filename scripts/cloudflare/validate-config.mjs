@@ -270,6 +270,18 @@ export function validateMigrationSql(migration, sql) {
   }
 }
 
+export function validateMigrationOrdinals(migrations) {
+  const seen = new Map();
+  for (const migration of migrations) {
+    const ordinal = migration.slice(0, 4);
+    const previous = seen.get(ordinal);
+    if (previous !== undefined) {
+      throw new Error(`Migration ordinal ${ordinal} is duplicated by ${previous} and ${migration}`);
+    }
+    seen.set(ordinal, migration);
+  }
+}
+
 function validateMigrations() {
   const migrations = readdirSync(migrationsDirectory)
     .filter((file) => /^\d{4}_[a-z0-9_]+\.sql$/.test(file))
@@ -279,6 +291,7 @@ function validateMigrations() {
     throw new Error("At least one ordered D1 migration is required");
   }
 
+  validateMigrationOrdinals(migrations);
   for (const migration of migrations) {
     const sql = readFileSync(join(migrationsDirectory, migration), "utf8");
     validateMigrationSql(migration, sql);
