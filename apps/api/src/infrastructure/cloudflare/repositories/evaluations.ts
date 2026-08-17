@@ -323,6 +323,13 @@ function reviewWriteAdmissionGuard(
           AND assignment.rubric_revision = ?
           AND assignment.round_revision = ?
           AND assignment.submission_revision = ?
+          AND NOT EXISTS (
+            SELECT 1
+              FROM evaluation_conflicts conflict
+             WHERE conflict.organization_id = assignment.organization_id
+               AND conflict.event_id = assignment.event_id
+               AND conflict.assignment_id = assignment.id
+          )
           AND plan.status = 'open'
           AND (plan.closes_at IS NULL OR plan.closes_at > ?)
           AND (round.opens_at IS NULL OR round.opens_at <= ?)
