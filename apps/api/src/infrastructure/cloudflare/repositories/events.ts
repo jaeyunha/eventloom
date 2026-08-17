@@ -10,7 +10,10 @@ import type {
   EventRepository,
   EventRepositoryCommand,
 } from "../../../features/events/types";
-import { EventRepositoryConflictError } from "../../../features/events/types";
+import {
+  EventRepositoryCapacityError,
+  EventRepositoryConflictError,
+} from "../../../features/events/types";
 import { airtableSyncStatement, guard as d1Guard } from "./shared";
 
 const EMBED_METADATA_PREFIX = "__osb_embed_v1:";
@@ -232,6 +235,37 @@ export class D1EventRepository implements EventRepository {
             );
 
     const statements: D1PreparedStatement[] = [primary];
+    if (expectedVersion === null && command.creationEntitlement !== undefined) {
+      statements.push(
+        d1Guard(
+          this.binding,
+          `EXISTS (
+             SELECT 1
+               FROM organization_entitlements entitlement
+              WHERE entitlement.organization_id = ?
+                AND entitlement.revision = ?
+                AND entitlement.state = 'active'
+                AND entitlement.not_before <= ?
+                AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                AND (
+                  entitlement.active_event_limit IS NULL
+                  OR (
+                    SELECT COUNT(*)
+                      FROM events existing_event
+                     WHERE existing_event.organization_id = ?
+                  ) <= entitlement.active_event_limit
+                )
+           )`,
+          [
+            event.organizationId,
+            command.creationEntitlement.revision,
+            event.createdAt,
+            event.createdAt,
+            event.organizationId,
+          ],
+        ),
+      );
+    }
     statements.push(
       d1Guard(
         this.binding,
@@ -407,8 +441,54 @@ export class D1EventRepository implements EventRepository {
           ),
       );
     }
-    const results = await this.binding.batch(statements);
+    let results: readonly D1Result<unknown>[];
+    try {
+      results = await this.binding.batch(statements);
+    } catch (error) {
+      if (
+        expectedVersion === null &&
+        command.creationEntitlement !== undefined &&
+        !(await this.#eventCapacityAvailable(
+          event.organizationId,
+          event.createdAt,
+          command.creationEntitlement.revision,
+        ))
+      ) {
+        throw new EventRepositoryCapacityError();
+      }
+      throw error;
+    }
     if (changed(results[0]) !== 1) throw new EventRepositoryConflictError();
+  }
+
+  async #eventCapacityAvailable(
+    organizationId: string,
+    at: string,
+    revision: number,
+  ): Promise<boolean> {
+    const row = await this.binding
+      .prepare(
+        `SELECT CASE WHEN EXISTS (
+           SELECT 1
+             FROM organization_entitlements entitlement
+            WHERE entitlement.organization_id = ?
+              AND entitlement.revision = ?
+              AND entitlement.state = 'active'
+              AND entitlement.not_before <= ?
+              AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+              AND (
+                entitlement.active_event_limit IS NULL
+                OR (
+                  SELECT COUNT(*)
+                    FROM events existing_event
+                   WHERE existing_event.organization_id = ?
+                ) < entitlement.active_event_limit
+              )
+         ) THEN 1 ELSE 0 END AS allowed`,
+      )
+      .bind(organizationId, revision, at, at, organizationId)
+      .first<{ readonly allowed: number }>();
+    return row?.allowed === 1;
   }
 
   async appendAudit(entry: EventAuditEntry): Promise<void> {

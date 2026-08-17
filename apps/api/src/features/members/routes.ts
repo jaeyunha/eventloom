@@ -2,7 +2,6 @@ import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import { AuthAccessError, type AuthPrincipal } from "../auth/types";
 import {
-  type CreateOrganizationInput,
   type MemberService,
   MemberServiceError,
   type MemberServiceErrorCode,
@@ -29,7 +28,6 @@ export type MemberRouteService = Pick<
   | "grantReviewer"
   | "revokeReviewerGrant"
   | "reserveReviewerAssignment"
-  | "createOrganization"
   | "listOrganizations"
   | "switchOrganization"
   | "updateOrganization"
@@ -102,15 +100,6 @@ const organizationSlugSchema = z
   .regex(/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/iu);
 const organizationNameSchema = z.string().trim().min(1).max(200);
 const organizationConfigSchema = z.record(z.string(), z.unknown());
-const createOrganizationSchema = z
-  .object({
-    organizationId: organizationIdSchema,
-    slug: organizationSlugSchema,
-    name: organizationNameSchema,
-    config: organizationConfigSchema.optional(),
-    idempotencyKey: z.string().trim().min(1).max(512).optional(),
-  })
-  .strict();
 const updateOrganizationSchema = z
   .object({
     slug: organizationSlugSchema.optional(),
@@ -123,7 +112,6 @@ const updateOrganizationSchema = z
     "At least one organization field must be updated.",
   );
 type InviteBody = z.infer<typeof inviteSchema>;
-type CreateOrganizationBody = z.infer<typeof createOrganizationSchema>;
 type UpdateOrganizationBody = z.infer<typeof updateOrganizationSchema>;
 type PoolBody = z.infer<typeof poolSchema>;
 
@@ -207,34 +195,6 @@ function organizer(context: MemberContext, organizationId: string): MemberActor 
   return actor;
 }
 
-function organizationCreator(
-  context: MemberContext,
-  organizationId: string,
-): { actor: MemberActor; firstOrganization: boolean } {
-  const principal = context.get("authPrincipal");
-  if (principal === null || principal === undefined) {
-    throw new AuthAccessError("UNAUTHENTICATED", "Authentication is required.");
-  }
-  if (principal.kind !== "user") {
-    throw new AuthAccessError("FORBIDDEN", "User session authentication is required.");
-  }
-  if (principal.memberships.length === 0) {
-    return {
-      actor: {
-        kind: "user",
-        organizationId,
-        userId: principal.userId,
-        role: "owner",
-      },
-      firstOrganization: true,
-    };
-  }
-  return {
-    actor: organizer(context, organizationId),
-    firstOrganization: false,
-  };
-}
-
 function idempotencyKey(context: MemberContext): string {
   const result = context.req.header("idempotency-key")?.trim();
   if (result === undefined || result.length === 0) {
@@ -246,28 +206,6 @@ function idempotencyKey(context: MemberContext): string {
   }
   return result;
 }
-function optionalIdempotencyKey(
-  context: MemberContext,
-  bodyValue: { readonly idempotencyKey?: string },
-): string | undefined {
-  const headerValue = context.req.header("idempotency-key")?.trim();
-  const bodyKey = bodyValue.idempotencyKey?.trim();
-  if (
-    headerValue !== undefined &&
-    headerValue.length > 0 &&
-    bodyKey !== undefined &&
-    headerValue !== bodyKey
-  ) {
-    throw new MemberServiceError(
-      "VALIDATION_ERROR",
-      400,
-      "The Idempotency-Key header and request body key must match.",
-    );
-  }
-  const result = headerValue || bodyKey;
-  return result === undefined || result.length === 0 ? undefined : result;
-}
-
 function serviceErrorCode(code: MemberServiceErrorCode): ApiRouteErrorCode {
   switch (code) {
     case "FORBIDDEN":
@@ -402,27 +340,6 @@ export function createMemberRoutes(
       memberActor(context, currentOrganizationId),
     );
     return context.json({ data });
-  });
-
-  routes.post("/organizations", async (context) => {
-    const currentOrganizationId = routeParam(context, "organizationId");
-    const creator = organizationCreator(context, currentOrganizationId);
-    const input = await body<CreateOrganizationBody>(context, createOrganizationSchema);
-    const requestIdempotencyKey = optionalIdempotencyKey(context, {
-      ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
-    });
-    const data = await dependencies.service.createOrganization(
-      creator.actor,
-      {
-        organizationId: input.organizationId,
-        slug: input.slug,
-        name: input.name,
-        ...(input.config === undefined ? {} : { config: input.config }),
-        ...(requestIdempotencyKey === undefined ? {} : { idempotencyKey: requestIdempotencyKey }),
-      } satisfies CreateOrganizationInput,
-      creator.firstOrganization ? "first-organization" : "existing-owner",
-    );
-    return context.json({ data }, 201);
   });
 
   routes.get("/organizations/:targetOrganizationId", async (context) => {

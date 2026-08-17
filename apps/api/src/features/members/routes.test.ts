@@ -1030,7 +1030,7 @@ describe("member provisioning routes", () => {
     expect(replay.status).toBe(400);
   });
 
-  it("allows an authenticated user to create their first organization", async () => {
+  it("does not let the public member route bootstrap a first organization", async () => {
     const { service } = fixture();
     const currentPrincipal = principal();
     if (currentPrincipal.kind !== "user") throw new Error("Expected a user principal.");
@@ -1051,18 +1051,18 @@ describe("member provisioning routes", () => {
       },
     );
 
-    const responseBody = (await response.json()) as {
-      data?: { organizationId?: string };
-      error?: { message?: string };
-    };
-    expect(response.status, responseBody.error?.message).toBe(201);
-    expect(responseBody.data).toMatchObject({
-      organizationId: "org-first",
-    });
+    expect(response.status).toBe(404);
   });
 
-  it("creates, lists, switches, and updates a member-owned tenant context", async () => {
+  it("lists, switches, and updates a provisioned member-owned tenant context", async () => {
     const { service } = fixture();
+    await service.createOrganization(actor(), {
+      organizationId: "org-route-secondary",
+      slug: "route-secondary",
+      name: "Route Secondary",
+      config: { theme: "dark" },
+      idempotencyKey: "route-org-create",
+    });
     const app = appFor(service);
     const targetPrincipal = principal();
     if (targetPrincipal.kind !== "user") throw new Error("Expected a user principal.");
@@ -1074,21 +1074,6 @@ describe("member provisioning routes", () => {
       ],
     });
     const base = "http://localhost/api/admin/organizations/org-a/members/organizations";
-    const created = await app.request(base, {
-      method: "POST",
-      headers: { "content-type": "application/json", "idempotency-key": "route-org-create" },
-      body: JSON.stringify({
-        organizationId: "org-route-secondary",
-        slug: "route-secondary",
-        name: "Route Secondary",
-        config: { theme: "dark" },
-      }),
-    });
-    expect(created.status).toBe(201);
-    expect(await data<{ organizationId: string }>(created)).toMatchObject({
-      organizationId: "org-route-secondary",
-    });
-
     const listed = await app.request(base);
     expect(listed.status).toBe(200);
     expect(await data<readonly { organizationId: string }[]>(listed)).toEqual(
@@ -1133,8 +1118,7 @@ describe("member provisioning routes", () => {
         }),
       },
     );
-    expect(nonOwnerCreate.status).toBe(403);
-    expect(await error(nonOwnerCreate)).toMatchObject({ code: "ACCESS_DENIED" });
+    expect(nonOwnerCreate.status).toBe(404);
     const crossTenant = await appFor(service, principal("org-b", "owner", "owner-other")).request(
       base,
     );

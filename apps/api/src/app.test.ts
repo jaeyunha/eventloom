@@ -127,6 +127,60 @@ describe("API foundation", () => {
   });
 });
 
+describe("organization bootstrap authentication", () => {
+  it("authenticates the verified user before handling the bootstrap route", async () => {
+    const principal: UserPrincipal = {
+      kind: "user",
+      sessionId: "session-bootstrap",
+      userId: "bootstrap-owner",
+      email: "bootstrap@example.test",
+      memberships: [],
+      speakerGrants: [],
+      reviewerGrants: [],
+    };
+    const app = createApp({
+      authenticator: { authenticate: async () => principal },
+      organizationBootstrap: {
+        authenticate: (request) =>
+          request.headers.get("x-eventloom-bootstrap-token") === "operator-token",
+        service: {
+          async createOrganization(actor: { readonly organizationId: string }) {
+            return {
+              organizationId: actor.organizationId,
+              slug: "bootstrap",
+              name: "Bootstrap Organization",
+              config: {},
+              createdAt: "2026-08-17T00:00:00.000Z",
+              updatedAt: "2026-08-17T00:00:00.000Z",
+            };
+          },
+        } as never,
+      },
+    });
+
+    const response = await app.request(
+      "https://api.example.test/api/setup/organizations/bootstrap",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "bootstrap",
+          origin: environment.WEB_ORIGIN,
+          "x-eventloom-bootstrap-token": "operator-token",
+        },
+        body: JSON.stringify({
+          organizationId: "org-bootstrap",
+          slug: "bootstrap",
+          name: "Bootstrap Organization",
+        }),
+      },
+      environment,
+    );
+
+    expect(response.status).toBe(201);
+  });
+});
+
 describe("Airtable OAuth callback wiring", () => {
   it("mounts the provider callback at its static URL and leaves organization routing to opaque state", async () => {
     let callback: { readonly code: string; readonly state: string } | null = null;
