@@ -446,6 +446,7 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(
     page.getByText("Thank you for contributing to the program.", { exact: true }),
   ).toBeVisible();
+
   const statusDashboard = page.getByRole("button", { name: "View submission status dashboard" });
   await Promise.all([
     page.waitForURL(/\/portal\/submissions\?event=evt_evaluator_2026$/),
@@ -1573,6 +1574,32 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   ).toBe(true);
   await page.screenshot({
     path: testInfo.outputPath("applicant-cfp-complete-mobile.png"),
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ height: 900, width: 1440 });
+  const submittedSnapshot = cloneCfp(harness.submission);
+  const submittedEditRequestIndex = harness.requests.length;
+  await page.getByRole("button", { name: "Edit submission" }).click();
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/submission$`));
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/account$`));
+  await expect(page.getByLabel("Email address")).toHaveValue("cfp-e2e@example.test");
+  await page.getByRole("button", { name: "Continue to proposal" }).click();
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/submission$`));
+  expect(harness.submission.id).toBe(submittedSnapshot.id);
+  expect(harness.submission.version).toBe(submittedSnapshot.version);
+  expect(
+    harness.requests
+      .slice(submittedEditRequestIndex)
+      .filter(
+        (request) =>
+          request.method() === "POST" &&
+          new URL(request.url()).pathname.endsWith(`/forms/${CFP_FORM_ID}/drafts`),
+      ),
+  ).toHaveLength(0);
+  await page.screenshot({
+    path: testInfo.outputPath("submitted-edit-back-forward.png"),
     fullPage: true,
   });
 
