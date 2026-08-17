@@ -335,13 +335,13 @@ export function PublicAgendaView({
     [normalizedQuery],
   );
   const visibleEntries = useMemo(() => {
-    const configuredTrackNames = new Set(trackList);
+    const configuredTrackIds = new Set(trackList);
     return filterAgendaEntries(agenda.entries, validDay, validTrack, agenda.event.timeZone).filter(
       (entry) =>
         (!validFormat || entry.format === validFormat) &&
         (!validRoom || entry.roomName === validRoom) &&
         (trackList.length === 0 ||
-          entry.trackNames.some((trackName) => configuredTrackNames.has(trackName))) &&
+          (entry.trackIds?.some((trackId) => configuredTrackIds.has(trackId)) ?? false)) &&
         (normalizedQueryPattern === null ||
           normalizedQueryPattern.test(entrySearchText(entry, speakerSearchTermsBySessionId))),
     );

@@ -22,6 +22,7 @@ import { createCommunicationRoutes } from "./features/communications/routes";
 import type { CommunicationService } from "./features/communications/service";
 import type { CommunicationActor } from "./features/communications/types";
 import { type CrmRouteDependencies, createCrmRoutes } from "./features/crm/routes";
+import type { EvaluationExportCoordinator } from "./features/evaluations/export-jobs";
 import {
   createEvaluationRoutes,
   type EvaluationReminderBoundary,
@@ -116,6 +117,7 @@ export interface EvaluationRouteDependencies {
   readonly service: EvaluationService;
   readonly reminders?: EvaluationReminderBoundary;
   readonly reviewerIdentity?: EvaluationReviewerIdentityBoundary;
+  readonly resultsExports?: EvaluationExportCoordinator;
   readonly actorFor: (
     principal: AuthPrincipal,
     request: Request,
@@ -624,6 +626,7 @@ export function createApp<
       createEvaluationRoutes(dependencies.evaluations.service, {
         reminders: dependencies.evaluations.reminders,
         reviewerIdentity: dependencies.evaluations.reviewerIdentity,
+        resultsExports: dependencies.evaluations.resultsExports,
       }),
     );
   }
