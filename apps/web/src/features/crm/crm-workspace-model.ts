@@ -558,7 +558,9 @@ export async function refreshCrmEventMembershipAfterSave(
   loadHistory: () => Promise<readonly CrmHistoryEntry[]>,
   loadAnalytics: () => Promise<void>,
   loadContacts: () => Promise<void>,
+  markContactMutation: () => void,
 ): Promise<readonly CrmHistoryEntry[]> {
+  markContactMutation();
   const [history] = await Promise.all([loadHistory(), loadAnalytics(), loadContacts()]);
   return history;
 }
