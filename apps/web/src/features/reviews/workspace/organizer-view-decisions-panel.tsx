@@ -1,6 +1,7 @@
 "use client";
 import { Button } from "../../../components/ui/button";
 import styles from "../review-workspace.module.css";
+import { roundDisplayLabel } from "./model-round-display-label";
 import { DecisionEditor } from "./organizer-decision-editor";
 import type { DecisionStatus } from "./organizer-decision-status";
 import type { OrganizerWorkspaceViewController } from "./organizer-view-controller";
@@ -101,7 +102,7 @@ export function OrganizerDecisionsPanel({
       </div>
       {aggregateLoading ? (
         <p className={styles.fieldHint} role="status">
-          Loading aggregates for {selectedRound?.name ?? selectedRoundId}…
+          Loading aggregates for {roundDisplayLabel(selectedRound?.name)}…
         </p>
       ) : null}
       {aggregateError ? (
@@ -110,11 +111,11 @@ export function OrganizerDecisionsPanel({
         </p>
       ) : null}
       <p className={styles.fieldHint}>
-        Showing scores and decisions for {selectedRound?.name ?? selectedRoundId}.
+        Showing scores and decisions for {roundDisplayLabel(selectedRound?.name)}.
       </p>
       <div className={styles.collectionToolbar}>
         <div className={styles.formField}>
-          <label htmlFor="decision-search">Find a submission</label>
+          <label htmlFor="decision-search">Find a proposal</label>
           <input
             id="decision-search"
             type="search"
@@ -133,7 +134,7 @@ export function OrganizerDecisionsPanel({
             }
           >
             <option value="undecided">Undecided</option>
-            <option value="all">All submissions</option>
+            <option value="all">All proposals</option>
             <option value="accepted">Accepted</option>
             <option value="waitlisted">Waitlisted</option>
             <option value="rejected">Rejected</option>

@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { OrganizationMember } from "../../members/api";
 import type { ApiPlan } from "./api-api-plan";
+import { evaluationExportFilename } from "./model-evaluation-export-filename";
 import type { AggregateRow } from "./organizer-aggregate-row";
 import type { DecisionStatus } from "./organizer-decision-status";
 import { loadRoundAggregates } from "./organizer-load-round-aggregates";
@@ -130,7 +131,8 @@ export function useOrganizerWorkspaceViewController({
   }
 
   async function exportResults(): Promise<void> {
-    setExportMessage(`Preparing evaluation-${seed.planId}.csv…`);
+    const filename = evaluationExportFilename();
+    setExportMessage("Preparing evaluation results…");
     try {
       const response = await fetch(
         `${baseUrl}/api/admin/evaluations/plans/${encodeURIComponent(seed.planId)}/export.csv`,
@@ -150,10 +152,10 @@ export function useOrganizerWorkspaceViewController({
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `evaluation-${seed.planId}.csv`;
+      link.download = filename;
       link.click();
       URL.revokeObjectURL(url);
-      setExportMessage(`CSV export ready: ${link.download}`);
+      setExportMessage("CSV export ready.");
     } catch (reason: unknown) {
       setExportMessage(
         reason instanceof Error ? reason.message : "The CSV export could not be generated.",

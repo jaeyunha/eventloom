@@ -5,6 +5,7 @@ import { AssignmentStatusBadge } from "./assignment-assignment-status-badge";
 import type { ReviewerAssignmentController } from "./assignment-reviewer-assignment-controller";
 import { participantDisplayLabel } from "./model-participant-display-label";
 import { reviewerDisplayLabel } from "./model-reviewer-display-label";
+import { submissionDisplayTitle } from "./model-submission-display-title";
 
 export function ReviewerAssignmentTable({
   controller,
@@ -35,17 +36,21 @@ export function ReviewerAssignmentTable({
           </tr>
         </thead>
         <tbody>
-          {visibleAssignments.map((assignment) => {
+          {visibleAssignments.map((assignment, index) => {
             const aggregate = submissionById.get(assignment.submissionId);
             const round = roundById.get(assignment.roundId);
             const participantNames = participantDisplayLabel(aggregate?.participants);
-            const reviewer = reviewerDisplayLabel(assignment.reviewerId, reviewerMembers);
+            const reviewer = reviewerDisplayLabel(
+              assignment.reviewerId,
+              reviewerMembers,
+              index + 1,
+            );
             const protectedHistory =
               assignment.status === "abstained" || assignment.status === "superseded";
             return (
               <tr key={assignment.id}>
                 <th scope="row" data-label="Proposal">
-                  <strong>{aggregate?.title ?? "No title"}</strong>
+                  <strong>{submissionDisplayTitle(aggregate ?? {})}</strong>
                   {participantNames ? <span>{participantNames}</span> : null}
                 </th>
                 <td data-label="Reviewer">

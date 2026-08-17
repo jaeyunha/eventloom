@@ -360,9 +360,20 @@ describe("organizer submission workspace", () => {
       },
     };
     const record = mapCanonicalSubmission(untitledEnvelope);
+    const opaqueRecord = mapCanonicalSubmission({
+      ...untitledEnvelope,
+      submission: {
+        ...untitledEnvelope.submission,
+        answers: {
+          ...untitledEnvelope.submission.answers,
+          title: untitledEnvelope.submission.id,
+        },
+      },
+    });
 
     expect(record.title).toBe("No title");
     expect(record.title).not.toBe(canonicalEnvelope.submission.id);
+    expect(opaqueRecord.title).toBe("No title");
   });
 
   it("loads the authoritative event name instead of presenting a raw event UUID", async () => {

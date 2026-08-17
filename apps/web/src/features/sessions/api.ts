@@ -213,6 +213,13 @@ function historyFrom(value: unknown): SessionHistoryEntry {
   if (!actions.has(value.action as SessionHistoryEntry["action"])) {
     throw new TypeError("The session history response contains an invalid action.");
   }
+  const actorLabel =
+    typeof value.actorLabel === "string" &&
+    value.actorLabel.trim().length > 0 &&
+    value.actorLabel.trim() !== value.actorId &&
+    !value.actorLabel.includes("@")
+      ? value.actorLabel.trim()
+      : "Authorized organizer";
 
   const contentStatus = contentStatusFrom(value.contentStatus);
   let snapshot: SessionHistoryEntry["snapshot"];
@@ -234,7 +241,7 @@ function historyFrom(value: unknown): SessionHistoryEntry {
     action: value.action as SessionHistoryEntry["action"],
     version: value.version,
     actorId: value.actorId,
-    ...(typeof value.actorLabel === "string" ? { actorLabel: value.actorLabel } : {}),
+    actorLabel,
     occurredAt: value.occurredAt,
     ...(typeof value.title === "string" ? { title: value.title } : {}),
     ...(typeof value.description === "string" ? { description: value.description } : {}),

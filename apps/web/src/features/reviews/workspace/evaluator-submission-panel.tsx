@@ -3,16 +3,13 @@ import { WorkspaceProgressSummary } from "@/components/workspace";
 import styles from "../review-workspace.module.css";
 import { EvaluatorAssignmentStatusBadge } from "./assignment-evaluator-assignment-status-badge";
 import type { EvaluatorController } from "./evaluator-controller";
-import { compactSubmissionReference } from "./model-compact-submission-reference";
 
 export function EvaluatorSubmissionPanel({
   controller,
   pageHeading = false,
-  showReference = true,
 }: Readonly<{
   controller: EvaluatorController;
   pageHeading?: boolean;
-  showReference?: boolean;
 }>) {
   const {
     assignment,
@@ -44,11 +41,6 @@ export function EvaluatorSubmissionPanel({
           )}
         </div>
         <div className={styles.submissionHeadingMeta}>
-          {showReference ? (
-            <span className={styles.referenceBadge}>
-              {compactSubmissionReference(assignment.reference)}
-            </span>
-          ) : null}
           <EvaluatorAssignmentStatusBadge
             status={submitted ? "submitted" : assignment.assignmentStatus}
           />

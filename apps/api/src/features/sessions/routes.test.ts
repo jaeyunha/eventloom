@@ -1300,4 +1300,204 @@ describe("organizer session settings domain", () => {
       data: [{ id: "room-retry" }],
     });
   });
+
+  it("preserves canonical actor correlation across colliding and mutable display names", async () => {
+    const { service } = setup();
+    const firstActor = { ...actor(), userId: "organizer-first", displayName: "Shared Name" };
+    const secondActor = { ...actor(), userId: "organizer-second", displayName: "Shared Name" };
+    const renamedFirstActor = { ...firstActor, displayName: "Updated Name" };
+    const created = await service.createSession(firstActor, {
+      eventId: "event-a",
+      id: "identity-session",
+      title: "Identity-safe history",
+      durationMinutes: 45,
+      status: "Accepted",
+      speakerIds: ["speaker-1"],
+    });
+    const second = await service.updateSession(secondActor, {
+      eventId: "event-a",
+      sessionId: created.id,
+      expectedVersion: created.version,
+      description: "Updated by the second organizer.",
+    });
+    await service.updateSession(renamedFirstActor, {
+      eventId: "event-a",
+      sessionId: created.id,
+      expectedVersion: second.version,
+      description: "Updated after a display-name change.",
+    });
+
+    const history = await service.listSessionHistory(firstActor, {
+      eventId: "event-a",
+      sessionId: created.id,
+    });
+
+    expect(history.map(({ actorId, actorLabel }) => ({ actorId, actorLabel }))).toEqual([
+      { actorId: "organizer-first", actorLabel: "Shared Name" },
+      { actorId: "organizer-second", actorLabel: "Shared Name" },
+      { actorId: "organizer-first", actorLabel: "Updated Name" },
+    ]);
+  });
+
+  it("sanitizes legacy and accepted-sync actor labels without losing canonical actor IDs", async () => {
+    const { service } = setup();
+    const organizer = actor();
+    const created = await service.createSession(organizer, {
+      eventId: "event-a",
+      id: "legacy-source",
+      title: "Legacy audit source",
+      durationMinutes: 45,
+      status: "Accepted",
+      speakerIds: ["speaker-1"],
+    });
+    const synced = await service.upsertAcceptedSession({
+      session: {
+        ...created,
+        id: "accepted-sync-session",
+        title: "Accepted submission projection",
+        history: [],
+      },
+      actorId: "accepted-sync-organizer-id",
+    });
+    expect(synced.history.at(-1)).toMatchObject({
+      actorId: "accepted-sync-organizer-id",
+      actorLabel: "Authorized organizer",
+    });
+
+    const legacySession = {
+      ...created,
+      id: "legacy-read-session",
+      history: created.history.map((entry) => ({
+        ...entry,
+        actorId: "legacy-organizer-id",
+        actorLabel: "legacy-organizer-id",
+      })),
+    };
+    const legacyService = new SessionService(
+      new InMemorySessionRepository({ sessions: [legacySession] }),
+      { clock: () => now },
+    );
+    await expect(
+      legacyService.listSessionHistory(organizer, {
+        eventId: "event-a",
+        sessionId: legacySession.id,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        actorId: "legacy-organizer-id",
+        actorLabel: "Authorized organizer",
+      }),
+    ]);
+  });
+
+  it("sanitizes legacy actor labels nested inside session audit snapshots", async () => {
+    const organizer = actor();
+    const legacyEmail = "legacy-organizer@example.com";
+    const service = new SessionService(
+      new InMemorySessionRepository({
+        audit: [
+          {
+            id: "legacy-audit-entry",
+            tenantId: "tenant-a",
+            eventId: "event-a",
+            entityType: "session",
+            entityId: "legacy-session",
+            action: "updated",
+            version: 2,
+            actorId: "legacy-organizer-id",
+            occurredAt: now.toISOString(),
+            before: {
+              history: [
+                {
+                  actorId: "legacy-organizer-id",
+                  actorLabel: legacyEmail,
+                },
+              ],
+            },
+            after: {
+              history: [
+                {
+                  actorId: "legacy-organizer-id",
+                  actorLabel: "legacy-organizer-id",
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { clock: () => now },
+    );
+
+    const entries = await service.listAudit(organizer, { eventId: "event-a" });
+
+    expect(JSON.stringify(entries)).not.toContain(legacyEmail);
+    expect(entries).toMatchObject([
+      {
+        actorId: "legacy-organizer-id",
+        before: {
+          history: [
+            {
+              actorId: "legacy-organizer-id",
+              actorLabel: "Authorized organizer",
+            },
+          ],
+        },
+        after: {
+          history: [
+            {
+              actorId: "legacy-organizer-id",
+              actorLabel: "Authorized organizer",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("does not persist an email when an authenticated organizer has no display name", async () => {
+    const { service } = setup();
+    const routes = createSessionAdminRoutes({ service });
+    const app = new Hono<SessionRouteEnvironment>();
+    const namedPrincipal = principal();
+    if (namedPrincipal.kind !== "user") throw new Error("Expected a user principal.");
+    const { displayName: _displayName, ...unnamedPrincipal } = namedPrincipal;
+    app.use("*", async (context, next) => {
+      context.set("authPrincipal", {
+        ...unnamedPrincipal,
+        email: "private-organizer@example.com",
+      });
+      context.set("traceId", "trace-null-name");
+      await next();
+    });
+    app.route("/api/admin/organizations/:organizationId/events/:eventId/sessions", routes);
+    const base =
+      "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/null-name-session";
+    const created = await app.request(
+      "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: "null-name-session",
+          title: "Private audit identity",
+          durationMinutes: 45,
+          status: "Accepted",
+          speakerIds: ["speaker-1"],
+        }),
+      },
+    );
+    expect(created.status).toBe(201);
+
+    const history = await app.request(`${base}/history`);
+    const payload = await history.json();
+    expect(payload).toMatchObject({
+      data: [
+        {
+          actorId: "organizer-1",
+          actorLabel: "Authorized organizer",
+        },
+      ],
+    });
+    expect(JSON.stringify(payload)).not.toContain("private-organizer@example.com");
+  });
 });

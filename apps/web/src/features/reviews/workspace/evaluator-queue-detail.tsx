@@ -8,7 +8,6 @@ import { EvaluatorWorkspace } from "./evaluator-evaluator-workspace";
 import type { ReviewerQueueController } from "./evaluator-queue-controller";
 import { reviewerSelectionBlocked } from "./evaluator-queue-reviewer-selection-blocked";
 import { reviewAssignmentPageHref } from "./evaluator-review-route-state";
-import { compactSubmissionReference } from "./model-compact-submission-reference";
 import styles from "./reviewer-queue.module.css";
 
 export function ReviewerQueueDetail({
@@ -94,9 +93,6 @@ export function ReviewerQueueDetail({
           >
             <X aria-hidden="true" />
           </Button>
-          <span className={styles.sheetReference}>
-            {compactSubmissionReference(selected.reference)}
-          </span>
           <div className={styles.sheetNavigation}>
             {closeBlocked ? (
               <Button

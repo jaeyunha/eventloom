@@ -20,7 +20,6 @@ export function OrganizerPlanActionsView({
     name,
     status,
     planStatusLabel,
-    version,
     rounds,
     criterionCount,
     planClosesAt,
@@ -51,7 +50,6 @@ export function OrganizerPlanActionsView({
         </div>
         <div className={styles.authoringAsideStatus}>
           <Badge variant={status === "open" ? "default" : "outline"}>{planStatusLabel}</Badge>
-          <span className={styles.authoringVersion}>Version {version}</span>
         </div>
         <dl className={styles.authoringAsideMetrics}>
           <div>

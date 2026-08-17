@@ -358,8 +358,34 @@ function sessionIsPubliclyApproved(session: Session): boolean {
 
 function actorLabel(actor: SessionActor): string {
   const displayName = actor.displayName?.trim();
-  if (displayName && displayName !== actor.userId) return displayName;
+  if (displayName && displayName !== actor.userId && !displayName.includes("@")) return displayName;
   return actor.kind === "automation" ? "Eventloom automation" : "Authorized organizer";
+}
+
+function persistedActorLabel(actorId: string | undefined, value: unknown): string {
+  const label = typeof value === "string" ? value.trim() : "";
+  return label && label !== actorId && !label.includes("@") ? label : "Authorized organizer";
+}
+
+function sanitizeAuditValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => sanitizeAuditValue(entry));
+  if (value === null || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+  const actorId = typeof source.actorId === "string" ? source.actorId : undefined;
+  return Object.fromEntries(
+    Object.entries(source).map(([key, entry]) => [
+      key,
+      key === "actorLabel" ? persistedActorLabel(actorId, entry) : sanitizeAuditValue(entry),
+    ]),
+  );
+}
+
+function sanitizeAuditEntry(entry: SessionAuditEntry): SessionAuditEntry {
+  return {
+    ...clone(entry),
+    ...(entry.before === undefined ? {} : { before: sanitizeAuditValue(entry.before) }),
+    ...(entry.after === undefined ? {} : { after: sanitizeAuditValue(entry.after) }),
+  };
 }
 
 function historyEntry(
@@ -405,7 +431,12 @@ function sessionContentSnapshot(session: Session): SessionContentSnapshot {
 
 function orderedSessionHistory(history: readonly SessionHistoryEntry[]): SessionHistoryEntry[] {
   return [...history]
-    .map((entry) => clone(entry))
+    .map((entry) => {
+      return {
+        ...clone(entry),
+        actorLabel: persistedActorLabel(entry.actorId, entry.actorLabel),
+      };
+    })
     .sort(
       (left, right) =>
         left.version - right.version ||
@@ -620,7 +651,7 @@ export class SessionService {
             {
               title,
               description,
-              actorLabel: actorId,
+              actorLabel: actorLabel(projectionActor),
               contentStatus: desiredContentStatus,
               ...(current === null ? {} : { priorStatus: current.status }),
               newStatus: desired.status,
@@ -1594,11 +1625,9 @@ export class SessionService {
       this.event(input.eventId),
       input.entityId,
     );
-    return clone(
-      entries.filter(
-        (entry) => entry.tenantId === actor.tenantId && entry.eventId === input.eventId,
-      ),
-    );
+    return entries
+      .filter((entry) => entry.tenantId === actor.tenantId && entry.eventId === input.eventId)
+      .map((entry) => sanitizeAuditEntry(entry));
   }
 
   /**

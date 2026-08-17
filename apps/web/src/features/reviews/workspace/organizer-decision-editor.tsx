@@ -6,6 +6,7 @@ import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../comp
 import styles from ".././review-workspace.module.css";
 import { evaluationRequest } from "./model-evaluation-request";
 import { participantDisplayLabel } from "./model-participant-display-label";
+import { submissionDisplayTitle } from "./model-submission-display-title";
 import type { AggregateRow } from "./organizer-aggregate-row";
 import type { DecisionStatus } from "./organizer-decision-status";
 
@@ -84,7 +85,7 @@ export function DecisionEditor({
       <div className={styles.decisionSummary}>
         <div>
           {participantNames ? <span className={styles.cardLabel}>{participantNames}</span> : null}
-          <h3>{aggregate.title}</h3>
+          <h3>{submissionDisplayTitle(aggregate)}</h3>
         </div>
         <span className={styles.scorePill}>
           {aggregate.countedScore} / {aggregate.possibleScore}

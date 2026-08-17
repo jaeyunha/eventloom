@@ -20,7 +20,7 @@ export function OrganizerRoundTargeting({
       <summary>
         <span>
           <strong>Bulk assignment targeting</strong>
-          <small>Optionally limit automatic distribution to one submission track.</small>
+          <small>Optionally limit automatic distribution to one proposal track.</small>
         </span>
         <span>{round.trackFilter?.trim().length ? round.trackFilter : "All tracks"}</span>
       </summary>

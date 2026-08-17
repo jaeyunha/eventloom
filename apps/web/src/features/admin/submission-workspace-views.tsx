@@ -1456,7 +1456,6 @@ function SubmissionDetailPrimary({
                 <p className={styles.eyebrow}>Submission content</p>
                 <h2 id="abstract-heading">Abstract</h2>
               </div>
-              <span className={styles.versionBadge}>Version {submission.version}</span>
             </div>
             <p className={styles.abstract}>{submission.abstract}</p>
           </section>
@@ -1837,9 +1836,7 @@ function DecisionForm({
         disabled={!hasDecisionApi || busy}
         onChange={(event) => onReasonChange(event.currentTarget.value)}
       />
-      <p className={styles.fieldHelp}>
-        The reason and server decision version are retained in the immutable decision history.
-      </p>
+      <p className={styles.fieldHelp}>The reason is retained in the immutable decision history.</p>
       {!hasDecisionApi ? (
         <p className={styles.auditCallout} role="note">
           Decision controls are read-only until the server evaluation plan is available.
@@ -1893,10 +1890,7 @@ function DecisionHistory({
                       : "Waitlisted"}
                 </h4>
                 <time dateTime={transition.decidedAt}>{formatDateTime(transition.decidedAt)}</time>
-                <p>
-                  {transition.reason} · organizer {transition.decidedBy} · decision version{" "}
-                  {decisionHistory.indexOf(transition) + 1}
-                </p>
+                <p>{transition.reason} · Human organizer</p>
               </div>
             </li>
           ))}
@@ -1955,10 +1949,6 @@ function AcceptedHandoffSummary({ submission }: Readonly<{ submission: Submissio
         <div>
           <dt>Track</dt>
           <dd>{metadata.track}</dd>
-        </div>
-        <div>
-          <dt>Submission version</dt>
-          <dd>{metadata.version}</dd>
         </div>
       </dl>
     </section>

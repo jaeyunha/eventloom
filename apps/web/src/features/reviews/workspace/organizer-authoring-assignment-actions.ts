@@ -3,6 +3,10 @@
 import { applyReviewAssignments } from "./assignment-apply-review-assignments";
 import type { DistributionPreviewInput } from "./assignment-distribution-preview-input";
 import { previewReviewAssignments } from "./assignment-preview-review-assignments";
+import {
+  assignmentDistributionReviewerIds,
+  assignmentReviewerSelectionError,
+} from "./model-assignment-reviewer-selection";
 import { distributionPreviewKey } from "./model-distribution-preview-key";
 import type { OrganizerPlanActions } from "./organizer-authoring-plan-actions";
 
@@ -26,6 +30,7 @@ export function useOrganizerAssignmentActions(scope: OrganizerPlanActions) {
     setMessage,
     assignmentSubmissionId,
     assignmentReviewerIds,
+    assignmentReviewerSelectionMode,
     version,
     status,
     setBusy,
@@ -41,9 +46,13 @@ export function useOrganizerAssignmentActions(scope: OrganizerPlanActions) {
     }
     const round = rounds.find((candidate) => candidate.id === assignmentRoundId);
     const reviewerIds = [...assignmentReviewerIds];
+    const reviewerSelectionError = assignmentReviewerSelectionError(
+      assignmentReviewerSelectionMode,
+      reviewerIds,
+    );
     const submissionId = assignmentSubmissionId.trim();
     if (round === undefined || submissionId.length === 0) {
-      setMessage("Enter a round and submission id to preview reviewer distribution.");
+      setMessage("Choose a round and proposal to preview reviewer distribution.");
       return;
     }
     if (!reviewerDirectoryReady) {
@@ -53,6 +62,10 @@ export function useOrganizerAssignmentActions(scope: OrganizerPlanActions) {
       );
       return;
     }
+    if (reviewerSelectionError !== null) {
+      setMessage(reviewerSelectionError);
+      return;
+    }
     if (reviewerIds.some((reviewerId) => !reviewerIdSet.has(reviewerId))) {
       setMessage("Select only active, verified organization reviewers.");
       return;
@@ -60,10 +73,14 @@ export function useOrganizerAssignmentActions(scope: OrganizerPlanActions) {
     setBusy(true);
     setMessage(null);
     try {
+      const requestReviewerIds = assignmentDistributionReviewerIds(
+        assignmentReviewerSelectionMode,
+        reviewerIds,
+      );
       const input = {
         roundId: round.id,
         submissionIds: [submissionId],
-        ...(reviewerIds.length === 0 ? {} : { reviewerIds }),
+        ...(requestReviewerIds === undefined ? {} : { reviewerIds: requestReviewerIds }),
         expectedVersion: version,
       } satisfies DistributionPreviewInput;
       const preview = await previewReviewAssignments(baseUrl, seed.planId, input);
@@ -90,9 +107,13 @@ export function useOrganizerAssignmentActions(scope: OrganizerPlanActions) {
     }
     const round = rounds.find((candidate) => candidate.id === assignmentRoundId);
     const reviewerIds = [...assignmentReviewerIds];
+    const reviewerSelectionError = assignmentReviewerSelectionError(
+      assignmentReviewerSelectionMode,
+      reviewerIds,
+    );
     const submissionId = assignmentSubmissionId.trim();
     if (round === undefined || submissionId.length === 0) {
-      setMessage("Provide a round and submission id.");
+      setMessage("Choose a round and proposal.");
       return;
     }
     if (!reviewerDirectoryReady) {
@@ -102,15 +123,23 @@ export function useOrganizerAssignmentActions(scope: OrganizerPlanActions) {
       );
       return;
     }
+    if (reviewerSelectionError !== null) {
+      setMessage(reviewerSelectionError);
+      return;
+    }
     if (reviewerIds.some((reviewerId) => !reviewerIdSet.has(reviewerId))) {
       setMessage("Select only active, verified organization reviewers.");
       return;
     }
     const preview = assignmentPreview;
+    const requestReviewerIds = assignmentDistributionReviewerIds(
+      assignmentReviewerSelectionMode,
+      reviewerIds,
+    );
     const input = {
       roundId: round.id,
       submissionIds: [submissionId],
-      ...(reviewerIds.length === 0 ? {} : { reviewerIds }),
+      ...(requestReviewerIds === undefined ? {} : { reviewerIds: requestReviewerIds }),
       expectedVersion: version,
     } satisfies DistributionPreviewInput;
     if (

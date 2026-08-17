@@ -1,5 +1,6 @@
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
+import { authDisplayName } from "../auth/display-name";
 import { AuthAccessError, type AuthPrincipal } from "../auth/types";
 import { type SessionService, SessionServiceError } from "./service";
 import {
@@ -198,10 +199,11 @@ function organizer(context: SessionContext, organizationId: string): SessionActo
   if (!membership || !["owner", "admin", "organizer"].includes(role ?? "")) {
     throw new AuthAccessError("FORBIDDEN", "An organizer or administrator is required.");
   }
+  const displayName = authDisplayName(principal.displayName);
   return {
     tenantId: organizationId,
     userId: principal.userId,
-    displayName: principal.displayName ?? principal.email,
+    ...(displayName === undefined ? {} : { displayName }),
     role: role === "owner" ? "owner" : role === "organizer" ? "organizer" : "admin",
     kind: "user",
   };

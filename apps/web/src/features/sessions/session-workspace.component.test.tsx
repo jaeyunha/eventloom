@@ -29,6 +29,14 @@ const session: SessionRecord = {
 };
 const speakers = [{ id: "speaker-1", displayName: "Avery Kim" }] as const;
 
+function ordinaryVisibleText(markup: string): string {
+  return markup
+    .replace(/<details[\s\S]*?<\/details>/gu, " ")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
 function sessionsApi(): SessionsApi {
   return {
     list: vi.fn(async () => [session]),
@@ -77,16 +85,16 @@ describe("sessions workspace presentation", () => {
       createElement(SessionsWorkspaceView, {
         organizationId: "org-1",
         eventId: "event-1",
-        sessions: [session],
+        sessions: [{ ...session, version: 3 }],
         selectedSessionId: session.id,
         history: [
           {
             id: "history-1",
-            action: "created",
+            action: "updated",
             version: 1,
-            actorId: "organizer-1",
-            actorLabel: "Avery Kim",
-            occurredAt: "2026-08-09T12:00:00.000Z",
+            actorId: "organizer-legacy",
+            actorLabel: "organizer-legacy",
+            occurredAt: "2026-08-09T12:01:00.000Z",
             snapshot: {
               title: "Original worker pools",
               description: "The first abstract.",
@@ -97,13 +105,26 @@ describe("sessions workspace presentation", () => {
             id: "history-2",
             action: "updated",
             version: 2,
-            actorId: "organizer-1",
+            actorId: "organizer-second",
             actorLabel: "Avery Kim",
             occurredAt: "2026-08-09T12:01:00.000Z",
             snapshot: {
               title: session.title,
               description: session.description,
               contentStatus: "Needs changes",
+            },
+          },
+          {
+            id: "history-3",
+            action: "approved",
+            version: 3,
+            actorId: "organizer-second",
+            actorLabel: "Avery Kim",
+            occurredAt: "2026-08-09T12:02:00.000Z",
+            snapshot: {
+              title: session.title,
+              description: session.description,
+              contentStatus: "Approved",
             },
           },
         ],
@@ -122,6 +143,7 @@ describe("sessions workspace presentation", () => {
         onRestore: async () => undefined,
       }),
     );
+    const ordinaryText = ordinaryVisibleText(markup);
 
     expect(markup).toContain('data-sessions-layout="split"');
     expect(markup).toContain("Sessions");
@@ -138,11 +160,53 @@ describe("sessions workspace presentation", () => {
     expect(markup).toContain('role="checkbox"');
     expect(markup).toContain("Change history");
     expect(markup).toContain("Avery Kim");
-    expect(markup).toContain("<strong>Created</strong>");
-    expect(markup).not.toContain("Version 1");
+    expect(ordinaryText).toContain("Authorized organizer");
+    expect(ordinaryText).not.toContain("organizer-legacy");
+    expect(ordinaryText).not.toContain("organizer-second");
+    expect(markup).toContain("<strong>Updated</strong>");
+    expect(ordinaryText).not.toContain("Version 1");
+    expect(ordinaryText).not.toContain("Version 2");
     expect(markup).toContain("Restore this revision");
     expect(markup).not.toContain("Restore version");
+    const restoreLabels = [...markup.matchAll(/aria-label="(Restore [^"]+)"/gu)].map(
+      (match) => match[1],
+    );
+    expect(restoreLabels).toHaveLength(2);
+    expect(new Set(restoreLabels).size).toBe(2);
+    expect(restoreLabels[0]).toMatch(
+      /^Restore Updated revision from .+2026.+12:01.+history item 1 of 3$/u,
+    );
+    expect(restoreLabels[1]).toMatch(
+      /^Restore Updated revision from .+2026.+12:01.+history item 2 of 3$/u,
+    );
+    expect(markup).toContain("<summary>Advanced audit details</summary>");
+    expect(markup).toContain("<code>organizer-legacy</code>");
+    expect(markup).toContain("<code>organizer-second</code>");
     expect(markup).toContain("Current");
+  });
+
+  it("uses nontechnical labels when session speaker and organization names are unavailable", () => {
+    const missingLabels = {
+      ...session,
+      speakerIds: ["speaker-internal-42"],
+      speakerRoster: [],
+    };
+    const markup = renderToStaticMarkup(
+      createElement(SessionsWorkspaceView, {
+        organizationId: "organization-internal-42",
+        eventId: "event-1",
+        sessions: [missingLabels],
+        selectedSessionId: missingLabels.id,
+        history: [],
+        speakers: [],
+        onSaveSpeakers: async () => undefined,
+      }),
+    );
+    const text = ordinaryVisibleText(markup);
+
+    expect(text).toContain("Speaker unavailable");
+    expect(text).not.toContain("speaker-internal-42");
+    expect(text).not.toContain("organization-internal-42");
   });
 
   it("distinguishes an empty roster from an unavailable roster and announces success politely", () => {

@@ -6,6 +6,7 @@ import {
   AuthConfigurationError,
   createBetterAuthRuntimeConfiguration,
 } from "../features/auth/configuration";
+import { authDisplayName } from "../features/auth/display-name";
 import { createBetterAuthRuntime, createOpenSendMagicLinkMessage } from "../features/auth/runtime";
 import type {
   ApiKeyScope,
@@ -425,10 +426,11 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
 
     const memberships = membershipsFrom(membershipRows);
 
+    const displayName = authDisplayName(row.name);
     return {
       sessionId: row.session_id,
       userId: row.user_id,
-      displayName: row.name ?? row.email,
+      ...(displayName === undefined ? {} : { displayName }),
       email: row.email,
       emailVerified: row.email_verified === 1,
       expiresAt,

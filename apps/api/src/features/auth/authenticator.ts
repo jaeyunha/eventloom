@@ -1,3 +1,4 @@
+import { authDisplayName } from "./display-name";
 import {
   AuthAccessError,
   type AuthClock,
@@ -100,12 +101,13 @@ export class RequestAuthenticator {
     if (session?.emailVerified !== true || session.expiresAt.getTime() <= now.getTime()) {
       throw new AuthAccessError("UNAUTHENTICATED", "The session is invalid or expired.");
     }
+    const displayName = authDisplayName(session.displayName);
 
     return {
       kind: "user",
       sessionId: session.sessionId,
       userId: session.userId,
-      displayName: session.displayName ?? session.email,
+      ...(displayName === undefined ? {} : { displayName }),
       email: session.email,
       memberships: session.memberships,
       reviewerGrants: session.reviewerGrants,

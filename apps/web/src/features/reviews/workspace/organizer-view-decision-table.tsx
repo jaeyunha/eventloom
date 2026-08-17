@@ -1,6 +1,7 @@
 "use client";
 import { Button } from "../../../components/ui/button";
 import styles from "../review-workspace.module.css";
+import { submissionDisplayTitle } from "./model-submission-display-title";
 import { DecisionStatusBadge } from "./organizer-decision-status-badge";
 import type { OrganizerWorkspaceViewController } from "./organizer-view-controller";
 export function OrganizerDecisionTable({
@@ -13,20 +14,15 @@ export function OrganizerDecisionTable({
     selectedDecisionId,
     setSelectedDecisionId,
     selectedRound,
-    selectedRoundId,
   } = controller;
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={`${styles.dataTable} ${styles.decisionTable}`}>
-          <caption>
-            Submission aggregates for {selectedRound?.name ?? selectedRoundId} · round revision{" "}
-            {selectedRound?.roundRevision ?? "unavailable"} · rubric revision{" "}
-            {selectedRound?.rubricRevision ?? "unavailable"}
-          </caption>
+          <caption>Proposal aggregates for {selectedRound?.name ?? "Selected round"}</caption>
           <thead>
             <tr>
-              <th scope="col">Submission</th>
+              <th scope="col">Proposal</th>
               <th
                 scope="col"
                 aria-sort={aggregateSort === "descending" ? "descending" : "ascending"}
@@ -43,8 +39,8 @@ export function OrganizerDecisionTable({
               const decision = seed.decisionBySubmission[aggregate.id];
               return (
                 <tr key={aggregate.id}>
-                  <th scope="row" data-label="Submission">
-                    <strong>{aggregate.title}</strong>
+                  <th scope="row" data-label="Proposal">
+                    <strong>{submissionDisplayTitle(aggregate)}</strong>
                     {aggregate.participants?.length ? (
                       <span>
                         {aggregate.participants
@@ -98,7 +94,7 @@ export function OrganizerDecisionTable({
       </div>
       <p className={styles.tableNote}>Scores count only after a reviewer confirms or edits them.</p>
       {visibleDecisionRows.length === 0 ? (
-        <p className={styles.emptyText}>No submissions match these decision filters.</p>
+        <p className={styles.emptyText}>No proposals match these decision filters.</p>
       ) : null}
     </>
   );

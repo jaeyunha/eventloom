@@ -4555,7 +4555,9 @@
 }
 
 .assignmentCoverageGrid {
+  display: grid;
   grid-template-columns: minmax(20rem, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
   gap: var(--space-5);
   padding: var(--space-5) var(--space-6);
   border-block-start: 1px solid var(--color-border);
