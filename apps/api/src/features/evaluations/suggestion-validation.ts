@@ -59,16 +59,22 @@ const RATIONALE_TEMPLATE_WORDS = new Set([
   "demonstrates",
   "defined",
   "deployment",
+  "directly",
   "evidence",
   "failures",
   "for",
+  "focus",
   "gives",
   "helps",
   "indicates",
   "immediately",
+  "implementation",
   "knowledge",
+  "measurable",
   "mitigate",
+  "plan",
   "participants",
+  "program",
   "recommendation",
   "reduce",
   "risk",
@@ -220,7 +226,7 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
     unsupportedRun += 1;
     if (unsupportedRun >= 2) return false;
   }
-  return explanationTokens.length >= 2;
+  return explanationTokens.length >= 1;
 }
 
 export function canonicalSubmissionExcerpt(value: string, source: string): string | null {
