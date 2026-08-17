@@ -296,7 +296,7 @@ function applyScheduleState(
         ? round
         : {
             ...round,
-            opensAt: schedule.opensAt ?? null,
+            opensAt: schedule.opensAt,
             closesAt: schedule.closesAt ?? null,
           };
     }),
