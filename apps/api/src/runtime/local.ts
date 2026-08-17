@@ -104,10 +104,12 @@ import type { Session } from "../features/sessions/types";
 import { CommunicationSpeakerCommunications } from "../features/speaker/communications";
 import { SpeakerService } from "../features/speaker/service";
 import type {
+  CreatePendingSpeakerAssetVersionCommand,
   CreatePrivateUploadGrantCommand,
   FinalizeSpeakerAssetCommand,
   PrivateAssetCapabilityBinding,
   PrivateAssetGateway,
+  PrivateDownloadCapabilityBinding,
   PrivateDownloadGrant,
   PrivateUploadGrant,
   RepositoryResult,
@@ -115,16 +117,22 @@ import type {
   SpeakerAccessScope,
   SpeakerAccountWorkloadRepository,
   SpeakerAsset,
+  SpeakerAssetAuditEntry,
+  SpeakerAssetComment,
   SpeakerAssetReviewCommand,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
+  SpeakerEventResource,
   SpeakerOrganizerLifecycleRepository,
   SpeakerOrganizerReadModel,
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerProfile,
+  SpeakerRosterEntry,
   SpeakerSubmission,
   SpeakerTask,
+  SpeakerTaskTransition,
+  SpeakerWikiPage,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
   UpdateSpeakerContentCommand,
@@ -532,13 +540,17 @@ function localAuthRoutes(personas: LocalPersona[]): {
   };
 }
 
-class LocalSpeakerRepository
+export class LocalSpeakerRepository
   implements SpeakerAccountWorkloadRepository, SpeakerOrganizerLifecycleRepository
 {
   readonly #submissions = new Map<string, SpeakerSubmission[]>();
   readonly #profiles = new Map<string, SpeakerProfile[]>();
   readonly #tasks = new Map<string, SpeakerTask[]>();
   readonly #assets = new Map<string, SpeakerAsset[]>();
+  readonly #assetComments = new Map<string, SpeakerAssetComment[]>();
+  readonly #assetAudit = new Map<string, SpeakerAssetAuditEntry[]>();
+  readonly #taskTransitions = new Map<string, SpeakerTaskTransition[]>();
+  readonly #assetVersionCreations = new Map<string, { requestDigest: string; assetId: string }>();
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
   readonly #cfpPortalContexts = new Map<string, SpeakerPortalContext>();
@@ -552,6 +564,7 @@ class LocalSpeakerRepository
     private readonly invitationRecipientForEmail: (
       email: string,
     ) => { userId: string; normalizedEmail: string } | null,
+    private readonly beforeReviewCommit?: (tasks: Map<string, SpeakerTask[]>) => void,
   ) {}
 
   async resolveVerifiedInvitationRecipient(email: string) {
@@ -576,6 +589,9 @@ class LocalSpeakerRepository
     if (!this.#profiles.has(eventId)) this.#profiles.set(eventId, []);
     if (!this.#tasks.has(eventId)) this.#tasks.set(eventId, []);
     if (!this.#assets.has(eventId)) this.#assets.set(eventId, []);
+    if (!this.#assetComments.has(eventId)) this.#assetComments.set(eventId, []);
+    if (!this.#assetAudit.has(eventId)) this.#assetAudit.set(eventId, []);
+    if (!this.#taskTransitions.has(eventId)) this.#taskTransitions.set(eventId, []);
   }
 
   listStoredSubmissions(eventId: string): SpeakerSubmission[] {
@@ -660,7 +676,7 @@ class LocalSpeakerRepository
       }
     }
     this.#cfpPortalContexts.set(submission.ownerAccountId, {
-      id: `portal:${submission.eventId}:${primary.id}`,
+      id: `portal:${LOCAL_ORGANIZATION_ID}:${submission.eventId}:${primary.id}`,
       eventId: submission.eventId,
       name: eventName,
       slug: submission.eventId,
@@ -756,6 +772,9 @@ class LocalSpeakerRepository
         ]),
       ],
     };
+  }
+  async getAccountDisplayName(accountId: string): Promise<string | null> {
+    return LOCAL_PERSONAS.find((persona) => persona.userId === accountId)?.name ?? null;
   }
 
   async listActiveParticipantIds(organizationId: string, eventId: string): Promise<string[]> {
@@ -1066,7 +1085,7 @@ class LocalSpeakerRepository
     );
     if (submission === undefined) return;
     this.#cfpPortalContexts.set(accountId, {
-      id: `portal:${eventId}:${participantId}`,
+      id: `portal:${LOCAL_ORGANIZATION_ID}:${eventId}:${participantId}`,
       eventId,
       name: eventId,
       slug: eventId,
@@ -1202,13 +1221,52 @@ class LocalSpeakerRepository
     if (task.version !== command.expectedVersion || task.status !== command.fromStatus) {
       return { ok: false, reason: "version_conflict" } as const;
     }
-    const updated: SpeakerTask = {
-      ...task,
-      status: command.toStatus,
-      version: task.version + 1,
-      updatedAt: command.transition.occurredAt,
-    };
+    if (command.toStatus === "submitted" && task.replacementBaselineAssetId !== undefined) {
+      const assets = (this.#assets.get(command.eventId) ?? []).filter(
+        (asset) => asset.taskId === task.id,
+      );
+      const baseline = assets.find((asset) => asset.id === task.replacementBaselineAssetId);
+      const family =
+        baseline === undefined
+          ? []
+          : assets.filter(
+              (asset) =>
+                (asset.versionFamilyId ?? asset.id) === (baseline.versionFamilyId ?? baseline.id),
+            );
+      const current =
+        family.find((asset) => asset.currentVersionId === asset.id) ??
+        [...family].sort((left, right) => (right.version ?? 0) - (left.version ?? 0))[0];
+      if (
+        baseline === undefined ||
+        current === undefined ||
+        current.state !== "ready" ||
+        current.id === baseline.id ||
+        (current.version ?? 0) <= (baseline.version ?? 0) ||
+        (task.acceptedAssetKinds !== undefined && !task.acceptedAssetKinds.includes(current.kind))
+      ) {
+        return { ok: false, reason: "invalid_state" } as const;
+      }
+    }
+    const { replacementBaselineAssetId: _baseline, ...taskWithoutBaseline } = task;
+    const updated: SpeakerTask =
+      command.toStatus === "submitted"
+        ? {
+            ...taskWithoutBaseline,
+            status: command.toStatus,
+            version: task.version + 1,
+            updatedAt: command.transition.occurredAt,
+          }
+        : {
+            ...task,
+            status: command.toStatus,
+            version: task.version + 1,
+            updatedAt: command.transition.occurredAt,
+          };
     tasks[index] = updated;
+    const transitions = this.#taskTransitions.get(command.eventId) ?? [];
+    if (!transitions.some((transition) => transition.id === command.transition.id)) {
+      this.#taskTransitions.set(command.eventId, [...transitions, clone(command.transition)]);
+    }
     return {
       ok: true,
       value: { task: clone(updated), transition: clone(command.transition) },
@@ -1221,6 +1279,52 @@ class LocalSpeakerRepository
     return clone(asset);
   }
 
+  async createPendingAssetVersion(
+    command: CreatePendingSpeakerAssetVersionCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>> {
+    const { asset } = command;
+    this.#ensureEvent(asset.eventId);
+    const assets = this.#assets.get(asset.eventId) ?? [];
+    const key = `${asset.tenantId ?? asset.eventId}\u0000${asset.eventId}\u0000${command.idempotencyKey}`;
+    const replay = this.#assetVersionCreations.get(key);
+    if (replay !== undefined) {
+      const stored = assets.find((candidate) => candidate.id === replay.assetId);
+      return replay.requestDigest === command.requestDigest && stored !== undefined
+        ? { ok: true, value: clone(stored) }
+        : { ok: false, reason: "version_conflict" };
+    }
+    const familyId = asset.versionFamilyId ?? asset.id;
+    const expected = assets.find(
+      (candidate) =>
+        candidate.id === command.expectedLatestAssetId &&
+        (candidate.versionFamilyId ?? candidate.id) === familyId,
+    );
+    if (
+      expected === undefined ||
+      expected.version !== command.expectedLatestVersion ||
+      !["ready", "rejected"].includes(expected.state) ||
+      asset.state !== "pending_upload" ||
+      asset.supersedesAssetId !== expected.id ||
+      asset.version !== command.expectedLatestVersion + 1 ||
+      asset.versionId !== asset.id ||
+      asset.latestVersionId !== asset.id ||
+      assets.some(
+        (candidate) =>
+          (candidate.versionFamilyId ?? candidate.id) === familyId &&
+          (candidate.version ?? 0) > command.expectedLatestVersion,
+      )
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const stored = clone(asset);
+    assets.push(stored);
+    this.#assetVersionCreations.set(key, {
+      requestDigest: command.requestDigest,
+      assetId: stored.id,
+    });
+    return { ok: true, value: clone(stored) };
+  }
+
   async getAsset(eventId: string, assetId: string) {
     this.#ensureEvent(eventId);
     return clone(this.#assets.get(eventId)?.find(({ id }) => id === assetId) ?? null);
@@ -1231,6 +1335,15 @@ class LocalSpeakerRepository
     const allowed = new Set(participantIds);
     return clone(
       (this.#assets.get(eventId) ?? []).filter(({ participantId }) => allowed.has(participantId)),
+    );
+  }
+
+  async listAssetHistory(eventId: string, versionFamilyId: string) {
+    this.#ensureEvent(eventId);
+    return clone(
+      (this.#assets.get(eventId) ?? []).filter(
+        (asset) => (asset.versionFamilyId ?? asset.id) === versionFamilyId,
+      ),
     );
   }
 
@@ -1256,6 +1369,17 @@ class LocalSpeakerRepository
         : { rejectionReason: command.rejectionReason }),
     };
     assets[index] = finalized;
+    if (command.state === "ready") {
+      const familyId = asset.versionFamilyId ?? asset.id;
+      for (const [candidateIndex, candidate] of assets.entries()) {
+        if ((candidate.versionFamilyId ?? candidate.id) !== familyId) continue;
+        assets[candidateIndex] = {
+          ...candidate,
+          latestVersionId: asset.id,
+          currentVersionId: asset.id,
+        };
+      }
+    }
     return { ok: true, value: clone(finalized) };
   }
 
@@ -1263,24 +1387,174 @@ class LocalSpeakerRepository
     this.#ensureEvent(command.eventId);
     const assets = this.#assets.get(command.eventId) ?? [];
     const index = assets.findIndex(({ id }) => id === command.assetId);
-    const current = assets[index];
-    if (current === undefined) return { ok: false, reason: "not_found" };
-    const reviewVersion = current.reviewVersion ?? 0;
-    if (reviewVersion !== command.expectedVersion) {
+    const asset = assets[index];
+    if (asset === undefined) return { ok: false, reason: "not_found" };
+    if (
+      asset.state !== "ready" ||
+      (asset.reviewVersion ?? 0) !== command.expectedVersion ||
+      asset.currentVersionId !== asset.id
+    ) {
       return { ok: false, reason: "version_conflict" };
     }
+    const tasks = this.#tasks.get(command.eventId) ?? [];
+    const returnTaskIndex =
+      command.returnTask === undefined
+        ? -1
+        : tasks.findIndex(({ id }) => id === command.returnTask?.taskId);
+    const returnTask = returnTaskIndex < 0 ? undefined : tasks[returnTaskIndex];
+    if (command.returnTask !== undefined) {
+      if (returnTask === undefined) return { ok: false, reason: "not_found" };
+      if (
+        command.returnTask.eventId !== command.eventId ||
+        command.returnTask.baselineAssetId !== command.assetId ||
+        (command.returnTask.transition !== undefined &&
+          (command.returnTask.transition.eventId !== command.eventId ||
+            command.returnTask.transition.taskId !== command.returnTask.taskId ||
+            command.returnTask.transition.participantId !== returnTask.participantId))
+      ) {
+        return { ok: false, reason: "invalid_state" };
+      }
+      if (
+        returnTask.version !== command.returnTask.expectedVersion ||
+        returnTask.status !== command.returnTask.fromStatus
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
+    }
+    this.beforeReviewCommit?.(this.#tasks);
+    const currentReturnTask =
+      command.returnTask === undefined
+        ? undefined
+        : this.#tasks.get(command.eventId)?.find(({ id }) => id === command.returnTask?.taskId);
+    if (
+      command.returnTask !== undefined &&
+      (currentReturnTask === undefined ||
+        currentReturnTask.version !== command.returnTask.expectedVersion ||
+        currentReturnTask.status !== command.returnTask.fromStatus)
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const versionFamilyId = asset.versionFamilyId ?? asset.id;
+    const approvedVersionId =
+      command.state === "approved"
+        ? command.assetId
+        : asset.approvedVersionId === command.assetId
+          ? undefined
+          : asset.approvedVersionId;
+    const releasedVersionId = command.release ? command.assetId : asset.releasedVersionId;
+    for (const [candidateIndex, candidate] of assets.entries()) {
+      if ((candidate.versionFamilyId ?? candidate.id) !== versionFamilyId) continue;
+      const updated = {
+        ...candidate,
+        ...(approvedVersionId === undefined ? {} : { approvedVersionId }),
+        ...(releasedVersionId === undefined ? {} : { releasedVersionId }),
+      };
+      if (approvedVersionId === undefined) delete updated.approvedVersionId;
+      if (releasedVersionId === undefined) delete updated.releasedVersionId;
+      assets[candidateIndex] = updated;
+    }
     const reviewed: SpeakerAsset = {
-      ...current,
+      ...asset,
+      ...(approvedVersionId === undefined ? {} : { approvedVersionId }),
+      ...(releasedVersionId === undefined ? {} : { releasedVersionId }),
       reviewState: command.state,
       ...(command.note === undefined ? {} : { reviewNote: command.note }),
       reviewedAt: command.reviewedAt,
       reviewedBy: command.reviewedBy,
-      reviewVersion: reviewVersion + 1,
-      ...(command.state === "approved" ? { approvedVersionId: current.id } : {}),
-      ...(command.state === "approved" && command.release ? { releasedVersionId: current.id } : {}),
+      reviewVersion: command.expectedVersion + 1,
     };
+    if (approvedVersionId === undefined) delete reviewed.approvedVersionId;
+    if (releasedVersionId === undefined) delete reviewed.releasedVersionId;
+    if (command.note === undefined) delete reviewed.reviewNote;
     assets[index] = reviewed;
+    if (command.audit !== undefined) {
+      const entries = this.#assetAudit.get(command.eventId) ?? [];
+      if (!entries.some((entry) => entry.id === command.audit?.id)) {
+        this.#assetAudit.set(command.eventId, [...entries, clone(command.audit)]);
+      }
+    }
+    if (command.returnTask !== undefined && returnTask !== undefined) {
+      tasks[returnTaskIndex] = {
+        ...returnTask,
+        status: command.returnTask.toStatus,
+        replacementBaselineAssetId: command.returnTask.baselineAssetId,
+        version: command.returnTask.expectedVersion + 1,
+        updatedAt: command.returnTask.transition?.occurredAt ?? command.reviewedAt,
+      };
+      if (command.returnTask.transition !== undefined) {
+        const transitions = this.#taskTransitions.get(command.eventId) ?? [];
+        if (
+          !transitions.some((transition) => transition.id === command.returnTask?.transition?.id)
+        ) {
+          this.#taskTransitions.set(command.eventId, [
+            ...transitions,
+            clone(command.returnTask.transition),
+          ]);
+        }
+      }
+    }
     return { ok: true, value: clone(reviewed) };
+  }
+
+  async appendAssetAudit(entry: SpeakerAssetAuditEntry): Promise<void> {
+    this.#ensureEvent(entry.eventId);
+    const entries = this.#assetAudit.get(entry.eventId) ?? [];
+    if (entries.some((candidate) => candidate.id === entry.id)) return;
+    this.#assetAudit.set(entry.eventId, [...entries, clone(entry)]);
+  }
+
+  async listAssetAudit(eventId: string, assetId: string): Promise<SpeakerAssetAuditEntry[]> {
+    this.#ensureEvent(eventId);
+    return clone(
+      (this.#assetAudit.get(eventId) ?? []).filter((entry) => entry.assetId === assetId),
+    );
+  }
+
+  async listAssetComments(eventId: string, assetId: string): Promise<SpeakerAssetComment[]> {
+    this.#ensureEvent(eventId);
+    return clone(
+      (this.#assetComments.get(eventId) ?? [])
+        .filter((comment) => comment.assetId === assetId && comment.versionId === assetId)
+        .sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) ||
+            (left.version ?? 0) - (right.version ?? 0) ||
+            left.id.localeCompare(right.id),
+        ),
+    );
+  }
+
+  async createAssetComment(comment: SpeakerAssetComment): Promise<SpeakerAssetComment> {
+    this.#ensureEvent(comment.eventId);
+    const asset = (this.#assets.get(comment.eventId) ?? []).find(
+      ({ id }) => id === comment.assetId,
+    );
+    if (asset === undefined || comment.versionId !== comment.assetId) {
+      throw new Error("The version-specific speaker asset does not exist.");
+    }
+    const comments = this.#assetComments.get(comment.eventId) ?? [];
+    if (comments.some(({ id }) => id === comment.id)) {
+      throw new Error("The version-specific speaker asset comment already exists.");
+    }
+    const created = clone(comment);
+    comments.push(created);
+    this.#assetComments.set(comment.eventId, comments);
+    return clone(created);
+  }
+
+  async listRoster(eventId: string, _submissionId: string): Promise<SpeakerRosterEntry[]> {
+    this.#ensureEvent(eventId);
+    return [];
+  }
+
+  async listEventResources(eventId: string): Promise<SpeakerEventResource[]> {
+    this.#ensureEvent(eventId);
+    return [];
+  }
+
+  async listWikiPages(eventId: string): Promise<SpeakerWikiPage[]> {
+    this.#ensureEvent(eventId);
+    return [];
   }
 
   async getContent(eventId: string, entityType: "session" | "speaker", entityId: string) {
@@ -1383,10 +1657,10 @@ class LocalSessionRepository extends InMemorySessionRepository {
 }
 
 type LocalPrivateAssetRecord = {
-  readonly binding: PrivateAssetCapabilityBinding;
+  readonly binding: PrivateAssetCapabilityBinding | PrivateDownloadCapabilityBinding;
   readonly kind: "upload" | "download";
-  readonly token: string;
-  state: "pending" | "uploaded" | "consumed";
+  readonly tokens: Set<string>;
+  state: "pending" | "uploaded" | "claiming" | "consumed";
 };
 
 type LocalPrivateAssetObject = {
@@ -1394,10 +1668,32 @@ type LocalPrivateAssetObject = {
   readonly bytes: Uint8Array;
 };
 
+function sameUploadBinding(
+  left: PrivateAssetCapabilityBinding,
+  right: PrivateAssetCapabilityBinding,
+): boolean {
+  return (
+    left.capabilityId === right.capabilityId &&
+    left.tenantId === right.tenantId &&
+    left.eventId === right.eventId &&
+    left.submissionId === right.submissionId &&
+    left.participantId === right.participantId &&
+    left.objectKey === right.objectKey &&
+    left.fileName === right.fileName &&
+    left.contentType === right.contentType &&
+    left.sizeBytes === right.sizeBytes &&
+    left.expiresAt === right.expiresAt
+  );
+}
+
 class LocalPrivateAssetGateway implements PrivateAssetGateway {
   readonly #capabilities = new Map<string, LocalPrivateAssetRecord>();
   readonly #objects = new Map<string, LocalPrivateAssetObject>();
   #sequence = 0;
+
+  constructor(
+    private readonly appendAssetAudit?: (entry: SpeakerAssetAuditEntry) => Promise<void>,
+  ) {}
 
   async createUploadGrant(_command: CreatePrivateUploadGrantCommand): Promise<PrivateUploadGrant> {
     throw new Error("A fully bound local upload capability is required.");
@@ -1413,10 +1709,31 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
 
   async registerUploadCapability(binding: PrivateAssetCapabilityBinding) {
     const token = await this.token("upload", binding);
+    const existing = this.#capabilities.get(binding.capabilityId);
+    if (
+      existing !== undefined &&
+      existing.kind === "upload" &&
+      existing.state === "pending" &&
+      sameUploadBinding(existing.binding, binding)
+    ) {
+      existing.tokens.add(token);
+      return {
+        method: "PUT" as const,
+        url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(binding.capabilityId)}/${token}`,
+        headers: {
+          "content-type": binding.contentType,
+          "content-length": String(binding.sizeBytes),
+        },
+        expiresAt: binding.expiresAt,
+      };
+    }
+    if (existing?.kind === "upload" && existing.state === "uploaded") {
+      throw new Error("The upload capability cannot be reauthorized.");
+    }
     this.#capabilities.set(binding.capabilityId, {
       binding: { ...binding },
       kind: "upload",
-      token,
+      tokens: new Set([token]),
       state: "pending",
     });
     return {
@@ -1430,7 +1747,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     };
   }
 
-  async registerDownloadCapability(binding: PrivateAssetCapabilityBinding) {
+  async registerDownloadCapability(binding: PrivateDownloadCapabilityBinding) {
     const object = this.#objects.get(binding.objectKey);
     if (
       object === undefined ||
@@ -1441,10 +1758,24 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     }
     const capabilityId = `download:${crypto.randomUUID()}`;
     const token = await this.token("download", binding);
+    const createdAt = new Date().toISOString();
+    await this.appendAssetAudit?.({
+      id: `private-download-issued:${capabilityId}`,
+      organizationId: binding.tenantId,
+      eventId: binding.eventId,
+      assetId: binding.capabilityId,
+      action: "download_authorized",
+      actorAccountId: binding.requesterAccountId,
+      requesterKind: binding.requesterKind,
+      capabilityId,
+      attributionBasis: "authenticated_requester",
+      occurredAt: createdAt,
+      version: binding.assetVersion,
+    });
     this.#capabilities.set(capabilityId, {
       binding: { ...binding },
       kind: "download",
-      token,
+      tokens: new Set([token]),
       state: "uploaded",
     });
     return {
@@ -1456,7 +1787,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
 
   async consumeUploadCapability(capabilityId: string, token: string, request: Request) {
     const capability = this.#capabilities.get(capabilityId);
-    if (capability === undefined || capability.kind !== "upload" || capability.token !== token) {
+    if (capability === undefined || capability.kind !== "upload" || !capability.tokens.has(token)) {
       throw new Error("The upload capability is invalid.");
     }
     if (capability.state !== "pending") {
@@ -1495,7 +1826,11 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
 
   async consumeDownloadCapability(capabilityId: string, token: string) {
     const capability = this.#capabilities.get(capabilityId);
-    if (capability === undefined || capability.kind !== "download" || capability.token !== token) {
+    if (
+      capability === undefined ||
+      capability.kind !== "download" ||
+      !capability.tokens.has(token)
+    ) {
       throw new Error("The download capability is invalid.");
     }
     if (capability.state !== "uploaded") {
@@ -1504,12 +1839,37 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     if (this.expired(capability.binding.expiresAt)) {
       throw new Error("The download capability has expired.");
     }
-    const object = this.#objects.get(capability.binding.objectKey);
+    capability.state = "claiming";
+    const binding = capability.binding;
+    if (!("requesterAccountId" in binding)) {
+      capability.state = "consumed";
+      throw new Error("The download capability is invalid.");
+    }
+    const claimId = crypto.randomUUID();
+    try {
+      await this.appendAssetAudit?.({
+        id: `private-download-consumed:${claimId}`,
+        organizationId: binding.tenantId,
+        eventId: binding.eventId,
+        assetId: binding.capabilityId,
+        action: "downloaded",
+        actorAccountId: binding.requesterAccountId,
+        requesterKind: binding.requesterKind,
+        capabilityId,
+        attributionBasis: "issuance_principal",
+        occurredAt: new Date().toISOString(),
+        version: binding.assetVersion,
+      });
+    } catch (error) {
+      capability.state = "uploaded";
+      throw error;
+    }
+    capability.state = "consumed";
+    const object = this.#objects.get(binding.objectKey);
     if (
       object === undefined ||
-      object.bytes.byteLength !== capability.binding.sizeBytes ||
-      object.contentType.trim().toLowerCase() !==
-        capability.binding.contentType.trim().toLowerCase()
+      object.bytes.byteLength !== binding.sizeBytes ||
+      object.contentType.trim().toLowerCase() !== binding.contentType.trim().toLowerCase()
     ) {
       throw new Error("The requested private asset is not available.");
     }
@@ -1519,7 +1879,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
       body: this.body(object.bytes),
       contentType: object.contentType,
       sizeBytes: object.bytes.byteLength,
-      fileName: capability.binding.fileName,
+      fileName: binding.fileName,
     };
   }
 
@@ -1529,6 +1889,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
       capability !== undefined &&
       capability.kind === "upload" &&
       capability.state === "uploaded" &&
+      !this.expired(capability.binding.expiresAt) &&
       this.sameBinding(capability.binding, binding)
     );
   }
@@ -1539,6 +1900,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
       capability === undefined ||
       capability.kind !== "upload" ||
       capability.state === "consumed" ||
+      this.expired(capability.binding.expiresAt) ||
       !this.sameBinding(capability.binding, binding)
     ) {
       throw new Error("The upload capability cannot be invalidated.");
@@ -2613,7 +2975,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     { clock: () => new Date(SEEDED_AT) },
   );
   const authenticator = localAuthenticator(personas, eventInvitationRepository);
-  const privateAssetGateway = new LocalPrivateAssetGateway();
+  const privateAssetGateway = new LocalPrivateAssetGateway(
+    speakerRepository.appendAssetAudit.bind(speakerRepository),
+  );
   let speakerService!: SpeakerService;
   const publicRepository = new LocalPublicApiRepository();
   const eventRepository = new InMemoryEventRepository();

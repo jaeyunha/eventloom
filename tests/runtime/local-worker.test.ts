@@ -1154,7 +1154,7 @@ describe.sequential("composed local Worker", () => {
       jsonRequest("POST", uploadPayload, speakerHeaders),
     );
     const upload = await jsonData<{
-      asset: { id: string; state: string; version: number };
+      asset: { id: string; state: string; version: number; versionFamilyId: string };
       grant: {
         method: "PUT";
         url: string;
@@ -1278,6 +1278,139 @@ describe.sequential("composed local Worker", () => {
       }),
     );
 
+    const needsChangesResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/review`,
+      jsonRequest(
+        "POST",
+        {
+          state: "needs_changes",
+          release: false,
+          note: "Replace the session deck with v2.",
+          expectedVersion: 0,
+        },
+        organizerHeaders,
+      ),
+    );
+    expect(needsChangesResponse.status).toBe(200);
+    expect(
+      await jsonData<{ reviewState: string; reviewNote?: string }>(needsChangesResponse),
+    ).toMatchObject({
+      reviewState: "needs_changes",
+      reviewNote: "Replace the session deck with v2.",
+    });
+
+    const returnedTaskResponse = await runtimeRequest(`/api/speaker/events/${eventId}/tasks`, {
+      headers: speakerHeaders,
+    });
+    const returnedTasks =
+      await jsonData<Array<{ id: string; status: string; version: number }>>(returnedTaskResponse);
+    expect(returnedTaskResponse.status).toBe(200);
+    expect(returnedTasks).toContainEqual(
+      expect.objectContaining({ id: uploadTask.id, status: "needs_changes", version: 4 }),
+    );
+
+    const replacementBody = "deterministic replacement speaker bytes";
+    const authorizeReplacement = (idempotencyKey: string, fileName = "deck-v2.pdf") =>
+      runtimeRequest(
+        `/api/speaker/events/${eventId}/uploads`,
+        jsonRequest(
+          "POST",
+          {
+            participantId: uploadTask.participantId,
+            taskId: uploadTask.id,
+            kind: "slides",
+            fileName,
+            contentType: "application/pdf",
+            sizeBytes: new TextEncoder().encode(replacementBody).byteLength,
+            supersedesAssetId: upload.asset.id,
+            expectedLatestVersion: upload.asset.version,
+          },
+          { ...speakerHeaders, "idempotency-key": idempotencyKey },
+        ),
+      );
+    const [replacementAuthorizeResponse, replayedReplacementResponse] = await Promise.all([
+      authorizeReplacement("local-runtime-replacement-v2"),
+      authorizeReplacement("local-runtime-replacement-v2"),
+    ]);
+    expect(
+      replacementAuthorizeResponse.status,
+      await replacementAuthorizeResponse.clone().text(),
+    ).toBe(201);
+    const replacement = await jsonData<{
+      asset: {
+        id: string;
+        version: number;
+        versionFamilyId: string;
+        supersedesAssetId?: string;
+      };
+      grant: { method: string; url: string; headers: Record<string, string> };
+    }>(replacementAuthorizeResponse);
+    const replayedReplacement = await jsonData<{
+      asset: { id: string };
+      grant: { method: string; url: string; headers: Record<string, string> };
+    }>(replayedReplacementResponse);
+    expect(replayedReplacementResponse.status).toBe(201);
+    expect(replayedReplacement.asset.id).toBe(replacement.asset.id);
+    const changedReplayResponse = await authorizeReplacement(
+      "local-runtime-replacement-v2",
+      "deck-v2-renamed.pdf",
+    );
+    expect(changedReplayResponse.status).toBe(409);
+    const staleHeadResponse = await authorizeReplacement("local-runtime-replacement-v2-other");
+    expect(staleHeadResponse.status).toBe(409);
+    expect(replacement.asset).toMatchObject({
+      version: 2,
+      versionFamilyId: upload.asset.versionFamilyId,
+      supersedesAssetId: upload.asset.id,
+    });
+    const replacementUploadResponse = await runtimeRequest(replayedReplacement.grant.url, {
+      method: replayedReplacement.grant.method,
+      headers: { ...replayedReplacement.grant.headers, ...speakerHeaders },
+      body: replacementBody,
+    });
+    expect(replacementUploadResponse.status, await replacementUploadResponse.clone().text()).toBe(
+      201,
+    );
+    const replacementFinalizeResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/assets/${replacement.asset.id}/finalize`,
+      jsonRequest("POST", { state: "ready" }, speakerHeaders),
+    );
+    expect(replacementFinalizeResponse.status).toBe(200);
+    const replacementSubmitResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/tasks/${uploadTask.id}/transitions`,
+      jsonRequest(
+        "POST",
+        {
+          toStatus: "submitted",
+          expectedVersion: 4,
+        },
+        speakerHeaders,
+      ),
+    );
+    expect(replacementSubmitResponse.status).toBe(200);
+
+    const updatedDeliverablesResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/deliverables`,
+      { headers: organizerHeaders },
+    );
+    const updatedDeliverables = await jsonData<{
+      items: Array<{
+        task: { id: string };
+        currentAsset?: { id: string; version: number; versionFamilyId: string };
+      }>;
+    }>(updatedDeliverablesResponse);
+    expect(updatedDeliverablesResponse.status).toBe(200);
+    expect(updatedDeliverables.items).toContainEqual(
+      expect.objectContaining({
+        task: expect.objectContaining({ id: uploadTask.id }),
+        currentAsset: expect.objectContaining({
+          id: replacement.asset.id,
+          version: 2,
+          versionFamilyId: upload.asset.versionFamilyId,
+        }),
+      }),
+    );
+
     const downloadGrantResponse = await runtimeRequest(
       `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/download`,
       { method: "POST", headers: organizerHeaders },
@@ -1294,6 +1427,25 @@ describe.sequential("composed local Worker", () => {
     );
     expect(downloadGrant.url).not.toMatch(/^https?:/u);
 
+    const issuedAuditResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/audit`,
+      { headers: organizerHeaders },
+    );
+    const issuedAudit =
+      await jsonData<Array<{ action: string; actorAccountId: string; requesterKind?: string }>>(
+        issuedAuditResponse,
+      );
+    expect(issuedAuditResponse.status).toBe(200);
+    expect(issuedAudit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "download_authorized",
+          actorAccountId: "local-organizer",
+          requesterKind: "organizer",
+        }),
+      ]),
+    );
+
     const downloadResponse = await runtimeRequest(downloadGrant.url, {
       headers: organizerHeaders,
     });
@@ -1301,6 +1453,24 @@ describe.sequential("composed local Worker", () => {
     expect(downloadResponse.status).toBe(200);
     expect(downloadResponse.headers.get("content-type")).toBe("application/pdf");
     expect([...downloadedBytes]).toEqual([...new TextEncoder().encode(fileBody)]);
+
+    const consumedAuditResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/audit`,
+      { headers: organizerHeaders },
+    );
+    const consumedAudit =
+      await jsonData<Array<{ action: string; actorAccountId: string; requesterKind?: string }>>(
+        consumedAuditResponse,
+      );
+    expect(consumedAudit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "downloaded",
+          actorAccountId: "local-organizer",
+          requesterKind: "organizer",
+        }),
+      ]),
+    );
 
     const replayResponse = await runtimeRequest(downloadGrant.url, {
       headers: organizerHeaders,

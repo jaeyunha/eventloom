@@ -149,8 +149,11 @@ export class D1CfpFileAssetGateway implements CfpFileAssetGateway {
     if (input.state === "ready") {
       const verified = await this.#privateAssets.verifyUploadCapability(binding);
       if (!verified) throw new CfpError("CONFLICT", "The uploaded object could not be verified.");
-    } else {
+    }
+    try {
       await this.#privateAssets.invalidateUploadCapability(binding);
+    } catch {
+      throw new CfpError("CONFLICT", "The upload capability is no longer valid.");
     }
     await finalizeCfpFileAsset(this.#database, {
       tenantId: input.tenantId,
@@ -160,6 +163,7 @@ export class D1CfpFileAssetGateway implements CfpFileAssetGateway {
       state: input.state,
       rejectionReason: input.state === "rejected" ? (input.rejectionReason ?? null) : null,
       finalizedAt: this.#now().toISOString(),
+      objectKey: asset.object_key,
     });
     const finalized = await this.#load(input);
     if (finalized.state !== input.state) {

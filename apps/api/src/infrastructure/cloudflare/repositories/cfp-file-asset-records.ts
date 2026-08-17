@@ -3,6 +3,7 @@ import type {
   PrivateAssetCapabilityBinding,
   PrivateUploadGrant,
 } from "../../../features/speaker/types";
+import { privateObjectCleanupOutboxStatement } from "../private-object-cleanup";
 
 const SUBMISSION_CAPABILITY_PARTICIPANT = "__cfp_submission__";
 const UPLOAD_TTL_MS = 15 * 60 * 1000;
@@ -10,7 +11,8 @@ const UPLOAD_TTL_MS = 15 * 60 * 1000;
 export interface CfpFileAssetStatement {
   bind(...values: (ArrayBuffer | null | number | string)[]): CfpFileAssetStatement;
   first<T>(): Promise<T | null>;
-  run(): Promise<unknown>;
+  all<T>(): Promise<{ results: T[] }>;
+  run(): Promise<{ meta?: { changes?: number } }>;
 }
 
 export interface CfpFileAssetCapabilityProvider {
@@ -21,6 +23,9 @@ export interface CfpFileAssetCapabilityProvider {
 
 export interface CfpFileAssetDatabase {
   prepare(query: string): CfpFileAssetStatement;
+  batch(
+    statements: readonly CfpFileAssetStatement[],
+  ): Promise<readonly { meta?: { changes?: number } }[]>;
 }
 
 export interface StoredCfpFileAsset {
@@ -142,22 +147,51 @@ export async function finalizeCfpFileAsset(
     state: "ready" | "rejected";
     rejectionReason: string | null;
     finalizedAt: string;
+    objectKey: string;
   },
 ): Promise<void> {
-  await database
-    .prepare(
-      `UPDATE cfp_file_assets
-       SET state = ?, rejection_reason = ?, finalized_at = ?
-       WHERE organization_id = ? AND event_id = ? AND submission_id = ? AND id = ? AND state = 'pending_upload'`,
-    )
-    .bind(
-      input.state,
-      input.rejectionReason,
-      input.finalizedAt,
-      input.tenantId,
-      input.eventId,
-      input.submissionId,
-      input.assetId,
-    )
-    .run();
+  const statements: CfpFileAssetStatement[] = [
+    database
+      .prepare(
+        `SELECT CASE WHEN EXISTS (
+           SELECT 1 FROM cfp_file_assets
+            WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+              AND id = ? AND state = 'pending_upload'
+         ) THEN 1 ELSE json_extract('D1_CAS_CONFLICT', '$') END AS valid`,
+      )
+      .bind(input.tenantId, input.eventId, input.submissionId, input.assetId),
+    database
+      .prepare(
+        `UPDATE cfp_file_assets
+         SET state = ?, rejection_reason = ?, finalized_at = ?
+         WHERE organization_id = ? AND event_id = ? AND submission_id = ? AND id = ? AND state = 'pending_upload'`,
+      )
+      .bind(
+        input.state,
+        input.rejectionReason,
+        input.finalizedAt,
+        input.tenantId,
+        input.eventId,
+        input.submissionId,
+        input.assetId,
+      ),
+  ];
+  if (input.state === "rejected") {
+    statements.push(
+      privateObjectCleanupOutboxStatement(
+        database,
+        {
+          kind: "private_object_delete",
+          source: "cfp",
+          tenantId: input.tenantId,
+          eventId: input.eventId,
+          submissionId: input.submissionId,
+          assetId: input.assetId,
+          objectKey: input.objectKey,
+        },
+        input.finalizedAt,
+      ) as CfpFileAssetStatement,
+    );
+  }
+  await database.batch(statements);
 }

@@ -42,6 +42,7 @@ export function buildFileReviewContext(
     family,
     versions,
     speakerLabel: asset.participantName ?? profile?.displayName ?? asset.participantId,
+    uploaderLabel: asset.uploaderLabel ?? "Uploader unavailable",
     sessionLabel:
       session?.title ??
       asset.sessionTitle ??

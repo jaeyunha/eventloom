@@ -146,6 +146,7 @@ export interface DeliverableAsset {
   readonly submissionId?: string;
   readonly sessionTitle?: string;
   readonly participantName?: string;
+  readonly uploaderLabel?: string;
   readonly participantId: string;
   readonly taskId?: string;
   readonly kind: DeliverableAssetKind;
@@ -317,6 +318,8 @@ export interface DeliverableHeadshotReplacementInput {
   readonly file: File;
   readonly expectedVersion: number;
   readonly supersedesAssetId?: string;
+  readonly expectedLatestVersion?: number;
+  readonly idempotencyKey?: string;
 }
 
 export interface DeliverableHeadshotReplacement {
@@ -506,6 +509,9 @@ function publicAsset(value: unknown): DeliverableAsset {
     ...(typeof candidate.sessionTitle === "string" ? { sessionTitle: candidate.sessionTitle } : {}),
     ...(typeof candidate.participantName === "string"
       ? { participantName: candidate.participantName }
+      : {}),
+    ...(typeof candidate.uploaderLabel === "string"
+      ? { uploaderLabel: candidate.uploaderLabel }
       : {}),
     ...(typeof candidate.taskId === "string" ? { taskId: candidate.taskId } : {}),
     ...(typeof candidate.version === "number" ? { version: candidate.version } : {}),
@@ -1529,11 +1535,38 @@ export function createDeliverablesApi(
     input: DeliverableHeadshotReplacementInput,
   ): Promise<DeliverableHeadshotReplacement> {
     const contentType = input.file.type.trim() || "application/octet-stream";
+    const expectedLatestVersion =
+      input.supersedesAssetId === undefined ? undefined : input.expectedLatestVersion;
+    if (
+      input.supersedesAssetId !== undefined &&
+      (!Number.isSafeInteger(expectedLatestVersion) || (expectedLatestVersion ?? 0) <= 0)
+    ) {
+      throw new Error("The current headshot version could not be resolved.");
+    }
+    const idempotencyKey =
+      input.supersedesAssetId === undefined
+        ? undefined
+        : (input.idempotencyKey ??
+          [
+            "headshot-replacement",
+            input.participantId,
+            input.submissionId ?? "",
+            input.supersedesAssetId,
+            expectedLatestVersion ?? "",
+            input.file.name,
+            contentType,
+            input.file.size,
+            input.file.lastModified,
+          ]
+            .map((part) => encodeURIComponent(String(part)))
+            .join(":")
+            .slice(0, 128));
     const authorization = normalizeUploadAuthorization(
       await speakerRequest<unknown>(
         `/organizer/profiles/${segment(input.participantId, "participant ID")}/headshot`,
         {
           method: "POST",
+          headers: idempotencyKey === undefined ? {} : { "idempotency-key": idempotencyKey },
           body: JSON.stringify({
             participantId: input.participantId,
             submissionId: input.submissionId,
@@ -1543,7 +1576,10 @@ export function createDeliverablesApi(
             sizeBytes: input.file.size,
             ...(input.supersedesAssetId === undefined
               ? {}
-              : { supersedesAssetId: input.supersedesAssetId }),
+              : {
+                  supersedesAssetId: input.supersedesAssetId,
+                  expectedLatestVersion,
+                }),
           }),
         },
       ),

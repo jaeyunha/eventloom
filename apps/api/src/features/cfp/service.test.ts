@@ -323,15 +323,29 @@ class ParallelFormRepository extends MemoryRepository {
 }
 
 class MemoryIdempotency implements CfpIdempotencyCoordinator {
-  readonly #operations = new Map<string, Promise<unknown>>();
+  readonly #operations = new Map<string, { fingerprint: string; promise: Promise<unknown> }>();
 
-  run<T>(scope: string, _key: string, operation: () => Promise<T>): Promise<T> {
-    const existing = this.#operations.get(scope);
-    if (existing) {
-      return existing as Promise<T>;
+  run<T>(
+    scope: string,
+    key: string,
+    operation: () => Promise<T>,
+    fingerprint = `cfp:${scope}:${key}`,
+  ): Promise<T> {
+    const storageKey = `${scope}:${key}`;
+    const existing = this.#operations.get(storageKey);
+    if (existing !== undefined) {
+      if (existing.fingerprint !== fingerprint) {
+        return Promise.reject(
+          new CfpError(
+            "CONFLICT",
+            "The idempotency key was already used with a different request.",
+          ),
+        );
+      }
+      return existing.promise as Promise<T>;
     }
     const pending = operation();
-    this.#operations.set(scope, pending);
+    this.#operations.set(storageKey, { fingerprint, promise: pending });
     return pending;
   }
 }
@@ -1017,6 +1031,100 @@ describe("CFP rules and configuration", () => {
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(repository.submissions.get(draft.id)?.formVersion).toBe(2);
+  });
+
+  it("checks submission ownership before replaying a file upload idempotency key", async () => {
+    let issueCalls = 0;
+    const fileAssets = {
+      getAsset: async () => null,
+      issueUpload: async (input: {
+        tenantId: string;
+        eventId: string;
+        submissionId: string;
+        owner: "submission" | "participant";
+        fieldKey: string;
+        fileName: string;
+        contentType: string;
+        sizeBytes: number;
+        idempotencyKey: string;
+      }) => {
+        issueCalls += 1;
+        return {
+          asset: {
+            assetId: "asset-1",
+            tenantId: input.tenantId,
+            eventId: input.eventId,
+            submissionId: input.submissionId,
+            owner: input.owner,
+            state: "pending_upload" as const,
+            contentType: input.contentType,
+            sizeBytes: input.sizeBytes,
+          },
+          grant: {
+            method: "PUT" as const,
+            url: "/upload/asset-1",
+            headers: {},
+            expiresAt: "2026-08-08T12:15:00.000Z",
+          },
+        };
+      },
+    };
+    const repository = new MemoryRepository();
+    const form = repository.forms.get("form_1");
+    if (form === undefined) throw new Error("Expected the fixture form.");
+    repository.forms.set(
+      form.id,
+      buildForm({
+        submissionFields: [
+          ...form.submissionFields,
+          {
+            id: "field_slides",
+            sectionId: "session",
+            key: "slides",
+            label: "Slides",
+            kind: "file_request",
+            required: true,
+            options: [],
+            fileRequest: {
+              allowedMimeTypes: ["application/pdf"],
+              maxBytes: 1024,
+              required: true,
+              owner: "submission",
+            },
+          },
+        ],
+      }),
+    );
+    const { service } = createFixture("2026-08-08T12:00:00.000Z", fileAssets, repository);
+    const draft = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "account_1",
+      idempotencyKey: "owner-replay-draft",
+    });
+    const request = {
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: draft.id,
+      fieldKey: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 12,
+      idempotencyKey: "owner-replay-upload",
+    } as const;
+
+    await expect(
+      service.issueFileUpload({ ...request, ownerAccountId: "account_1" }),
+    ).resolves.toMatchObject({
+      asset: { assetId: "asset-1" },
+    });
+    await expect(
+      service.issueFileUpload({ ...request, ownerAccountId: "account_2" }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(issueCalls).toBe(1);
   });
 });
 
