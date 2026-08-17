@@ -260,18 +260,9 @@ Do not treat deployable configuration as production readiness. Follow
 
 ## Contributing
 
-Focused fixes and well-scoped improvements are welcome.
-
-1. Read [`AGENTS.md`](AGENTS.md), [`spec/eventloom.md`](spec/eventloom.md), and
-   the relevant architecture or operational guide.
-2. Work in a dedicated branch or worktree and preserve unrelated changes.
-3. Add behavioral coverage for observable changes; do not weaken existing tests.
-4. Run the focused tests while editing, then the full relevant gate.
-5. Open a pull request that separates local/mock evidence from deployed evidence.
-
-For larger changes, describe the user workflow, system boundary, and acceptance
-criteria before implementation. Keep credentials, provider payloads, browser
-profiles, recordings, generated output, and private evidence out of commits.
+Focused fixes and well-scoped improvements are welcome. Read
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for project boundaries, local setup,
+verification expectations, pull request guidance, and contribution licensing.
 
 ## Project status
 
