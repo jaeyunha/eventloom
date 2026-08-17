@@ -1648,7 +1648,7 @@ class LocalSessionRepository extends InMemorySessionRepository {
 type LocalPrivateAssetRecord = {
   readonly binding: PrivateAssetCapabilityBinding | PrivateDownloadCapabilityBinding;
   readonly kind: "upload" | "download";
-  readonly token: string;
+  readonly tokens: Set<string>;
   state: "pending" | "uploaded" | "claiming" | "consumed";
 };
 
@@ -1680,10 +1680,23 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
 
   async registerUploadCapability(binding: PrivateAssetCapabilityBinding) {
     const token = await this.token("upload", binding);
+    const existing = this.#capabilities.get(binding.capabilityId);
+    if (existing !== undefined && existing.kind === "upload" && existing.state === "pending") {
+      existing.tokens.add(token);
+      return {
+        method: "PUT" as const,
+        url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(binding.capabilityId)}/${token}`,
+        headers: {
+          "content-type": binding.contentType,
+          "content-length": String(binding.sizeBytes),
+        },
+        expiresAt: binding.expiresAt,
+      };
+    }
     this.#capabilities.set(binding.capabilityId, {
       binding: { ...binding },
       kind: "upload",
-      token,
+      tokens: new Set([token]),
       state: "pending",
     });
     return {
@@ -1725,7 +1738,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     this.#capabilities.set(capabilityId, {
       binding: { ...binding },
       kind: "download",
-      token,
+      tokens: new Set([token]),
       state: "uploaded",
     });
     return {
@@ -1737,7 +1750,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
 
   async consumeUploadCapability(capabilityId: string, token: string, request: Request) {
     const capability = this.#capabilities.get(capabilityId);
-    if (capability === undefined || capability.kind !== "upload" || capability.token !== token) {
+    if (capability === undefined || capability.kind !== "upload" || !capability.tokens.has(token)) {
       throw new Error("The upload capability is invalid.");
     }
     if (capability.state !== "pending") {
@@ -1776,7 +1789,11 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
 
   async consumeDownloadCapability(capabilityId: string, token: string) {
     const capability = this.#capabilities.get(capabilityId);
-    if (capability === undefined || capability.kind !== "download" || capability.token !== token) {
+    if (
+      capability === undefined ||
+      capability.kind !== "download" ||
+      !capability.tokens.has(token)
+    ) {
       throw new Error("The download capability is invalid.");
     }
     if (capability.state !== "uploaded") {
