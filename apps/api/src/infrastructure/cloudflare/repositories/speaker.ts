@@ -1927,7 +1927,7 @@ export class D1SpeakerRepository
              AND version_family_id = ?
              AND id = ?
              AND version = ?
-             AND state = 'ready'
+             AND state IN ('ready', 'rejected')
         )
         AND NOT EXISTS (
           SELECT 1

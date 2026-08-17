@@ -222,6 +222,9 @@ export async function reconcilePrivateObjectCleanup(
          FROM private_uploads
         WHERE state IN ('pending', 'uploaded', 'scanning')
           AND expires_at IS NOT NULL AND expires_at <= ?
+          AND json_valid(scan_result_code) = 1
+          AND json_type(scan_result_code, '$.eventId') = 'text'
+          AND length(trim(json_extract(scan_result_code, '$.eventId'))) > 0
         ORDER BY expires_at, created_at, id
         LIMIT ?`,
     )

@@ -392,7 +392,7 @@ class LifecycleRepository implements SpeakerRepository {
       (candidate) =>
         candidate.id === command.expectedLatestAssetId &&
         candidate.version === command.expectedLatestVersion &&
-        candidate.state === "ready",
+        (candidate.state === "ready" || candidate.state === "rejected"),
     );
     const hasNewerVersion = family.some(
       (candidate) => (candidate.version ?? 1) > command.expectedLatestVersion,
@@ -1464,11 +1464,11 @@ describe("private speaker asset lifecycle", () => {
       role: "owner",
     });
     const gateway = new CapabilityGateway();
-    const ids = ["baseline-v1", "baseline-v2"];
+    let idCounter = 0;
     const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
-      generateId: () => ids.shift() ?? "generated-id",
+      generateId: () => `baseline-${++idCounter}`,
     });
     const first = await service.issueUploadGrant({
       eventId: "event-1",
@@ -1518,18 +1518,48 @@ describe("private speaker asset lifecycle", () => {
       }),
     ).rejects.toMatchObject({ code: "TASK_ASSET_NOT_READY", status: 409 });
 
+    const rejectedReplacement = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: "upload-task",
+      kind: "slides",
+      fileName: "baseline-v2-rejected.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+      supersedesAssetId: first.asset.id,
+      expectedLatestVersion: 1,
+      idempotencyKey: "baseline-v2",
+    });
+    expect(rejectedReplacement.asset).toMatchObject({
+      version: 2,
+      state: "pending_upload",
+      supersedesAssetId: first.asset.id,
+    });
+    gateway.uploaded.add(rejectedReplacement.asset.objectKey);
+    await service.finalizeAsset({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: rejectedReplacement.asset.id,
+      state: "rejected",
+    });
     const replacement = await service.issueUploadGrant({
       eventId: "event-1",
       accountId: "account-1",
       participantId: "participant-1",
       taskId: "upload-task",
       kind: "slides",
-      fileName: "baseline-v2.pdf",
+      fileName: "baseline-v3.pdf",
       contentType: "application/pdf",
       sizeBytes: 3,
-      supersedesAssetId: first.asset.id,
-      expectedLatestVersion: 1,
-      idempotencyKey: "baseline-v2",
+      supersedesAssetId: rejectedReplacement.asset.id,
+      expectedLatestVersion: 2,
+      idempotencyKey: "baseline-v3",
+    });
+    expect(replacement.asset).toMatchObject({
+      version: 3,
+      state: "pending_upload",
+      supersedesAssetId: rejectedReplacement.asset.id,
     });
     gateway.uploaded.add(replacement.asset.objectKey);
     await service.finalizeAsset({

@@ -1302,7 +1302,7 @@ export class LocalSpeakerRepository
     if (
       expected === undefined ||
       expected.version !== command.expectedLatestVersion ||
-      expected.state !== "ready" ||
+      !["ready", "rejected"].includes(expected.state) ||
       asset.state !== "pending_upload" ||
       asset.supersedesAssetId !== expected.id ||
       asset.version !== command.expectedLatestVersion + 1 ||

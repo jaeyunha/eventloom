@@ -5350,11 +5350,11 @@ export class SpeakerService {
         existing.submissionId !== submissionId ||
         existing.kind !== input.kind ||
         (taskId !== undefined && existing.taskId !== taskId) ||
-        existing.state !== "ready")
+        !["ready", "rejected"].includes(existing.state))
     ) {
       throw notFound();
     }
-    if (existing !== null && existing.state !== "ready") {
+    if (existing !== null && !["ready", "rejected"].includes(existing.state)) {
       throw new SpeakerServiceError(
         "UPLOAD_POLICY_VIOLATION",
         409,

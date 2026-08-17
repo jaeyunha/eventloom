@@ -210,4 +210,37 @@ describe("private object deletion authority", () => {
       { state: "queued" },
     ]);
   });
+
+  it("skips malformed legacy rows without starving valid expired uploads", async () => {
+    const db = database();
+    db.executeScript(`
+      ALTER TABLE private_uploads ADD COLUMN scan_result_code TEXT;
+      ALTER TABLE private_uploads ADD COLUMN created_at TEXT;
+      INSERT INTO private_uploads
+        (id,tenant_id,object_key,state,expires_at,updated_at,scan_result_code,created_at)
+      VALUES
+        ('upload-legacy','tenant-1','private/legacy.pdf','uploaded',
+         '2026-08-09T10:00:00.000Z','2026-08-09T09:00:00.000Z',
+         'legacy scan text','2026-08-09T09:00:00.000Z'),
+        ('upload-valid','tenant-1','private/valid.pdf','uploaded',
+         '2026-08-09T11:00:00.000Z','2026-08-09T10:00:00.000Z',
+         '{"eventId":"event-1"}','2026-08-09T10:00:00.000Z');
+    `);
+    const queue = {
+      async send() {},
+    } as unknown as Queue<CloudflareOutboxMessage>;
+
+    await expect(
+      reconcilePrivateObjectCleanup(db, queue, {
+        limit: 1,
+        now: () => new Date("2026-08-09T12:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      expiredSelected: 1,
+      intentsCreated: 1,
+    });
+    expect(db.query<{ id: string }>("SELECT id FROM outbox_jobs ORDER BY id")).toEqual([
+      { id: "private-object-delete:private-upload:upload-valid" },
+    ]);
+  });
 });
