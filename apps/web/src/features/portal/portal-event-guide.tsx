@@ -11,6 +11,7 @@ import {
 import { PublishedGuideArticle } from "./portal-published-content";
 import styles from "./portal-workspace.module.css";
 import type { PortalResource, PortalWikiPage } from "./types";
+import type { ParticipantSafeGuideFailure } from "./portal-provider-model";
 
 type GuideItem = {
   readonly kind: "Resource" | "Guide";
@@ -21,14 +22,18 @@ export interface EventGuideWorkspaceViewProps {
   readonly eventName: string;
   readonly available: boolean;
   readonly resources: readonly PortalResource[];
+  readonly resourceError?: ParticipantSafeGuideFailure | null;
   readonly wiki: readonly PortalWikiPage[];
+  readonly wikiError?: ParticipantSafeGuideFailure | null;
 }
 
 export function EventGuideWorkspaceView({
   eventName,
   available,
   resources,
+  resourceError = null,
   wiki,
+  wikiError = null,
 }: EventGuideWorkspaceViewProps) {
   const items = useMemo<readonly GuideItem[]>(
     () => [
@@ -58,19 +63,53 @@ export function EventGuideWorkspaceView({
         }
       />
 
+      {available && resourceError ? (
+        <WorkspaceState
+          variant="error"
+          title="Event resources unavailable"
+          description={
+            <>
+              {resourceError.message}
+              {resourceError.supportId === null ? null : (
+                <>
+                  <br />
+                  <span>Support ID: {resourceError.supportId}.</span>
+                </>
+              )}
+            </>
+          }
+        />
+      ) : null}
+      {available && wikiError ? (
+        <WorkspaceState
+          variant="error"
+          title="Event guide pages unavailable"
+          description={
+            <>
+              {wikiError.message}
+              {wikiError.supportId === null ? null : (
+                <>
+                  <br />
+                  <span>Support ID: {wikiError.supportId}.</span>
+                </>
+              )}
+            </>
+          }
+        />
+      ) : null}
       {!available ? (
         <WorkspaceState
           variant="error"
           title="Event guide unavailable"
           description="This event context did not grant access to published participant guidance."
         />
-      ) : items.length === 0 ? (
+      ) : items.length === 0 && resourceError === null && wikiError === null ? (
         <WorkspaceState
           variant="empty"
           title="Nothing published yet"
           description="The event team has not published resources or guide pages for participants."
         />
-      ) : (
+      ) : items.length > 0 ? (
         <WorkspaceSurface
           title="Published guide"
           description="Content is supplied by the event team and rendered with unsafe markup and URLs removed."
@@ -113,7 +152,7 @@ export function EventGuideWorkspaceView({
             }
           />
         </WorkspaceSurface>
-      )}
+      ) : null}
     </div>
   );
 }

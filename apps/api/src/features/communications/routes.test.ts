@@ -40,6 +40,10 @@ const candidate: ReminderCandidate = {
 class TestReminderOutbox implements ReminderOutboxDelivery {
   readonly requests: Parameters<ReminderOutboxDelivery["enqueue"]>[0][] = [];
 
+  async requeuePending() {
+    return { requeued: 0 };
+  }
+
   async enqueue(input: Parameters<ReminderOutboxDelivery["enqueue"]>[0]) {
     this.requests.push(input);
     return { outboxJobId: `outbox-${this.requests.length}` };

@@ -604,6 +604,34 @@ describe("D1SpeakerRepository", () => {
     expect(database.batches[0]?.join("\n")).toContain("INSERT INTO speaker_task_reminder_offsets");
   });
 
+  it("batches reminder offset replacement and its organizer audit with the task update", async () => {
+    const database = new RecordingD1();
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+
+    await repository.updateTask?.({
+      task: {
+        ...task,
+        dueAt: "2027-04-01",
+        reminderOffsetsMinutes: [0, 1_440],
+        version: 2,
+        updatedAt: "2026-08-13T11:00:00.000Z",
+      },
+      expectedVersion: 1,
+      actorAccountId: "organizer-1",
+      audit: {
+        id: "audit:speaker-task-reminder-offsets:task-1:2",
+        action: "speaker_task.reminder_offsets_updated",
+        previousReminderOffsetsMinutes: [60],
+      },
+    });
+
+    const batch = database.batches[0]?.join("\n") ?? "";
+    expect(batch).toContain("UPDATE speaker_tasks");
+    expect(batch).toContain("DELETE FROM speaker_task_reminder_offsets");
+    expect(batch).toContain("INSERT INTO speaker_task_reminder_offsets");
+    expect(batch).toContain("INSERT INTO audit_events");
+  });
+
   it("reads the published task form and ordered immutable response history in event tenant scope", async () => {
     const database = new SpeakerWorkflowD1({
       speaker_task_forms: [

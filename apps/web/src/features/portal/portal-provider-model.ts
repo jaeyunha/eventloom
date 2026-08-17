@@ -17,6 +17,60 @@ export function messageFrom(error: unknown): string {
   return "The speaker portal request could not be completed.";
 }
 
+export interface ParticipantSafeGuideFailure {
+  readonly message: string;
+  readonly supportId: string | null;
+}
+
+function opaqueSupportId(error: unknown): string | null {
+  if (!(error instanceof PortalApiError)) return null;
+  const traceId = error.traceId?.trim();
+  return traceId !== undefined && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,99}$/u.test(traceId)
+    ? traceId
+    : null;
+}
+
+export function participantSafeGuideFailure(
+  error: unknown,
+  resource: "resources" | "wiki",
+): ParticipantSafeGuideFailure {
+  const label =
+    resource === "resources" ? "Published event resources" : "Published event guide pages";
+  if (error instanceof PortalApiError) {
+    const code = error.code.toUpperCase();
+    if (
+      error.status === 401 ||
+      error.status === 403 ||
+      error.status === 404 ||
+      code.includes("AUTH") ||
+      code.includes("FORBIDDEN") ||
+      code.includes("NOT_FOUND")
+    ) {
+      return {
+        message: `${label} are not available for this event.`,
+        supportId: opaqueSupportId(error),
+      };
+    }
+    if (
+      error.status === 408 ||
+      error.status === 429 ||
+      error.status >= 500 ||
+      code.includes("TIMEOUT") ||
+      code.includes("RATE_LIMIT") ||
+      code.includes("UNAVAILABLE")
+    ) {
+      return {
+        message: `${label} are temporarily unavailable. Try again later.`,
+        supportId: opaqueSupportId(error),
+      };
+    }
+  }
+  return {
+    message: `${label} could not be loaded. Try again later.`,
+    supportId: opaqueSupportId(error),
+  };
+}
+
 export function withUpdatedTask(view: PortalView, task: PortalTask): PortalView {
   const tasks = view.tasks.map((candidate) => (candidate.id === task.id ? task : candidate));
   return {
