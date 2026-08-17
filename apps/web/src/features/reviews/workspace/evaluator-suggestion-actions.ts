@@ -93,6 +93,7 @@ export function useEvaluatorSuggestionActions(scope: EvaluatorAutosaveController
                 }
               : {}),
             ...(action === "reject" ? { reason: "Rejected by the assigned human evaluator." } : {}),
+            ...(action === "reject" && criterionId !== undefined ? { criterionId } : {}),
           }),
         },
       );

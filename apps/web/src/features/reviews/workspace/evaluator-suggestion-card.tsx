@@ -93,7 +93,7 @@ export function EvaluatorSuggestionCard({
             <button
               className={styles.dangerButton}
               type="button"
-              onClick={() => void resolveSuggestion(suggestionRecord, "reject")}
+              onClick={() => void resolveSuggestion(suggestionRecord, "reject", criterion.id)}
               disabled={suggestionBusy || reviewLocked}
             >
               Reject suggestion

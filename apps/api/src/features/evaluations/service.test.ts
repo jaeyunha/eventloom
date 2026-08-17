@@ -4923,6 +4923,33 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(acceptedAfterPartial.suggestion.status).toBe("accepted");
     expect(acceptedAfterPartial.review?.scores.quality?.value).toBe(5);
     expect(acceptedAfterPartial.review?.scores.relevance?.value).toBe(8);
+    const secondSuggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
+      assignmentId: assignment.id,
+    });
+    const acceptedFirst = await service.resolveAiSuggestion(
+      reviewer("reviewer-1"),
+      secondSuggestion.id,
+      {
+        action: "accept",
+        criterionId: "quality",
+        scores: { quality: 4 },
+        expectedVersion: secondSuggestion.version,
+      },
+    );
+    expect(acceptedFirst.suggestion.status).toBe("pending");
+    const rejectedSecond = await service.resolveAiSuggestion(
+      reviewer("reviewer-1"),
+      secondSuggestion.id,
+      {
+        action: "reject",
+        criterionId: "relevance",
+        reason: "Rejected by the assigned human evaluator.",
+        expectedVersion: acceptedFirst.suggestion.version,
+      },
+    );
+    expect(rejectedSecond.suggestion.status).toBe("rejected");
+    expect(rejectedSecond.review?.scores.quality?.humanConfirmedBy).toBe("reviewer-1");
+    expect(rejectedSecond.review?.scores.quality?.suggestionStatus).toBe("accepted");
     const resolved = await service.resolveAiSuggestion(reviewer("reviewer-1"), suggestion.id, {
       action: "accept",
       expectedVersion: suggestion.version,

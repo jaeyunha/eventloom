@@ -1285,6 +1285,14 @@ function seedMigratedEvaluationAssignment(
       '${migratedSuggestion.eventId}', '${migratedSuggestion.planId}',
       'Migrated round', 0, 1, 'rubric-migrated-1', 1, 0, 'none'
     );
+    INSERT INTO submission_versions (
+      organization_id, event_id, submission_id, version, reason,
+      actor_id, idempotency_key, snapshot_json, created_at
+    ) VALUES (
+      '${migratedSuggestion.tenantId}', '${migratedSuggestion.eventId}',
+      '${migratedSuggestion.submissionId}', 1, 'draft_created',
+      'reviewer-migrated-1', NULL, '{}', '${timestamp}'
+    );
     INSERT INTO review_assignments (
       id, organization_id, event_id, plan_id, round_id, round_revision,
       submission_id, reviewer_id, status, plan_version, rubric_revision,

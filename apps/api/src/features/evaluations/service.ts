@@ -3112,9 +3112,18 @@ export class EvaluationService {
     } else if (currentReview !== null) {
       const scores: Record<string, RubricScore> = { ...currentReview.scores };
       let changed = false;
-      for (const candidate of suggestion.criterionCandidates) {
+      const candidatesToReject =
+        input.criterionId === undefined
+          ? suggestion.criterionCandidates
+          : suggestion.criterionCandidates.filter(
+              (candidate) => candidate.criterionId === input.criterionId,
+            );
+      for (const candidate of candidatesToReject) {
         const score = scores[candidate.criterionId];
-        if (score?.suggestionId === suggestion.id) {
+        if (
+          score?.suggestionId === suggestion.id &&
+          score.humanConfirmedBy === null
+        ) {
           scores[candidate.criterionId] = {
             ...score,
             origin: "ai",

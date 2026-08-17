@@ -543,6 +543,7 @@ export interface EvaluationAiSuggestionProvider {
 export interface ResolveEvaluationSuggestionInput {
   readonly action: EvaluationSuggestionResolutionAction;
   readonly expectedVersion: number;
+  readonly criterionId?: string | undefined;
   readonly reason?: string | undefined;
   /** Human edits keyed by criterion id. */
   readonly scores?: Readonly<Record<string, number>> | undefined;
