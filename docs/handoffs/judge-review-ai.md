@@ -6,7 +6,8 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact pushed head: `7fc9e9e36a51b376c45506dfbf14062beb5cfaa3`
+- Exact pushed head: `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
+- Latest integrated `github/main`: `613cd022e47f24aafd5b023ceac52843d976cfdf`
 - Integrated latest `github/main`: `3e236387223e8e95fa9b2ee78d5e5dee1117882f`
 - PR: https://github.com/jaeyunha/eventloom/pull/34
 - Issue: https://github.com/jaeyunha/eventloom/issues/47
@@ -38,7 +39,7 @@
 - Merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63, and #66
   remains present.
 
-## Exact-head verification at 7fc9e9e
+## Exact-head verification at a9663c6
 
 - Focused matrix: PASS — 11 files, 314 passed, 1 skipped, including
   structural rationale natural-prose/gibberish regressions and lifecycle
@@ -50,16 +51,19 @@
 - API typecheck: PASS.
 - Web typecheck: FAIL in latest-main speaker/portal/file-upload paths
   (8 errors across 7 unchanged files); no lane-owned web source is implicated.
-- `make check`: FAIL because it includes the same latest-main web typecheck
+- `make check`: FAIL only on four formatting findings in unchanged latest-main
+  web files; typechecks and lint complete without errors.
   failures; lane-owned formatting and `git diff --check` pass.
-- `make build`: not rerun after latest-main integration.
+- `make build`: PASS, including contracts, CLI, API Wrangler dry-run, and the
+  Next production build.
 - Chromium advisory QA: PASS — pending/uncounted state, dropdown mapping,
   explicit confirmation, provenance, keyboard focus, CJK wrapping, and no
   horizontal overflow.
 - Review context performs a final writable-assignment authority recheck before
   returning protected data; in-memory/D1 abstention admission binds current
   assignment lifecycle and declaration identity.
-- `make test`: FAIL in the unit phase with 1 unrelated latest-main CSS
+- `make test`: FAIL in the unit phase after 2,439 passed and 3 skipped because
+  of one unchanged latest-main workspace CSS contract assertion.
   contract failure in `apps/web/src/components/workspace/workspace-surface-tokens.test.ts`;
   the lane-owned focused matrix passed. The merged-head unit phase reached
   2,403 passed and 3 skipped.
@@ -68,11 +72,11 @@
 
 These must all inspect the same final pushed head and PASS before merge:
 
-- [ ] Security — exact pushed head `7fc9e9e36a51b376c45506dfbf14062beb5cfaa3`
-- [ ] Code quality — exact pushed head `7fc9e9e36a51b376c45506dfbf14062beb5cfaa3`
-- [ ] Functional/visual QA — exact pushed head `7fc9e9e36a51b376c45506dfbf14062beb5cfaa3`
-- [ ] Context/dependencies — exact pushed head `7fc9e9e36a51b376c45506dfbf14062beb5cfaa3`
-- [ ] Goal/compliance — exact pushed head `7fc9e9e36a51b376c45506dfbf14062beb5cfaa3`
+- [ ] Security — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
+- [ ] Code quality — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
+- [ ] Functional/visual QA — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
+- [ ] Context/dependencies — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
+- [ ] Goal/compliance — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
 
 ## Remaining tasks
 
