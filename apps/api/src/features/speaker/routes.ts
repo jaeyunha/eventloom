@@ -189,7 +189,7 @@ const speakerEmailTemplateSchema = z.object({
   templateId: z.string().trim().min(1).max(200).optional(),
   name: z.string().trim().min(1).max(200),
   subject: z.string().trim().min(1).max(500),
-  html: z.string().trim().min(1).max(100_000),
+  html: z.string().trim().max(100_000).optional(),
   text: z.string().trim().min(1).max(100_000),
   status: z.enum(["draft", "approved"]).optional(),
 });
@@ -1534,7 +1534,7 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       ...(body.templateId === undefined ? {} : { templateId: body.templateId }),
       name: body.name,
       subject: body.subject,
-      html: body.html,
+      ...(body.html === undefined ? {} : { html: body.html }),
       text: body.text,
       ...(body.status === undefined ? {} : { status: body.status }),
     });
@@ -1555,7 +1555,7 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       accountId: accountId(context),
       templateId: requiredSpeakerParam(context, "templateId"),
       subject: body.subject,
-      html: body.html,
+      ...(body.html === undefined ? {} : { html: body.html }),
       text: body.text,
       ...(body.status === undefined ? {} : { status: body.status }),
     });

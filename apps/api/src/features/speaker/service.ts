@@ -4279,7 +4279,7 @@ export class SpeakerService {
     templateId?: string;
     name: string;
     subject: string;
-    html: string;
+    html?: string;
     text: string;
     status?: "draft" | "approved";
   }): Promise<SpeakerEmailTemplate> {
@@ -4304,7 +4304,7 @@ export class SpeakerService {
     accountId: string;
     templateId: string;
     subject: string;
-    html: string;
+    html?: string;
     text: string;
     status?: "draft" | "approved";
   }): Promise<SpeakerEmailTemplate> {

@@ -4873,7 +4873,7 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     firstName: "Priya",
     email: "priya@example.test",
     subject: "Hello Priya at priya@example.test",
-    html: "<p>Hello Priya (Priya Raman) at priya@example.test</p>",
+    html: "<p>Hello Priya, Priya Raman (priya@example.test)</p>",
     text: "Hello Priya, Priya Raman (priya@example.test)",
   });
   const reloadedService = new SpeakerService(

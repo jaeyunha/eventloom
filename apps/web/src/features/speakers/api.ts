@@ -608,7 +608,6 @@ export interface SpeakerApi {
       templateId?: string;
       name: string;
       subject: string;
-      html: string;
       text: string;
       status?: "draft" | "approved";
     },
@@ -618,7 +617,6 @@ export interface SpeakerApi {
     input: {
       templateId: string;
       subject: string;
-      html: string;
       text: string;
       status?: "draft" | "approved";
     },

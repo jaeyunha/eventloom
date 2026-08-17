@@ -85,6 +85,7 @@ export interface CommunicationPreviewInput {
   audience: CommunicationAudience;
   recipientIds?: readonly string[];
   data?: CommunicationRenderData;
+  protectedRecipientDataKeys?: readonly string[];
 }
 
 export interface SendGroupCommunicationInput {
@@ -331,6 +332,16 @@ function cloneRecipient(recipient: CommunicationRecipient): CommunicationRecipie
     audiences: [...recipient.audiences],
     data: cloneData(recipient.data),
   };
+}
+
+function withoutRecipientDataKeys(
+  recipient: CommunicationRecipientSnapshot,
+  protectedDataKeys: readonly string[] | undefined,
+): CommunicationRecipientSnapshot {
+  if (protectedDataKeys === undefined || protectedDataKeys.length === 0) return recipient;
+  const data = { ...recipient.data };
+  for (const key of protectedDataKeys) delete data[key];
+  return { ...recipient, data };
 }
 
 function templateSnapshot(template: CommunicationTemplate): CommunicationTemplateSnapshot {
@@ -972,7 +983,10 @@ export class CommunicationService {
       throw notFound("One or more preview recipients were not found for this event.");
     }
     const snapshots = recipients.map((recipient) => {
-      const snapshot = this.assertRecipientScope(recipient, actor, input.eventId);
+      const snapshot = withoutRecipientDataKeys(
+        this.assertRecipientScope(recipient, actor, input.eventId),
+        input.protectedRecipientDataKeys,
+      );
       if (
         recipientIds !== undefined &&
         snapshot.audiences.length > 0 &&
@@ -1650,6 +1664,20 @@ export class CommunicationService {
           input.idempotencyKey,
         );
         if (existing !== undefined) {
+          if (
+            !sendMatchesPayload(existing, {
+              purpose: input.purpose,
+              audience: input.audience,
+              templateId: input.template.id,
+              templateVersion: input.template.version,
+              recipientIds: input.recipients.map((recipient) => recipient.id),
+              data: input.data,
+            })
+          ) {
+            throw conflict(
+              "The idempotency key was already used with a different communication payload.",
+            );
+          }
           return { send: existing, created: false };
         }
       }

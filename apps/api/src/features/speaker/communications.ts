@@ -1,6 +1,7 @@
-import type {
-  CommunicationService,
-  CreateCommunicationTemplateInput,
+import {
+  CommunicationError,
+  type CommunicationService,
+  type CreateCommunicationTemplateInput,
 } from "../communications/service";
 import {
   speakerCommunicationActor,
@@ -9,6 +10,7 @@ import {
   speakerTemplateDto,
 } from "./communications-mapping";
 import type { SpeakerCommunications } from "./communications-types";
+import { speakerEmailHtmlFromText } from "./email-body";
 import type { SpeakerEmailTemplate } from "./service";
 
 export type { SpeakerCommunications } from "./communications-types";
@@ -48,6 +50,19 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
   }
 
   async createTemplate(input: Parameters<SpeakerCommunications["createTemplate"]>[0]) {
+    return this.createTemplateWithHtml(input, speakerEmailHtmlFromText(input.text));
+  }
+
+  async createTemplateVersion(
+    input: Parameters<SpeakerCommunications["createTemplateVersion"]>[0],
+  ) {
+    return this.createTemplateVersionWithHtml(input, speakerEmailHtmlFromText(input.text));
+  }
+
+  private async createTemplateWithHtml(
+    input: Parameters<SpeakerCommunications["createTemplate"]>[0],
+    html: string,
+  ): Promise<SpeakerEmailTemplate> {
     const communicationActor = speakerCommunicationActor(
       input.organizationId,
       input.eventId,
@@ -59,7 +74,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       name: input.name,
       purpose: "organizer_group_email",
       subject: input.subject,
-      html: input.html,
+      html,
       text: input.text,
     };
     let template = await this.communications.createTemplate(communicationActor, create);
@@ -74,9 +89,10 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     return speakerTemplateDto(template);
   }
 
-  async createTemplateVersion(
+  private async createTemplateVersionWithHtml(
     input: Parameters<SpeakerCommunications["createTemplateVersion"]>[0],
-  ) {
+    html: string,
+  ): Promise<SpeakerEmailTemplate> {
     const communicationActor = speakerCommunicationActor(
       input.organizationId,
       input.eventId,
@@ -86,7 +102,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       eventId: input.eventId,
       templateId: input.templateId,
       subject: input.subject,
-      html: input.html,
+      html,
       text: input.text,
     });
     if (input.status === "approved") {
@@ -114,6 +130,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
             : { templateVersion: input.templateVersion }),
           recipientIds: input.participantIds,
           data: { ...(input.data ?? {}), portal_url: this.workHubUrl() },
+          protectedRecipientDataKeys: ["portal_url"],
         },
       ),
     );
@@ -159,9 +176,53 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
   }
 
   async sendInvitations(input: Parameters<SpeakerCommunications["sendInvitations"]>[0]) {
-    const prior = (
-      await this.listHistory(input.organizationId, input.eventId, input.accountId)
-    ).find((send) => send.idempotencyKey === input.idempotencyKey);
+    const actor = speakerCommunicationActor(input.organizationId, input.eventId, input.accountId);
+    const prior = (await this.communications.listSends(actor, input.eventId)).find(
+      (send) => send.idempotencyKey === input.idempotencyKey,
+    );
+    if (prior !== undefined) {
+      const trustedTemplateId = await scopedWelcomeTemplateId(input.organizationId, input.eventId);
+      const trustedTemplate =
+        (prior.template.id === trustedTemplateId ||
+          prior.template.id === SPEAKER_WELCOME_TEMPLATE_ID) &&
+        prior.template.subject === welcome.subject &&
+        prior.template.html === welcome.html &&
+        prior.template.text === welcome.text;
+      const priorRecipients = prior.recipients
+        .map((recipient) => recipient.id)
+        .sort((a, b) => a.localeCompare(b));
+      const requestedRecipients = [...input.participantIds].sort((a, b) => a.localeCompare(b));
+      if (
+        prior.purpose !== "organizer_group_email" ||
+        prior.audience !== "all_participants" ||
+        !trustedTemplate ||
+        priorRecipients.length !== requestedRecipients.length ||
+        priorRecipients.some((participantId, index) => participantId !== requestedRecipients[index])
+      ) {
+        throw new CommunicationError(
+          "COMMUNICATION_CONFLICT",
+          409,
+          "The idempotency key was already used with a different communication payload.",
+        );
+      }
+      const send = speakerSendDto(prior);
+      const recipients = send.deliveries.map((delivery) => ({
+        participantId: delivery.participantId,
+        recipientEmail: delivery.email,
+        status: delivery.status === "failed" ? ("failed" as const) : ("duplicate" as const),
+        receiptId: delivery.providerMessageId,
+      }));
+      return {
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        idempotencyKey: input.idempotencyKey,
+        status: recipients.some((recipient) => recipient.status === "failed")
+          ? ("failed" as const)
+          : ("duplicate" as const),
+        duplicate: recipients.every((recipient) => recipient.status === "duplicate"),
+        recipients,
+      };
+    }
     const template = await this.ensureWelcomeTemplate(input);
     const preview = await this.preview({
       ...input,
@@ -170,7 +231,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       data: { portal_url: this.workHubUrl() },
     });
     const send = await this.send({ ...input, previewId: preview.id });
-    const replayed = prior !== undefined;
+    const replayed = false;
     const recipients = send.deliveries.map((delivery) => ({
       participantId: delivery.participantId,
       recipientEmail: delivery.email,
@@ -226,22 +287,26 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     if (exact !== undefined) return exact;
     const exists = templates.some((template) => template.id === templateId);
     return exists
-      ? this.createTemplateVersion({
-          ...input,
-          templateId,
-          subject: welcome.subject,
-          html: welcome.html,
-          text: welcome.text,
-          status: "approved",
-        })
-      : this.createTemplate({
-          ...input,
-          templateId,
-          name: welcome.name,
-          subject: welcome.subject,
-          html: welcome.html,
-          text: welcome.text,
-          status: "approved",
-        });
+      ? this.createTemplateVersionWithHtml(
+          {
+            ...input,
+            templateId,
+            subject: welcome.subject,
+            text: welcome.text,
+            status: "approved",
+          },
+          welcome.html,
+        )
+      : this.createTemplateWithHtml(
+          {
+            ...input,
+            templateId,
+            name: welcome.name,
+            subject: welcome.subject,
+            text: welcome.text,
+            status: "approved",
+          },
+          welcome.html,
+        );
   }
 }
