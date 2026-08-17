@@ -84,5 +84,17 @@ describe("suggestion rationale validation", () => {
         "Practical material for the audience.",
       ),
     ).toBe(false);
+    expect(
+      isMeaningfulSuggestionRationale(
+        "Practical material supports the audience with zorbles9 flibbles9.",
+        "Practical material for the audience.",
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulSuggestionRationale(
+        "Practical material supports the audience with zxqv7 plmn8.",
+        "Practical material for the audience.",
+      ),
+    ).toBe(false);
   });
 });

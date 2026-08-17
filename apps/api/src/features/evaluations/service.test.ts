@@ -5068,6 +5068,28 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(rejectedSecond.suggestion.status).toBe("rejected");
     expect(rejectedSecond.review?.scores.quality?.humanConfirmedBy).toBe("reviewer-1");
     expect(rejectedSecond.review?.scores.quality?.suggestionStatus).toBe("accepted");
+    const thirdSuggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
+      assignmentId: assignment.id,
+    });
+    const rejectedOnce = await service.resolveAiSuggestion(
+      reviewer("reviewer-1"),
+      thirdSuggestion.id,
+      {
+        action: "reject",
+        criterionId: "quality",
+        reason: "Rejected once.",
+        expectedVersion: thirdSuggestion.version,
+      },
+    );
+    await expectEvaluationError(
+      service.resolveAiSuggestion(reviewer("reviewer-1"), thirdSuggestion.id, {
+        action: "reject",
+        criterionId: "quality",
+        reason: "Repeated rejection must be rejected.",
+        expectedVersion: rejectedOnce.suggestion.version,
+      }),
+      "EVALUATION_INVALID_INPUT",
+    );
     const resolved = await service.resolveAiSuggestion(reviewer("reviewer-1"), suggestion.id, {
       action: "accept",
       expectedVersion: suggestion.version,

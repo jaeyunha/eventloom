@@ -3223,6 +3223,9 @@ export class EvaluationService {
       if (suggestion.candidates[input.criterionId] === undefined) {
         throw invalidInput("The rejected criterion is not part of this suggestion.");
       }
+      if (editedCriterionIds.has(input.criterionId)) {
+        throw invalidInput("The rejected criterion has already been resolved.");
+      }
       editedCriterionIds.add(input.criterionId);
     }
     const allCandidatesResolved = Object.keys(suggestion.candidates).every((criterionId) =>
