@@ -278,6 +278,7 @@ export interface AgendaOutboxEvent {
 
 export type AgendaAuditAction =
   | "agenda.created"
+  | "agenda.content-refreshed"
   | "agenda.published"
   | "agenda.rolled-back"
   | "agenda.suggestion.generated"
@@ -392,6 +393,7 @@ export interface AgendaRepository {
 
 export interface AgendaMutationLock {
   runExclusive<T>(eventId: string, operation: () => Promise<T>): Promise<T>;
+  renew?(eventId: string): Promise<void>;
 }
 
 export interface AgendaClock {
