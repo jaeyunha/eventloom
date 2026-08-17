@@ -735,6 +735,7 @@ export interface SpeakerContentRestoreInput {
 
 export interface SpeakerReminderTask {
   taskId: string;
+  version: number;
   title: string;
   dueAt?: string;
   participantId: string;
@@ -751,6 +752,7 @@ export interface SpeakerReminderRecipient {
 export interface SpeakerReminderPreview {
   organizationId: string;
   eventId: string;
+  snapshotFingerprint: string;
   recipients: readonly SpeakerReminderRecipient[];
   recipientIds: readonly string[];
   taskIds: readonly string[];
@@ -762,12 +764,45 @@ export interface SpeakerReminderQueueInput {
   taskIds?: readonly string[];
   recipientIds?: readonly string[];
   idempotencyKey?: string;
+  snapshotFingerprint: string;
 }
 
 export interface SpeakerReminderRecipientResult {
   participantId: string;
   status: "queued" | "failed" | "duplicate";
   receiptId: string | null;
+}
+
+export interface SpeakerReminderStoredReceipt {
+  participantId: string;
+  state: "pending" | "queued" | "failed";
+  outboxJobId: string | null;
+  snapshot: SpeakerReminderRecipient;
+}
+
+export interface SpeakerReminderReservationResult {
+  kind: "created" | "existing";
+  record: SpeakerReminderRecord;
+}
+
+export interface SpeakerReminderReceiptAttempt {
+  participantId: string;
+  nextState: "queued" | "failed";
+  outboxJobId: string | null;
+}
+
+export interface SpeakerReminderHistoryRecord {
+  organizationId: string;
+  eventId: string;
+  idempotencyKey: string;
+  taskIds: readonly string[];
+  recipientIds: readonly string[];
+  receipts: readonly {
+    participantId: string;
+    status: "pending" | "queued" | "failed";
+    receiptId: string | null;
+  }[];
+  createdAt: string;
 }
 
 export interface SpeakerReminderQueueResult {
@@ -1003,7 +1038,7 @@ export interface SpeakerReminderRecord {
   idempotencyKey: string;
   taskIds: readonly string[];
   recipientIds: readonly string[];
-  receipts: readonly SpeakerReminderRecipientResult[];
+  receipts: readonly SpeakerReminderStoredReceipt[];
   createdAt: string;
   actorAccountId: string;
 }
@@ -1167,8 +1202,15 @@ export interface SpeakerRepository {
   restoreSpeakerContentVersion?(
     command: RestoreSpeakerContentVersionCommand,
   ): Promise<RepositoryResult<SpeakerContentRecord>>;
-  getReminder?(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null>;
-  saveReminder?(record: SpeakerReminderRecord): Promise<SpeakerReminderRecord>;
+  getReminder(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null>;
+  reserveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderReservationResult>;
+  mergeReminderReceipts(input: {
+    eventId: string;
+    idempotencyKey: string;
+    taskIds: readonly string[];
+    recipientIds: readonly string[];
+    attempted: readonly SpeakerReminderReceiptAttempt[];
+  }): Promise<SpeakerReminderRecord>;
 }
 
 /**

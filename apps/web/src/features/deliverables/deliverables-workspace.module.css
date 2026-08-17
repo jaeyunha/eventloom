@@ -342,9 +342,96 @@
   margin-top: 0.25rem;
 }
 
+.reminderSnapshotTable {
+  overflow-x: visible;
+}
+
+.reminderRecipientList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reminderRecipientIdentity {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 999px;
+  background: var(--color-surface, #f7f7f5);
+}
+
+.reminderRecipientIdentity small {
+  color: var(--color-muted, #697181);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.reminderSnapshotTable table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.reminderSnapshotTable :is(th, td) {
+  overflow-wrap: anywhere;
+  padding-inline: 0.5rem;
+  white-space: normal;
+}
+
+.reminderSnapshotTable :is(th, td):first-child {
+  width: 28%;
+}
+
+.reminderSnapshotTable :is(th, td):nth-child(2) {
+  width: 42%;
+}
+
+.reminderSnapshotTable :is(th, td):last-child {
+  width: 30%;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.reminderConfirmation {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  justify-content: start;
+  gap: 0.65rem;
+  width: 100%;
+  text-align: left;
+}
+
+.reminderConfirmation [data-slot="checkbox"] {
+  margin-top: 0.15rem;
+}
+
+.reminderActions {
+  justify-content: flex-start;
+  width: 100%;
+}
+
 .status {
   min-height: 1.25rem;
-  color: var(--color-muted, #697181);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.55rem;
+  background: var(--color-surface, #f7f7f5);
+  color: var(--color-foreground, #25272d);
+}
+
+.status:empty {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .danger {
@@ -354,6 +441,13 @@
 .dialogContent {
   max-height: min(90dvh, 46rem);
   overflow-y: auto;
+}
+
+.reminderDialogContent[data-slot="dialog-content"] {
+  width: calc(100% - 2rem);
+  min-width: 0;
+  max-width: min(48rem, calc(100% - 2rem));
+  overflow-x: hidden;
 }
 
 .assetSheet {

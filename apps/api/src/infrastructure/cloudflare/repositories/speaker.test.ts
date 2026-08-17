@@ -13,6 +13,8 @@ import { SpeakerService } from "../../../features/speaker/service";
 import { withTestSpeakerOrganizerLifecycle } from "../../../features/speaker/test-lifecycle-adapter";
 import type {
   SpeakerAssetAuditEntry,
+  SpeakerReminderRecord,
+  SpeakerReminderReceiptAttempt,
   SpeakerTask,
   SpeakerTaskResponseRecord,
 } from "../../../features/speaker/types";
@@ -187,6 +189,136 @@ describe("D1SpeakerRepository", () => {
     expect(portalSubmissionStatus("submitted", undefined)).toBe("submitted");
   });
 
+  it("persists and reloads durable content reminder recipient history", async () => {
+    const record: SpeakerReminderRecord = {
+      id: "reminder-record-1",
+      organizationId: "org-1",
+      eventId: "event-1",
+      idempotencyKey: "content-reminder-1",
+      taskIds: ["task-priya-1", "task-priya-2", "task-marcus-1"],
+      recipientIds: ["participant-priya", "participant-marcus"],
+      receipts: [
+        {
+          participantId: "participant-priya",
+          state: "queued",
+          outboxJobId: "receipt-priya",
+          snapshot: {
+            participantId: "participant-priya",
+            displayName: "Priya Raman",
+            email: "priya@example.test",
+            taskIds: ["task-priya-1", "task-priya-2"],
+            tasks: [
+              {
+                taskId: "task-priya-1",
+                version: 2,
+                participantId: "participant-priya",
+                title: "Upload Session Presentation",
+                dueAt: "2027-04-10",
+              },
+              {
+                taskId: "task-priya-2",
+                version: 3,
+                participantId: "participant-priya",
+                title: "Complete A/V Questionnaire",
+                dueAt: "2027-04-12",
+              },
+            ],
+          },
+        },
+        {
+          participantId: "participant-marcus",
+          state: "failed",
+          outboxJobId: null,
+          snapshot: {
+            participantId: "participant-marcus",
+            displayName: "Marcus Okafor",
+            email: "marcus@example.test",
+            taskIds: ["task-marcus-1"],
+            tasks: [
+              {
+                taskId: "task-marcus-1",
+                version: 4,
+                participantId: "participant-marcus",
+                title: "Upload Final Headshot",
+                dueAt: "2027-04-14",
+              },
+            ],
+          },
+        },
+      ],
+      createdAt: "2026-08-16T21:00:00.000Z",
+      actorAccountId: "organizer-1",
+    };
+    const database = new SpeakerWorkflowD1(
+      {
+        speaker_reminder_receipts: [
+          {
+            id: record.id,
+            organization_id: record.organizationId,
+            event_id: record.eventId,
+            idempotency_key: record.idempotencyKey,
+            task_ids_json: JSON.stringify(record.taskIds),
+            recipient_ids_json: JSON.stringify(record.recipientIds),
+            receipts_json: JSON.stringify(record.receipts),
+            actor_account_id: record.actorAccountId,
+            created_at: record.createdAt,
+          },
+        ],
+      },
+      [0, 1],
+    );
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+
+    await expect(repository.getReminder(record.eventId, record.idempotencyKey)).resolves.toEqual(
+      record,
+    );
+    await expect(repository.reserveReminder(record)).resolves.toEqual({
+      kind: "existing",
+      record,
+    });
+    await expect(
+      repository.mergeReminderReceipts({
+        eventId: record.eventId,
+        idempotencyKey: record.idempotencyKey,
+        taskIds: record.taskIds,
+        recipientIds: record.recipientIds,
+        attempted: [
+          {
+            participantId: "participant-marcus",
+            nextState: "queued",
+            outboxJobId: "receipt-marcus",
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      receipts: [
+        { participantId: "participant-priya", state: "queued" },
+        {
+          participantId: "participant-marcus",
+          state: "queued",
+          outboxJobId: "receipt-marcus",
+        },
+      ],
+    });
+    expect(database.runs).toEqual([
+      expect.objectContaining({
+        sql: expect.stringContaining("DO NOTHING"),
+        values: expect.arrayContaining([
+          record.organizationId,
+          record.eventId,
+          record.idempotencyKey,
+          JSON.stringify(record.taskIds),
+          JSON.stringify(record.recipientIds),
+          JSON.stringify(record.receipts),
+        ]),
+      }),
+      expect.objectContaining({
+        sql: expect.stringContaining("AND receipts_json = ?"),
+        values: expect.arrayContaining([JSON.stringify(record.receipts)]),
+      }),
+    ]);
+  });
+
   it("creates an organizer task through the normal route from D1 event authority", async () => {
     const tasks: SpeakerTask[] = [];
     const acceptedSubmission = {
@@ -218,9 +350,51 @@ describe("D1SpeakerRepository", () => {
       version: 1,
       updatedAt: "2026-08-15T12:00:00.000Z",
     } as const;
+    const reminderRecords = new Map<string, SpeakerReminderRecord>();
     const repository = withTestSpeakerOrganizerLifecycle({
       getAccessScope: async () => organizerScope,
       getOrganizerAccessScope: async () => organizerScope,
+      getReminder: async (eventId, idempotencyKey) =>
+        structuredClone(reminderRecords.get(`${eventId}:${idempotencyKey}`) ?? null),
+      reserveReminder: async (record) => {
+        const key = `${record.eventId}:${record.idempotencyKey}`;
+        const existing = reminderRecords.get(key);
+        if (existing !== undefined) {
+          return { kind: "existing" as const, record: structuredClone(existing) };
+        }
+        reminderRecords.set(key, structuredClone(record));
+        return { kind: "created" as const, record: structuredClone(record) };
+      },
+      mergeReminderReceipts: async (input: {
+        eventId: string;
+        idempotencyKey: string;
+        taskIds: readonly string[];
+        recipientIds: readonly string[];
+        attempted: readonly SpeakerReminderReceiptAttempt[];
+      }) => {
+        const key = `${input.eventId}:${input.idempotencyKey}`;
+        const current = reminderRecords.get(key);
+        if (current === undefined) throw new Error("The reminder reservation is unavailable.");
+        const attemptsByRecipient = new Map(
+          input.attempted.map((entry) => [entry.participantId, entry] as const),
+        );
+        const updated = {
+          ...structuredClone(current),
+          receipts: current.receipts.map((receipt) => {
+            const attempted = attemptsByRecipient.get(receipt.participantId);
+            if (attempted === undefined || receipt.state === "queued") {
+              return structuredClone(receipt);
+            }
+            return {
+              ...structuredClone(receipt),
+              state: attempted.nextState,
+              outboxJobId: attempted.outboxJobId ?? receipt.outboxJobId,
+            };
+          }),
+        };
+        reminderRecords.set(key, updated);
+        return structuredClone(updated);
+      },
       submissions: [acceptedSubmission],
       roster: [
         {

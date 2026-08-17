@@ -37,6 +37,10 @@ import type {
   SpeakerPortalContext,
   SpeakerPortalContextScopeProjection,
   SpeakerProfile,
+  SpeakerReminderRecord,
+  SpeakerReminderReceiptAttempt,
+  SpeakerReminderReservationResult,
+  SpeakerReminderStoredReceipt,
   SpeakerSubmission,
   SpeakerTask,
   SpeakerTaskFormDefinition,
@@ -1560,6 +1564,138 @@ export class D1SpeakerRepository
     return Promise.all(rows.map((row) => this.#task(row)));
   }
 
+  async getReminder(
+    eventId: string,
+    idempotencyKey: string,
+  ): Promise<SpeakerReminderRecord | null> {
+    const scope = await this.#eventScope(eventId);
+    if (scope === null) return null;
+    const row = await this.#db
+      .prepare(
+        `SELECT id, organization_id, event_id, idempotency_key, task_ids_json,
+                recipient_ids_json, receipts_json, actor_account_id, created_at
+           FROM speaker_reminder_receipts
+          WHERE organization_id = ? AND event_id = ? AND idempotency_key = ?
+          LIMIT 1`,
+      )
+      .bind(scope.organizationId, eventId, idempotencyKey)
+      .first<Record<string, unknown>>();
+    return row === null ? null : this.#reminderRecord(row);
+  }
+
+  async reserveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderReservationResult> {
+    const scope = await this.#eventScope(record.eventId);
+    if (scope === null || scope.organizationId !== record.organizationId) {
+      throw new Error("The reminder event scope is unavailable.");
+    }
+    const result = await this.#db
+      .prepare(
+        `INSERT INTO speaker_reminder_receipts
+           (id, organization_id, event_id, idempotency_key, task_ids_json, recipient_ids_json,
+            receipts_json, actor_account_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (organization_id, event_id, idempotency_key) DO NOTHING`,
+      )
+      .bind(
+        record.id,
+        record.organizationId,
+        record.eventId,
+        record.idempotencyKey,
+        json(record.taskIds),
+        json(record.recipientIds),
+        json(record.receipts),
+        record.actorAccountId,
+        record.createdAt,
+      )
+      .run();
+    const stored = await this.getReminder(record.eventId, record.idempotencyKey);
+    if (stored === null) throw new Error("The reminder reservation was not persisted.");
+    return {
+      kind: result.meta?.changes === 0 ? "existing" : "created",
+      record: stored,
+    };
+  }
+
+  async saveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderRecord> {
+    return (await this.reserveReminder(record)).record;
+  }
+
+  async mergeReminderReceipts(input: {
+    eventId: string;
+    idempotencyKey: string;
+    taskIds: readonly string[];
+    recipientIds: readonly string[];
+    attempted: readonly SpeakerReminderReceiptAttempt[];
+  }): Promise<SpeakerReminderRecord> {
+    const scope = await this.#eventScope(input.eventId);
+    if (scope === null) throw new Error("The reminder event scope is unavailable.");
+    for (let attemptNumber = 0; attemptNumber < 5; attemptNumber += 1) {
+      const row = await this.#db
+        .prepare(
+          `SELECT id, organization_id, event_id, idempotency_key, task_ids_json,
+                  recipient_ids_json, receipts_json, actor_account_id, created_at
+             FROM speaker_reminder_receipts
+            WHERE organization_id = ? AND event_id = ? AND idempotency_key = ?
+            LIMIT 1`,
+        )
+        .bind(scope.organizationId, input.eventId, input.idempotencyKey)
+        .first<Record<string, unknown>>();
+      if (row === null) throw new Error("The reminder reservation is unavailable.");
+      const current = this.#reminderRecord(row);
+      const currentTaskIds = [...current.taskIds].sort();
+      const expectedTaskIds = [...input.taskIds].sort();
+      const currentRecipientIds = [...current.recipientIds].sort();
+      const expectedRecipientIds = [...input.recipientIds].sort();
+      if (
+        currentTaskIds.length !== expectedTaskIds.length ||
+        currentTaskIds.some((taskId, index) => taskId !== expectedTaskIds[index]) ||
+        currentRecipientIds.length !== expectedRecipientIds.length ||
+        currentRecipientIds.some(
+          (participantId, index) => participantId !== expectedRecipientIds[index],
+        )
+      ) {
+        throw new Error("The reminder receipt merge snapshot does not match the reservation.");
+      }
+      const attemptsByRecipient = new Map(
+        input.attempted.map((entry) => [entry.participantId, entry] as const),
+      );
+      const mergedReceipts: SpeakerReminderStoredReceipt[] = current.receipts.map((receipt) => {
+        const attempted = attemptsByRecipient.get(receipt.participantId);
+        if (attempted === undefined || receipt.state === "queued") return structuredClone(receipt);
+        return {
+          ...structuredClone(receipt),
+          state: attempted.nextState,
+          outboxJobId: attempted.outboxJobId ?? receipt.outboxJobId,
+        };
+      });
+      const expectedReceiptsJson =
+        typeof row.receipts_json === "string"
+          ? row.receipts_json
+          : JSON.stringify(row.receipts_json);
+      const update = await this.#db
+        .prepare(
+          `UPDATE speaker_reminder_receipts
+              SET receipts_json = ?
+            WHERE organization_id = ?
+              AND event_id = ?
+              AND idempotency_key = ?
+              AND receipts_json = ?`,
+        )
+        .bind(
+          json(mergedReceipts),
+          scope.organizationId,
+          input.eventId,
+          input.idempotencyKey,
+          expectedReceiptsJson,
+        )
+        .run();
+      if (update.meta?.changes === undefined || update.meta.changes > 0) {
+        return { ...structuredClone(current), receipts: mergedReceipts };
+      }
+    }
+    throw new Error("The reminder receipt merge conflicted repeatedly.");
+  }
+
   async getTaskForm(eventId: string, taskId: string): Promise<SpeakerTaskFormDefinition | null> {
     const scope = await this.#eventScope(eventId);
     if (scope === null) return null;
@@ -2322,6 +2458,96 @@ export class D1SpeakerRepository
 
   #storedJson(value: unknown): unknown {
     return typeof value === "string" ? JSON.parse(value) : value;
+  }
+
+  #reminderRecord(row: Record<string, unknown>): SpeakerReminderRecord {
+    const stringArray = (value: unknown, field: string): string[] => {
+      const parsed = this.#storedJson(value);
+      if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+        throw new Error(`The stored reminder ${field} is invalid.`);
+      }
+      return [...parsed];
+    };
+    const storedReceipts = this.#storedJson(row.receipts_json);
+    if (!Array.isArray(storedReceipts)) {
+      throw new Error("The stored reminder receipts are invalid.");
+    }
+    const receipts = storedReceipts.map((value): SpeakerReminderStoredReceipt => {
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("The stored reminder receipt is invalid.");
+      }
+      const receipt = value as Record<string, unknown>;
+      const snapshotValue = receipt.snapshot;
+      if (
+        typeof receipt.participantId !== "string" ||
+        (receipt.state !== "pending" && receipt.state !== "queued" && receipt.state !== "failed") ||
+        (receipt.outboxJobId !== null && typeof receipt.outboxJobId !== "string") ||
+        snapshotValue === null ||
+        typeof snapshotValue !== "object" ||
+        Array.isArray(snapshotValue)
+      ) {
+        throw new Error("The stored reminder receipt is invalid.");
+      }
+      const snapshot = snapshotValue as Record<string, unknown>;
+      const taskIds = stringArray(snapshot.taskIds, "snapshot task IDs");
+      if (
+        typeof snapshot.participantId !== "string" ||
+        snapshot.participantId !== receipt.participantId ||
+        typeof snapshot.displayName !== "string" ||
+        (snapshot.email !== undefined && typeof snapshot.email !== "string") ||
+        !Array.isArray(snapshot.tasks)
+      ) {
+        throw new Error("The stored reminder recipient snapshot is invalid.");
+      }
+      const tasks = snapshot.tasks.map((taskValue) => {
+        if (taskValue === null || typeof taskValue !== "object" || Array.isArray(taskValue)) {
+          throw new Error("The stored reminder task snapshot is invalid.");
+        }
+        const task = taskValue as Record<string, unknown>;
+        if (
+          typeof task.taskId !== "string" ||
+          typeof task.version !== "number" ||
+          !Number.isSafeInteger(task.version) ||
+          task.version < 0 ||
+          typeof task.title !== "string" ||
+          typeof task.participantId !== "string" ||
+          task.participantId !== receipt.participantId ||
+          (task.dueAt !== undefined && typeof task.dueAt !== "string")
+        ) {
+          throw new Error("The stored reminder task snapshot is invalid.");
+        }
+        return {
+          taskId: task.taskId,
+          version: task.version,
+          title: task.title,
+          participantId: task.participantId,
+          ...(task.dueAt === undefined ? {} : { dueAt: task.dueAt }),
+        };
+      });
+      return {
+        participantId: receipt.participantId,
+        state: receipt.state,
+        outboxJobId: receipt.outboxJobId,
+        snapshot: {
+          participantId: snapshot.participantId,
+          displayName: snapshot.displayName,
+          ...(snapshot.email === undefined ? {} : { email: snapshot.email }),
+          taskIds,
+          tasks,
+        },
+      };
+    });
+    return {
+      id: String(row.id),
+      organizationId: String(row.organization_id),
+      eventId: String(row.event_id),
+      idempotencyKey: String(row.idempotency_key),
+      taskIds: stringArray(row.task_ids_json, "task IDs"),
+      recipientIds: stringArray(row.recipient_ids_json, "recipient IDs"),
+      receipts,
+      actorAccountId: String(row.actor_account_id),
+      createdAt: String(row.created_at),
+    };
   }
 
   #resourceRecord(row: Record<string, unknown>): SpeakerEventResource {

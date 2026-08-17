@@ -11,7 +11,7 @@ import {
   type OutboxJob,
   type OutboxQueueMessage,
 } from "../infrastructure/cloudflare/outbox-consumer";
-import { AirtableCommunicationDeliveryAdapter } from "./airtable";
+import { AirtableCommunicationDeliveryAdapter, CloudflareSpeakerDeliveryAdapter } from "./airtable";
 
 const NOW = "2026-08-14T12:00:00.000Z";
 
@@ -79,6 +79,70 @@ class CommunicationOutboxD1 {
   }
 }
 
+class SpeakerReminderOutboxD1 {
+  row:
+    | {
+        id: string;
+        state: string;
+      }
+    | undefined;
+
+  prepare(query: string) {
+    return {
+      bind: (...values: unknown[]) => {
+        if (query.includes("FROM auth_users")) {
+          return { first: async () => ({ email: String(values[0]) }) };
+        }
+        if (query.includes("INSERT INTO outbox_jobs")) {
+          return {
+            run: async () => {
+              if (this.row !== undefined) return { meta: { changes: 0 } };
+              this.row = { id: String(values[0]), state: "pending" };
+              return { meta: { changes: 1 } };
+            },
+          };
+        }
+        if (query.includes("SELECT state FROM outbox_jobs")) {
+          return {
+            first: async () => (this.row === undefined ? null : { state: this.row.state }),
+          };
+        }
+        if (query.includes("UPDATE outbox_jobs SET state = 'queued'")) {
+          return {
+            run: async () => {
+              if (this.row?.state === "pending") this.row.state = "queued";
+              return { meta: { changes: 1 } };
+            },
+          };
+        }
+        throw new Error(`Unexpected D1 query: ${query}`);
+      },
+    };
+  }
+}
+
+const reminderDeliveryInput = {
+  organizationId: "org-1",
+  eventId: "event-1",
+  idempotencyKey: "content-reminder-1:participant-1",
+  actorAccountId: "organizer-1",
+  recipient: {
+    participantId: "participant-1",
+    displayName: "Priya Raman",
+    email: "priya@example.test",
+    taskIds: ["task-1"],
+    tasks: [
+      {
+        taskId: "task-1",
+        version: 1,
+        participantId: "participant-1",
+        title: "Upload Final Headshot",
+        dueAt: "2027-04-14",
+      },
+    ],
+  },
+} as const;
+
 function queueMessage(body: CloudflareOutboxMessage): OutboxQueueMessage & { acked: boolean } {
   return {
     body,
@@ -92,6 +156,99 @@ function queueMessage(body: CloudflareOutboxMessage): OutboxQueueMessage & { ack
 }
 
 describe("Airtable communication D1 delivery", () => {
+  it("reports a recovered pending reminder send as newly queued and preserves terminal failures", async () => {
+    const database = new SpeakerReminderOutboxD1();
+    let sendAttempts = 0;
+    const adapter = new CloudflareSpeakerDeliveryAdapter(
+      database as unknown as D1Database,
+      {
+        send: async () => {
+          sendAttempts += 1;
+          if (sendAttempts === 1) throw new Error("queue unavailable");
+        },
+      } as unknown as Queue<CloudflareOutboxMessage>,
+      "https://event.example.test",
+      {
+        auth: "auth@example.test",
+        speakers: "speakers@example.test",
+        calendar: "calendar@example.test",
+      },
+    );
+
+    await expect(adapter.enqueueReminder(reminderDeliveryInput)).rejects.toThrow(
+      "queue unavailable",
+    );
+    expect(database.row?.state).toBe("pending");
+    await expect(adapter.enqueueReminder(reminderDeliveryInput)).resolves.toMatchObject({
+      queued: true,
+      duplicate: false,
+    });
+    expect(database.row?.state).toBe("queued");
+    await expect(adapter.enqueueReminder(reminderDeliveryInput)).resolves.toMatchObject({
+      queued: false,
+      duplicate: true,
+    });
+    expect(sendAttempts).toBe(2);
+
+    if (database.row === undefined) throw new Error("The outbox fixture is unavailable.");
+    database.row.state = "failed";
+    await expect(adapter.enqueueReminder(reminderDeliveryInput)).resolves.toMatchObject({
+      status: "failed",
+      queued: false,
+      duplicate: false,
+    });
+    expect(sendAttempts).toBe(2);
+  });
+
+  it("reports an unavailable reminder recipient as failed instead of duplicate", async () => {
+    const adapter = new CloudflareSpeakerDeliveryAdapter(
+      {
+        prepare: () => ({
+          bind: () => ({
+            first: async () => null,
+          }),
+        }),
+      } as unknown as D1Database,
+      {
+        send: async () => undefined,
+      } as unknown as Queue<CloudflareOutboxMessage>,
+      "https://event.example.test",
+      {
+        auth: "auth@example.test",
+        speakers: "speakers@example.test",
+        calendar: "calendar@example.test",
+      },
+    );
+
+    await expect(
+      adapter.enqueueReminder({
+        organizationId: "org-1",
+        eventId: "event-1",
+        idempotencyKey: "content-reminder-1:participant-1",
+        actorAccountId: "organizer-1",
+        recipient: {
+          participantId: "participant-1",
+          displayName: "Priya Raman",
+          email: "unverified@example.test",
+          taskIds: ["task-1"],
+          tasks: [
+            {
+              taskId: "task-1",
+              version: 1,
+              participantId: "participant-1",
+              title: "Upload Final Headshot",
+              dueAt: "2027-04-14",
+            },
+          ],
+        },
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      queued: false,
+      duplicate: false,
+    });
+  });
+
   it("keeps the queued sender snapshot for audit and delivers through the rotated purpose envelope", async () => {
     const oldSender = "program@legacy.example";
     const template: CommunicationTemplate = {

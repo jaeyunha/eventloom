@@ -331,9 +331,35 @@ describe("deliverables API adapter", () => {
       if (url.endsWith("/organizer/tasks")) {
         return Response.json({ data: task }, { status: 201 });
       }
+      if (url.endsWith("/organizer/reminders/preview")) {
+        return Response.json({
+          data: {
+            organizationId: "org-1",
+            eventId: "event-1",
+            snapshotFingerprint: "a".repeat(64),
+            taskIds: ["task-1"],
+            recipientIds: ["speaker-1", "speaker-2"],
+            recipients: [],
+          },
+        });
+      }
       if (url.endsWith("/organizer/reminders/queue")) {
         return Response.json({
-          data: { sentCount: 1, recipientIds: ["speaker-1"] },
+          data: {
+            organizationId: "org-1",
+            eventId: "event-1",
+            idempotencyKey: "content-reminder-1",
+            queued: true,
+            duplicate: false,
+            sentCount: 1,
+            failedCount: 1,
+            duplicateCount: 0,
+            recipientIds: ["speaker-1", "speaker-2"],
+            receipts: [
+              { participantId: "speaker-1", status: "queued", receiptId: "receipt-1" },
+              { participantId: "speaker-2", status: "failed", receiptId: null },
+            ],
+          },
         });
       }
       if (url.endsWith("/organizer/assets/asset-2/review")) {
@@ -354,12 +380,25 @@ describe("deliverables API adapter", () => {
         acceptedAssetKinds: ["slides"],
       }),
     ).resolves.toMatchObject({ id: task.id });
+    const reminderPreview = await api.previewBulkReminder?.({
+      taskIds: ["task-1"],
+      recipientIds: ["speaker-1", "speaker-2"],
+      idempotencyKey: "content-reminder-1",
+    });
+    expect(reminderPreview?.snapshotFingerprint).toBe("a".repeat(64));
     await expect(
       api.sendBulkReminder?.({
         taskIds: ["task-1"],
-        recipientIds: ["speaker-1"],
+        recipientIds: ["speaker-1", "speaker-2"],
+        idempotencyKey: "content-reminder-1",
+        snapshotFingerprint: reminderPreview?.snapshotFingerprint ?? "",
       }),
-    ).resolves.toEqual({ sentCount: 1, recipientIds: ["speaker-1"] });
+    ).resolves.toMatchObject({
+      idempotencyKey: "content-reminder-1",
+      sentCount: 1,
+      failedCount: 1,
+      recipientIds: ["speaker-1", "speaker-2"],
+    });
     await expect(
       api.reviewAsset?.({
         assetId: "asset-2",
@@ -382,13 +421,20 @@ describe("deliverables API adapter", () => {
       acceptedAssetKinds: ["slides"],
       assignments: [{ participantId: "speaker-1", submissionId: "submission-1" }],
     });
-    expect(String(calls[1]?.input)).toContain("/organizer/reminders/queue");
-    expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({
+    expect(String(calls[1]?.input)).toContain("/organizer/reminders/preview");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
       taskIds: ["task-1"],
-      recipientIds: ["speaker-1"],
-      idempotencyKey: expect.any(String),
+      recipientIds: ["speaker-1", "speaker-2"],
+      idempotencyKey: "content-reminder-1",
     });
-    expect(String(calls[2]?.input)).toContain("/organizer/assets/asset-2/review");
+    expect(String(calls[2]?.input)).toContain("/organizer/reminders/queue");
+    expect(JSON.parse(String(calls[2]?.init?.body))).toMatchObject({
+      taskIds: ["task-1"],
+      recipientIds: ["speaker-1", "speaker-2"],
+      idempotencyKey: "content-reminder-1",
+      snapshotFingerprint: "a".repeat(64),
+    });
+    expect(String(calls[3]?.input)).toContain("/organizer/assets/asset-2/review");
   });
   it("posts an exact event-scoped export selection and validates the binary ZIP response", async () => {
     const calls: Array<{
@@ -1162,7 +1208,7 @@ describe("deliverables workspace", () => {
         onInspectAsset: () => undefined,
         onAddComment: async () => undefined,
         onDownloadVersion: async () => undefined,
-        onSendBulkReminder: async () => undefined,
+        onSendBulkReminder: async () => null,
         onSaveSession: async () => undefined,
         onApproveSession: async () => undefined,
         onSaveBiography: async () => undefined,
@@ -1408,7 +1454,29 @@ describe("deliverables workspace", () => {
     };
     const markup = renderToStaticMarkup(
       createElement(ReminderPreview, {
-        rows: [row],
+        preview: {
+          organizationId: "org-1",
+          eventId: "event-1",
+          snapshotFingerprint: "a".repeat(64),
+          taskIds: [row.task.id],
+          recipientIds: [row.task.participantId],
+          recipients: [
+            {
+              participantId: row.task.participantId,
+              displayName: row.speakerLabel,
+              taskIds: [row.task.id],
+              tasks: [
+                {
+                  taskId: row.task.id,
+                  version: row.task.version,
+                  participantId: row.task.participantId,
+                  title: row.task.title,
+                  ...(row.task.dueAt === undefined ? {} : { dueAt: row.task.dueAt }),
+                },
+              ],
+            },
+          ],
+        },
         busy: false,
         sendAvailable: true,
         onSend: () => undefined,
@@ -1431,7 +1499,7 @@ describe("deliverables workspace", () => {
         assets: [assetV1],
         profiles: [profile],
         onCreateTask: async () => undefined,
-        onSendBulkReminder: async () => undefined,
+        onSendBulkReminder: async () => null,
         onApproveSession: async () => undefined,
       }),
     );

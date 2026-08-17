@@ -191,6 +191,43 @@ export interface DeliverableDownloadGrant {
   readonly url: string;
   readonly expiresAt: string;
 }
+export interface DeliverableReminderRecipientResult {
+  readonly participantId: string;
+  readonly status: "queued" | "failed" | "duplicate";
+  readonly receiptId: string | null;
+}
+export interface DeliverableReminderPreview {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly snapshotFingerprint: string;
+  readonly taskIds: readonly string[];
+  readonly recipientIds: readonly string[];
+  readonly recipients: readonly {
+    readonly participantId: string;
+    readonly displayName: string;
+    readonly email?: string;
+    readonly taskIds: readonly string[];
+    readonly tasks: readonly {
+      readonly taskId: string;
+      readonly version: number;
+      readonly participantId: string;
+      readonly title: string;
+      readonly dueAt?: string;
+    }[];
+  }[];
+}
+export interface DeliverableReminderQueueResult {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly queued: boolean;
+  readonly duplicate: boolean;
+  readonly sentCount: number;
+  readonly failedCount: number;
+  readonly duplicateCount: number;
+  readonly recipientIds: readonly string[];
+  readonly receipts: readonly DeliverableReminderRecipientResult[];
+}
 export interface DeliverableExportInput {
   readonly assetIds?: readonly string[];
   readonly taskIds?: readonly string[];
@@ -389,13 +426,18 @@ export interface DeliverablesApi {
   /** Optional until an organizer task-management endpoint is provisioned. */
   createTask?(input: DeliverableTaskInput): Promise<DeliverableTask>;
   /** Optional until the transactional reminder endpoint is provisioned. */
+  previewBulkReminder?(input: {
+    readonly taskIds: readonly string[];
+    readonly recipientIds: readonly string[];
+    readonly idempotencyKey: string;
+  }): Promise<DeliverableReminderPreview>;
+  /** Optional until the transactional reminder endpoint is provisioned. */
   sendBulkReminder?(input: {
     readonly taskIds: readonly string[];
     readonly recipientIds: readonly string[];
-  }): Promise<{
-    readonly sentCount: number;
-    readonly recipientIds: readonly string[];
-  }>;
+    readonly idempotencyKey: string;
+    readonly snapshotFingerprint: string;
+  }): Promise<DeliverableReminderQueueResult>;
   /** Optional until content restore is supported by the session API. */
   restoreSessionVersion?(input: {
     readonly sessionId: string;
@@ -1725,16 +1767,24 @@ export function createDeliverablesApi(
         },
       ).then(normalizeProfile);
     },
-    sendBulkReminder(input) {
-      return speakerRequest<{
-        sentCount: number;
-        recipientIds: readonly string[];
-      }>("/organizer/reminders/queue", {
+    previewBulkReminder(input) {
+      return speakerRequest<DeliverableReminderPreview>("/organizer/reminders/preview", {
         method: "POST",
         body: JSON.stringify({
           taskIds: input.taskIds,
           recipientIds: input.recipientIds,
-          idempotencyKey: crypto.randomUUID(),
+          idempotencyKey: input.idempotencyKey,
+        }),
+      });
+    },
+    sendBulkReminder(input) {
+      return speakerRequest<DeliverableReminderQueueResult>("/organizer/reminders/queue", {
+        method: "POST",
+        body: JSON.stringify({
+          taskIds: input.taskIds,
+          recipientIds: input.recipientIds,
+          idempotencyKey: input.idempotencyKey,
+          snapshotFingerprint: input.snapshotFingerprint,
         }),
       });
     },

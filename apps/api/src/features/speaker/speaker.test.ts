@@ -28,6 +28,11 @@ import type {
   SpeakerParticipantResolution,
   SpeakerPortalContext,
   SpeakerProfile,
+  SpeakerReminderDeliveryInput,
+  SpeakerReminderRecord,
+  SpeakerReminderReceiptAttempt,
+  SpeakerReminderReservationResult,
+  SpeakerReminderStoredReceipt,
   SpeakerRepository,
   SpeakerRosterEntry,
   SpeakerSubmission,
@@ -48,11 +53,57 @@ class FakeSpeakerRepository implements SpeakerRepository {
   readonly assets: SpeakerAsset[] = [];
   readonly comments: SpeakerAssetComment[] = [];
   readonly transitions: SpeakerTaskTransition[] = [];
+  protected readonly reminderRecords = new Map<string, SpeakerReminderRecord>();
 
   getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
     return Promise.resolve(
       this.scopes.get(`${eventId}:${accountId}`) ?? { submissionIds: [], participantIds: [] },
     );
+  }
+
+  getReminder(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null> {
+    return Promise.resolve(
+      structuredClone(this.reminderRecords.get(`${eventId}:${idempotencyKey}`) ?? null),
+    );
+  }
+
+  reserveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderReservationResult> {
+    const key = `${record.eventId}:${record.idempotencyKey}`;
+    const existing = this.reminderRecords.get(key);
+    if (existing !== undefined) {
+      return Promise.resolve({ kind: "existing", record: structuredClone(existing) });
+    }
+    this.reminderRecords.set(key, structuredClone(record));
+    return Promise.resolve({ kind: "created", record: structuredClone(record) });
+  }
+
+  mergeReminderReceipts(input: {
+    eventId: string;
+    idempotencyKey: string;
+    taskIds: readonly string[];
+    recipientIds: readonly string[];
+    attempted: readonly SpeakerReminderReceiptAttempt[];
+  }): Promise<SpeakerReminderRecord> {
+    const key = `${input.eventId}:${input.idempotencyKey}`;
+    const current = this.reminderRecords.get(key);
+    if (current === undefined) throw new Error("The reminder reservation is unavailable.");
+    const attemptsByRecipient = new Map(
+      input.attempted.map((entry) => [entry.participantId, entry] as const),
+    );
+    const receipts: SpeakerReminderStoredReceipt[] = current.receipts.map((receipt) => {
+      const attempted = attemptsByRecipient.get(receipt.participantId);
+      if (attempted === undefined || receipt.state === "queued") {
+        return structuredClone(receipt);
+      }
+      return {
+        ...structuredClone(receipt),
+        state: attempted.nextState,
+        outboxJobId: attempted.outboxJobId ?? receipt.outboxJobId,
+      };
+    });
+    const updated = { ...structuredClone(current), receipts };
+    this.reminderRecords.set(key, updated);
+    return Promise.resolve(structuredClone(updated));
   }
 
   listSubmissions(eventId: string, submissionIds: readonly string[]): Promise<SpeakerSubmission[]> {
@@ -223,6 +274,7 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
   readonly organizerScopes = new Map<string, SpeakerOrganizerAccessScope>();
   readonly verifiedEmails = new Map<string, string>();
   readonly participantResolutions = new Map<string, SpeakerParticipantResolution>();
+  readonly reminders = new Map<string, SpeakerReminderRecord>();
   readonly roster: SpeakerRosterEntry[] = [];
   rosterEventReads = 0;
 
@@ -231,6 +283,55 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
     accountId: string,
   ): Promise<SpeakerOrganizerAccessScope | null> {
     return Promise.resolve(this.organizerScopes.get(`${eventId}:${accountId}`) ?? null);
+  }
+
+  getReminder(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null> {
+    return Promise.resolve(
+      structuredClone(this.reminders.get(`${eventId}:${idempotencyKey}`) ?? null),
+    );
+  }
+
+  saveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderRecord> {
+    return this.reserveReminder(record).then(({ record: stored }) => stored);
+  }
+
+  reserveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderReservationResult> {
+    const key = `${record.eventId}:${record.idempotencyKey}`;
+    const existing = this.reminders.get(key);
+    if (existing !== undefined) {
+      return Promise.resolve({ kind: "existing", record: structuredClone(existing) });
+    }
+    this.reminders.set(key, structuredClone(record));
+    return Promise.resolve({ kind: "created", record: structuredClone(record) });
+  }
+
+  mergeReminderReceipts(input: {
+    eventId: string;
+    idempotencyKey: string;
+    taskIds: readonly string[];
+    recipientIds: readonly string[];
+    attempted: readonly SpeakerReminderReceiptAttempt[];
+  }): Promise<SpeakerReminderRecord> {
+    const key = `${input.eventId}:${input.idempotencyKey}`;
+    const current = this.reminders.get(key);
+    if (current === undefined) throw new Error("The reminder reservation is unavailable.");
+    const attemptsByRecipient = new Map(
+      input.attempted.map((entry) => [entry.participantId, entry] as const),
+    );
+    const receipts: SpeakerReminderStoredReceipt[] = current.receipts.map((receipt) => {
+      const attempted = attemptsByRecipient.get(receipt.participantId);
+      if (attempted === undefined || receipt.state === "queued") {
+        return structuredClone(receipt);
+      }
+      return {
+        ...structuredClone(receipt),
+        state: attempted.nextState,
+        outboxJobId: attempted.outboxJobId ?? receipt.outboxJobId,
+      };
+    });
+    const updated = { ...structuredClone(current), receipts };
+    this.reminders.set(key, updated);
+    return Promise.resolve(structuredClone(updated));
   }
 
   resolveVerifiedInvitationRecipient(email: string): Promise<{
@@ -5095,6 +5196,481 @@ it("uses the approved welcome template and reports durable invitation replays", 
     invitationRepository.listForVerifiedAccount("account:participant-2", "marcus@example.test"),
   ).resolves.toHaveLength(1);
 });
+it("retries only failed content reminder recipients with the same idempotency key", async () => {
+  const { repository, gateway } = createOrganizerFixture();
+  repository.profiles.push(
+    { ...profile("participant-1"), displayName: "Priya Raman", email: "priya@example.test" },
+    { ...profile("participant-2"), displayName: "Marcus Okafor", email: "marcus@example.test" },
+  );
+  repository.tasks.push(
+    task({
+      id: "slides",
+      participantId: "participant-1",
+      title: "Upload Session Presentation",
+      dueAt: "2027-04-10",
+    }),
+    task({
+      id: "headshot-priya",
+      participantId: "participant-1",
+      title: "Upload Final Headshot",
+      dueAt: "2027-04-14",
+    }),
+    task({
+      id: "headshot-marcus",
+      participantId: "participant-2",
+      submissionId: "submission-2",
+      title: "Upload Final Headshot",
+      dueAt: "2027-04-14",
+    }),
+  );
+  const attempts = new Map<string, number>();
+  const deliveries: Array<{
+    readonly participantId: string;
+    readonly idempotencyKey: string;
+    readonly email?: string;
+    readonly tasks: readonly { readonly title: string; readonly dueAt?: string }[];
+  }> = [];
+  const delivery = {
+    enqueue(input: SpeakerReminderDeliveryInput) {
+      const attempt = (attempts.get(input.recipient.participantId) ?? 0) + 1;
+      attempts.set(input.recipient.participantId, attempt);
+      deliveries.push({
+        participantId: input.recipient.participantId,
+        idempotencyKey: input.idempotencyKey,
+        ...(input.recipient.email === undefined ? {} : { email: input.recipient.email }),
+        tasks: input.recipient.tasks.map(({ title, dueAt }) => ({
+          title,
+          ...(dueAt === undefined ? {} : { dueAt }),
+        })),
+      });
+      if (input.recipient.participantId === "participant-2" && attempt === 1) {
+        return Promise.resolve({ status: "failed" as const, queued: false, duplicate: false });
+      }
+      return Promise.resolve({
+        id: `receipt-${input.recipient.participantId}-${attempt}`,
+        status: "queued" as const,
+        queued: true,
+        duplicate: input.recipient.participantId === "participant-2" && attempt === 2,
+      });
+    },
+  };
+  const firstService = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+    speakerSender,
+    now: () => new Date(now),
+    delivery,
+  });
+
+  const preview = await firstService.previewOutstandingReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    idempotencyKey: "content-reminder-retry",
+  });
+  expect(preview).toMatchObject({
+    snapshotFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/u),
+    recipientIds: ["participant-1", "participant-2"],
+    recipients: [
+      {
+        participantId: "participant-1",
+        taskIds: ["headshot-priya", "slides"],
+        tasks: [
+          { title: "Upload Final Headshot", dueAt: "2027-04-14" },
+          { title: "Upload Session Presentation", dueAt: "2027-04-10" },
+        ],
+      },
+      {
+        participantId: "participant-2",
+        taskIds: ["headshot-marcus"],
+        tasks: [{ title: "Upload Final Headshot", dueAt: "2027-04-14" }],
+      },
+    ],
+  });
+
+  const first = await firstService.queueReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: preview.taskIds,
+    recipientIds: preview.recipientIds,
+    idempotencyKey: "content-reminder-retry",
+    snapshotFingerprint: preview.snapshotFingerprint,
+  });
+  expect(first).toMatchObject({
+    queued: true,
+    duplicate: false,
+    sentCount: 1,
+    failedCount: 1,
+    duplicateCount: 0,
+    recipientIds: preview.recipientIds,
+    receipts: [
+      { participantId: "participant-1", status: "queued" },
+      { participantId: "participant-2", status: "failed" },
+    ],
+  });
+
+  const marcusProfileIndex = repository.profiles.findIndex(
+    ({ participantId }) => participantId === "participant-2",
+  );
+  const marcusTaskIndex = repository.tasks.findIndex(({ id }) => id === "headshot-marcus");
+  const marcusProfile = repository.profiles[marcusProfileIndex];
+  const marcusTask = repository.tasks[marcusTaskIndex];
+  if (marcusProfile === undefined || marcusTask === undefined) {
+    throw new Error("The reminder retry fixture is incomplete.");
+  }
+  repository.profiles.splice(marcusProfileIndex, 1, {
+    ...marcusProfile,
+    email: "marcus.changed@example.test",
+  });
+  repository.tasks.splice(marcusTaskIndex, 1, {
+    ...marcusTask,
+    title: "Changed after confirmation",
+    dueAt: "2028-01-01",
+  });
+
+  const retryService = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+    speakerSender,
+    now: () => new Date(now),
+    delivery,
+  });
+  const storedRetryPreview = await retryService.previewOutstandingReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: preview.taskIds,
+    recipientIds: preview.recipientIds,
+    idempotencyKey: "content-reminder-retry",
+  });
+  expect(storedRetryPreview).toMatchObject({
+    organizationId: preview.organizationId,
+    eventId: preview.eventId,
+    snapshotFingerprint: preview.snapshotFingerprint,
+    recipientIds: preview.recipientIds,
+    recipients: preview.recipients,
+  });
+  expect(new Set(storedRetryPreview.taskIds)).toEqual(new Set(preview.taskIds));
+  const changedLivePreview = await retryService.previewOutstandingReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: preview.taskIds,
+    recipientIds: preview.recipientIds,
+  });
+  expect(changedLivePreview.snapshotFingerprint).not.toBe(preview.snapshotFingerprint);
+  await expect(
+    retryService.queueReminders({
+      eventId: "event-1",
+      accountId: "account-1",
+      taskIds: changedLivePreview.taskIds,
+      recipientIds: changedLivePreview.recipientIds,
+      idempotencyKey: "content-reminder-retry",
+      snapshotFingerprint: changedLivePreview.snapshotFingerprint,
+    }),
+  ).rejects.toMatchObject({
+    code: "VERSION_CONFLICT",
+    status: 409,
+  });
+  const retry = await retryService.queueReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: preview.taskIds,
+    recipientIds: preview.recipientIds,
+    idempotencyKey: "content-reminder-retry",
+    snapshotFingerprint: storedRetryPreview.snapshotFingerprint,
+  });
+  expect(retry).toMatchObject({
+    queued: true,
+    duplicate: false,
+    sentCount: 1,
+    failedCount: 0,
+    duplicateCount: 1,
+    recipientIds: preview.recipientIds,
+    receipts: [
+      { participantId: "participant-1", status: "duplicate" },
+      { participantId: "participant-2", status: "queued" },
+    ],
+  });
+  const history = await retryService.getReminderRecord({
+    eventId: "event-1",
+    accountId: "account-1",
+    idempotencyKey: "content-reminder-retry",
+  });
+  expect(new Set(history.taskIds)).toEqual(new Set(preview.taskIds));
+  expect(new Set(history.recipientIds)).toEqual(new Set(preview.recipientIds));
+  expect(history).toMatchObject({
+    receipts: [
+      { participantId: "participant-1", status: "queued" },
+      { participantId: "participant-2", status: "queued" },
+    ],
+  });
+  expect(deliveries).toEqual([
+    {
+      participantId: "participant-1",
+      idempotencyKey: "content-reminder-retry:participant-1",
+      email: "priya@example.test",
+      tasks: [
+        { title: "Upload Final Headshot", dueAt: "2027-04-14" },
+        { title: "Upload Session Presentation", dueAt: "2027-04-10" },
+      ],
+    },
+    {
+      participantId: "participant-2",
+      idempotencyKey: "content-reminder-retry:participant-2",
+      email: "marcus@example.test",
+      tasks: [{ title: "Upload Final Headshot", dueAt: "2027-04-14" }],
+    },
+    {
+      participantId: "participant-2",
+      idempotencyKey: "content-reminder-retry:participant-2",
+      email: "marcus@example.test",
+      tasks: [{ title: "Upload Final Headshot", dueAt: "2027-04-14" }],
+    },
+  ]);
+});
+it("reserves a reminder key before delivery and rejects a concurrent different snapshot", async () => {
+  const { repository, gateway } = createOrganizerFixture();
+  repository.profiles.push(
+    { ...profile("participant-1"), displayName: "Priya Raman", email: "priya@example.test" },
+    { ...profile("participant-2"), displayName: "Marcus Okafor", email: "marcus@example.test" },
+  );
+  repository.tasks.push(
+    task({
+      id: "task-priya",
+      participantId: "participant-1",
+      title: "Upload Session Presentation",
+      dueAt: "2027-04-10",
+    }),
+    task({
+      id: "task-marcus",
+      participantId: "participant-2",
+      submissionId: "submission-2",
+      title: "Upload Final Headshot",
+      dueAt: "2027-04-14",
+    }),
+  );
+  let markFirstStarted: () => void = () => undefined;
+  const firstStarted = new Promise<void>((resolve) => {
+    markFirstStarted = resolve;
+  });
+  let releaseFirstDelivery: () => void = () => undefined;
+  const firstDeliveryReleased = new Promise<void>((resolve) => {
+    releaseFirstDelivery = resolve;
+  });
+  const firstService = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+    speakerSender,
+    now: () => new Date(now),
+    delivery: {
+      async enqueue(input) {
+        markFirstStarted();
+        await firstDeliveryReleased;
+        return {
+          id: `receipt-${input.recipient.participantId}`,
+          status: "queued",
+          queued: true,
+          duplicate: false,
+        };
+      },
+    },
+  });
+  const firstPreview = await firstService.previewOutstandingReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: ["task-priya"],
+    recipientIds: ["participant-1"],
+    idempotencyKey: "concurrent-reminder-key",
+  });
+  const firstQueue = firstService.queueReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: ["task-priya"],
+    recipientIds: ["participant-1"],
+    idempotencyKey: "concurrent-reminder-key",
+    snapshotFingerprint: firstPreview.snapshotFingerprint,
+  });
+  await firstStarted;
+
+  let secondDeliveryCalls = 0;
+  const secondService = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+    speakerSender,
+    now: () => new Date(now),
+    delivery: {
+      enqueue(input) {
+        secondDeliveryCalls += 1;
+        return Promise.resolve({
+          id: `receipt-${input.recipient.participantId}`,
+          status: "queued",
+          queued: true,
+          duplicate: false,
+        });
+      },
+    },
+  });
+  try {
+    await expect(
+      secondService.previewOutstandingReminders({
+        eventId: "event-1",
+        accountId: "account-1",
+        taskIds: ["task-marcus"],
+        recipientIds: ["participant-2"],
+        idempotencyKey: "concurrent-reminder-key",
+      }),
+    ).rejects.toMatchObject({
+      code: "VERSION_CONFLICT",
+      status: 409,
+    });
+    expect(secondDeliveryCalls).toBe(0);
+  } finally {
+    releaseFirstDelivery();
+    await firstQueue;
+  }
+});
+it("requires a durable preview reservation before queueing an explicit reminder key", async () => {
+  const { repository, gateway } = createOrganizerFixture();
+  repository.profiles.push({
+    ...profile("participant-1"),
+    displayName: "Priya Raman",
+    email: "priya@example.test",
+  });
+  repository.tasks.push(
+    task({
+      id: "task-priya",
+      participantId: "participant-1",
+      title: "Upload Session Presentation",
+      dueAt: "2027-04-10",
+    }),
+  );
+  let deliveryCalls = 0;
+  const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+    speakerSender,
+    now: () => new Date(now),
+    delivery: {
+      enqueue() {
+        deliveryCalls += 1;
+        return Promise.resolve({ status: "queued", queued: true, duplicate: false });
+      },
+    },
+  });
+  const unreservedPreview = await service.previewOutstandingReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: ["task-priya"],
+    recipientIds: ["participant-1"],
+  });
+
+  await expect(
+    service.queueReminders({
+      eventId: "event-1",
+      accountId: "account-1",
+      taskIds: unreservedPreview.taskIds,
+      recipientIds: unreservedPreview.recipientIds,
+      idempotencyKey: "unreserved-reminder-key",
+      snapshotFingerprint: unreservedPreview.snapshotFingerprint,
+    }),
+  ).rejects.toMatchObject({
+    code: "VERSION_CONFLICT",
+    status: 409,
+  });
+  expect(deliveryCalls).toBe(0);
+  await expect(repository.getReminder("event-1", "unreserved-reminder-key")).resolves.toBeNull();
+});
+it("recovers a pending reminder from its stored snapshot after live work disappears", async () => {
+  const { repository, gateway } = createOrganizerFixture();
+  repository.profiles.push({
+    ...profile("participant-1"),
+    displayName: "Priya Raman",
+    email: "priya@example.test",
+  });
+  repository.tasks.push(
+    task({
+      id: "task-priya",
+      participantId: "participant-1",
+      title: "Upload Session Presentation",
+      dueAt: "2027-04-10",
+    }),
+  );
+  await repository.reserveReminder({
+    id: "reserved-reminder-1",
+    organizationId: "org-1",
+    eventId: "event-1",
+    idempotencyKey: "pending-reminder-key",
+    taskIds: ["task-priya"],
+    recipientIds: ["participant-1"],
+    receipts: [
+      {
+        participantId: "participant-1",
+        state: "pending",
+        outboxJobId: null,
+        snapshot: {
+          participantId: "participant-1",
+          displayName: "Priya Raman",
+          email: "priya@example.test",
+          taskIds: ["task-priya"],
+          tasks: [
+            {
+              taskId: "task-priya",
+              version: 1,
+              participantId: "participant-1",
+              title: "Upload Session Presentation",
+              dueAt: "2027-04-10",
+            },
+          ],
+        },
+      },
+    ],
+    createdAt: now,
+    actorAccountId: "account-1",
+  });
+  repository.tasks.splice(0, repository.tasks.length);
+  repository.profiles.splice(0, repository.profiles.length);
+
+  const deliveries: SpeakerReminderDeliveryInput[] = [];
+  const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+    speakerSender,
+    now: () => new Date(now),
+    delivery: {
+      enqueue(input) {
+        deliveries.push(structuredClone(input));
+        return Promise.resolve({
+          id: "internal-outbox-job",
+          status: "queued",
+          queued: true,
+          duplicate: false,
+        });
+      },
+    },
+  });
+  const pendingPreview = await service.previewOutstandingReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: ["task-priya"],
+    recipientIds: ["participant-1"],
+    idempotencyKey: "pending-reminder-key",
+  });
+  const result = await service.queueReminders({
+    eventId: "event-1",
+    accountId: "account-1",
+    taskIds: ["task-priya"],
+    recipientIds: ["participant-1"],
+    idempotencyKey: "pending-reminder-key",
+    snapshotFingerprint: pendingPreview.snapshotFingerprint,
+  });
+
+  expect(result).toMatchObject({
+    sentCount: 1,
+    failedCount: 0,
+    receipts: [{ participantId: "participant-1", status: "queued", receiptId: null }],
+  });
+  expect(deliveries).toEqual([
+    expect.objectContaining({
+      idempotencyKey: "pending-reminder-key:participant-1",
+      recipient: expect.objectContaining({
+        participantId: "participant-1",
+        email: "priya@example.test",
+        tasks: [
+          expect.objectContaining({
+            title: "Upload Session Presentation",
+            dueAt: "2027-04-10",
+          }),
+        ],
+      }),
+    }),
+  ]);
+});
 it("queues due scheduled reminders idempotently without sending ineligible tasks", async () => {
   const { repository } = createOrganizerFixture();
   repository.tasks.push(
@@ -5172,7 +5748,7 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
       {
         participantId: "participant-1",
         status: "queued",
-        receiptId: "reminder-receipt-1",
+        receiptId: null,
       },
     ],
   });
@@ -5187,7 +5763,7 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
       {
         participantId: "participant-1",
         status: "duplicate",
-        receiptId: "reminder-receipt-1",
+        receiptId: null,
       },
     ],
   });

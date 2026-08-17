@@ -14,6 +14,8 @@ import {
   type DeliverableExportDownload,
   type DeliverableExportInput,
   type DeliverableMatrixItem,
+  type DeliverableReminderPreview,
+  type DeliverableReminderQueueResult,
   type DeliverableReviewInput,
   type DeliverableSession,
   type DeliverableSpeakerContentHistoryEntry,
@@ -224,7 +226,7 @@ function deliverablesCapabilityMessages(
       messages.push(
         "Speaker content history is unavailable until the organizer content history endpoint is provisioned.",
       );
-    if (api.sendBulkReminder === undefined)
+    if (api.previewBulkReminder === undefined || api.sendBulkReminder === undefined)
       messages.push(
         "Bulk reminder sending is unavailable until a transactional reminder endpoint is provisioned.",
       );
@@ -1691,12 +1693,15 @@ function useDeliverablesWorkspaceController({
   async function sendBulkReminder(input: {
     readonly taskIds: readonly string[];
     readonly recipientIds: readonly string[];
-  }): Promise<void> {
+    readonly idempotencyKey: string;
+    readonly snapshotFingerprint: string;
+  }): Promise<DeliverableReminderQueueResult | null> {
     if (api.sendBulkReminder === undefined) {
-      setError(
-        "Bulk reminder sending is unavailable because no transactional reminder endpoint is provisioned.",
-      );
-      return;
+      const message =
+        "Bulk reminder sending is unavailable because no transactional reminder endpoint is provisioned.";
+      setError(message);
+      recordOperation("reminder-send", "Send outstanding reminders", "failed", message);
+      return null;
     }
     const scope = scopeRef.current;
     const busyLease = beginBusy();
@@ -1710,28 +1715,60 @@ function useDeliverablesWorkspaceController({
     );
     try {
       const result = await api.sendBulkReminder(input);
-      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return null;
       invalidateDeliverablesCoreCache(scope);
-      setStatusMessage(
-        `Reminder send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
-      );
-      recordOperation(
-        "reminder-send",
-        "Send outstanding reminders",
-        "succeeded",
-        `Send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
-      );
+      const recipientCount = result.recipientIds.length;
+      if (result.failedCount > 0) {
+        const successfulCount = result.sentCount + result.duplicateCount;
+        const message = `Reminder queue recorded ${successfulCount} of ${recipientCount} recipients (${result.sentCount} newly queued, ${result.duplicateCount} already queued); ${result.failedCount} failed. Retry this confirmed snapshot to send only the failed recipients.`;
+        setError(message);
+        recordOperation("reminder-send", "Send outstanding reminders", "failed", message);
+        return result;
+      }
+      const replaySummary =
+        result.duplicateCount === 0
+          ? ""
+          : ` (${result.sentCount} newly queued, ${result.duplicateCount} already queued)`;
+      const message = `Reminder send recorded for ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}${replaySummary}.`;
+      setStatusMessage(message);
+      recordOperation("reminder-send", "Send outstanding reminders", "succeeded", message);
+      return result;
     } catch (reason) {
-      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return null;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("reminder-send", "Send outstanding reminders", "failed", message);
+      return null;
     } finally {
       if (
         busyLeaseRef.current === busyLease &&
         isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
       )
         setBusy(false);
+    }
+  }
+
+  async function previewBulkReminder(input: {
+    readonly taskIds: readonly string[];
+    readonly recipientIds: readonly string[];
+    readonly idempotencyKey: string;
+  }): Promise<DeliverableReminderPreview | null> {
+    if (api.previewBulkReminder === undefined) {
+      setError(
+        "Reminder preview is unavailable because no transactional reminder endpoint is provisioned.",
+      );
+      return null;
+    }
+    const scope = scopeRef.current;
+    try {
+      const preview = await api.previewBulkReminder(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return null;
+      setError(null);
+      return preview;
+    } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return null;
+      setError(messageFromError(reason));
+      return null;
     }
   }
 
@@ -1947,7 +1984,12 @@ function useDeliverablesWorkspaceController({
       ? {}
       : { onExportFiles: exportFiles }),
     ...(reviewAssetHandler === undefined ? {} : { onReviewAsset: reviewAssetHandler }),
-    ...(api?.sendBulkReminder === undefined ? {} : { onSendBulkReminder: sendBulkReminder }),
+    ...(api?.previewBulkReminder === undefined || api.sendBulkReminder === undefined
+      ? {}
+      : {
+          onPreviewBulkReminder: previewBulkReminder,
+          onSendBulkReminder: sendBulkReminder,
+        }),
     onSaveSession: saveSession,
     onApproveSession: approveSession,
     ...(api?.restoreSessionVersion === undefined

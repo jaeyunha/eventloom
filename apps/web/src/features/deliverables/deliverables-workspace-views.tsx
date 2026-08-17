@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,8 @@ import type {
   DeliverableExportDownload,
   DeliverableExportInput,
   DeliverableMatrixItem,
+  DeliverableReminderPreview,
+  DeliverableReminderQueueResult,
   DeliverableReviewInput,
   DeliverableReviewState,
   DeliverableSession,
@@ -140,10 +142,17 @@ export interface DeliverablesWorkspaceViewProps {
     input: DeliverableExportInput,
   ) => Promise<DeliverableExportDownload | undefined>;
   readonly onReviewAsset?: (input: DeliverableReviewInput) => Promise<void>;
+  readonly onPreviewBulkReminder?: (input: {
+    readonly taskIds: readonly string[];
+    readonly recipientIds: readonly string[];
+    readonly idempotencyKey: string;
+  }) => Promise<DeliverableReminderPreview | null>;
   readonly onSendBulkReminder?: (input: {
     readonly taskIds: readonly string[];
     readonly recipientIds: readonly string[];
-  }) => Promise<void>;
+    readonly idempotencyKey: string;
+    readonly snapshotFingerprint: string;
+  }) => Promise<DeliverableReminderQueueResult | null>;
   readonly onSaveSession?: (input: {
     readonly sessionId: string;
     readonly expectedVersion: number;
@@ -494,10 +503,13 @@ interface RequestsSectionProps {
   readonly onPreviewSelectedReminders: () => void;
   readonly onPreviewAllReminders: () => void;
   readonly onReminderOpenChange: (open: boolean) => void;
+  readonly onPreviewBulkReminder?: DeliverablesWorkspaceViewProps["onPreviewBulkReminder"];
   readonly onSendBulkReminder?: (input: {
     readonly taskIds: readonly string[];
     readonly recipientIds: readonly string[];
-  }) => Promise<void>;
+    readonly idempotencyKey: string;
+    readonly snapshotFingerprint: string;
+  }) => Promise<DeliverableReminderQueueResult | null>;
   readonly onAssignmentOpenChange: (open: boolean) => void;
   readonly onInspectAsset?: (assetId: string) => void;
 }
@@ -521,19 +533,128 @@ function RequestsSection({
   onPreviewSelectedReminders,
   onPreviewAllReminders,
   onReminderOpenChange,
+  onPreviewBulkReminder,
   onSendBulkReminder,
   onAssignmentOpenChange,
   onInspectAsset,
 }: Readonly<RequestsSectionProps>) {
-  const reminderSend = useCallback(() => {
-    const recipientIds = [...new Set(reminderPreviewRows.map((row) => row.task.participantId))];
-    void onSendBulkReminder?.({
-      taskIds: reminderPreviewRows.map((row) => row.task.id),
-      recipientIds,
+  const reminderTaskIds = useMemo(
+    () => reminderPreviewRows.map((row) => row.task.id).sort(),
+    [reminderPreviewRows],
+  );
+  const reminderRecipientIds = useMemo(
+    () => [...new Set(reminderPreviewRows.map((row) => row.task.participantId))].sort(),
+    [reminderPreviewRows],
+  );
+  const reminderSnapshotStorageKey = useMemo(() => {
+    return `eventloom:deliverable-reminder:${JSON.stringify([
+      viewOwnerKey,
+      reminderTaskIds,
+      reminderRecipientIds,
+    ])}`;
+  }, [reminderRecipientIds, reminderTaskIds, viewOwnerKey]);
+  const [reminderOperation, setReminderOperation] = useState<{
+    readonly snapshotKey: string;
+    readonly idempotencyKey: string;
+  } | null>(null);
+  const [resolvedReminderPreview, setResolvedReminderPreview] =
+    useState<DeliverableReminderPreview | null>(null);
+  const [previewingReminder, setPreviewingReminder] = useState(false);
+  const previewReminderRef = useRef(onPreviewBulkReminder);
+  const previewRequestKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    previewReminderRef.current = onPreviewBulkReminder;
+  }, [onPreviewBulkReminder]);
+  useEffect(() => {
+    if (reminderPreviewMode === null || typeof window === "undefined") return;
+    setReminderOperation((current) => {
+      if (current?.snapshotKey === reminderSnapshotStorageKey) return current;
+      const storedKey = window.sessionStorage.getItem(reminderSnapshotStorageKey);
+      const idempotencyKey = storedKey ?? crypto.randomUUID();
+      if (storedKey === null) {
+        window.sessionStorage.setItem(reminderSnapshotStorageKey, idempotencyKey);
+      }
+      return { snapshotKey: reminderSnapshotStorageKey, idempotencyKey };
     });
-    onSetVisibleSelection([]);
-    onReminderOpenChange(false);
-  }, [onReminderOpenChange, onSendBulkReminder, onSetVisibleSelection, reminderPreviewRows]);
+  }, [reminderPreviewMode, reminderSnapshotStorageKey]);
+  useEffect(() => {
+    if (reminderPreviewMode === null) {
+      previewRequestKeyRef.current = null;
+      setResolvedReminderPreview(null);
+      setPreviewingReminder(false);
+      return;
+    }
+    if (
+      reminderOperation?.snapshotKey !== reminderSnapshotStorageKey ||
+      previewReminderRef.current === undefined
+    ) {
+      return;
+    }
+    const requestKey = JSON.stringify([
+      reminderOperation.snapshotKey,
+      reminderOperation.idempotencyKey,
+      reminderTaskIds,
+      reminderRecipientIds,
+    ]);
+    if (previewRequestKeyRef.current === requestKey) return;
+    previewRequestKeyRef.current = requestKey;
+    setResolvedReminderPreview(null);
+    setPreviewingReminder(true);
+    let active = true;
+    void previewReminderRef
+      .current({
+        taskIds: reminderTaskIds,
+        recipientIds: reminderRecipientIds,
+        idempotencyKey: reminderOperation.idempotencyKey,
+      })
+      .then((preview) => {
+        if (active) setResolvedReminderPreview(preview);
+      })
+      .finally(() => {
+        if (active) setPreviewingReminder(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    reminderOperation,
+    reminderPreviewMode,
+    reminderRecipientIds,
+    reminderSnapshotStorageKey,
+    reminderTaskIds,
+  ]);
+  const reminderSend = useCallback(() => {
+    if (resolvedReminderPreview === null) return;
+    const persistedKey = window.sessionStorage.getItem(reminderSnapshotStorageKey);
+    const idempotencyKey =
+      reminderOperation?.snapshotKey === reminderSnapshotStorageKey
+        ? reminderOperation.idempotencyKey
+        : (persistedKey ?? crypto.randomUUID());
+    if (persistedKey === null) {
+      window.sessionStorage.setItem(reminderSnapshotStorageKey, idempotencyKey);
+    }
+    setReminderOperation({ snapshotKey: reminderSnapshotStorageKey, idempotencyKey });
+    void (async () => {
+      const result = await onSendBulkReminder?.({
+        taskIds: resolvedReminderPreview.taskIds,
+        recipientIds: resolvedReminderPreview.recipientIds,
+        idempotencyKey,
+        snapshotFingerprint: resolvedReminderPreview.snapshotFingerprint,
+      });
+      if (result === undefined || result === null || result.failedCount > 0) return;
+      window.sessionStorage.removeItem(reminderSnapshotStorageKey);
+      onSetVisibleSelection([]);
+      setReminderOperation(null);
+      onReminderOpenChange(false);
+    })();
+  }, [
+    onReminderOpenChange,
+    onSendBulkReminder,
+    onSetVisibleSelection,
+    reminderOperation,
+    reminderSnapshotStorageKey,
+    resolvedReminderPreview,
+  ]);
   return (
     <>
       <DeliverablesSummary
@@ -559,17 +680,17 @@ function RequestsSection({
         busy={busy}
       />
       <Dialog open={reminderPreviewMode !== null} onOpenChange={onReminderOpenChange}>
-        <DialogContent className={styles.dialogContent}>
+        <DialogContent className={`${styles.dialogContent} ${styles.reminderDialogContent}`}>
           <DialogHeader>
-            <DialogTitle>Reminder recipient preview</DialogTitle>
+            <DialogTitle>Send outstanding reminders</DialogTitle>
             <DialogDescription>
               Review the exact outstanding assignment snapshot before sending.
             </DialogDescription>
           </DialogHeader>
           <ReminderPreview
-            rows={reminderPreviewRows}
-            busy={busy}
-            sendAvailable={onSendBulkReminder !== undefined}
+            preview={resolvedReminderPreview}
+            busy={busy || previewingReminder}
+            sendAvailable={onPreviewBulkReminder !== undefined && onSendBulkReminder !== undefined}
             onSend={reminderSend}
           />
         </DialogContent>
@@ -850,6 +971,7 @@ interface WorkspaceCanvasProps {
   readonly onPreviewSelectedReminders: () => void;
   readonly onPreviewAllReminders: () => void;
   readonly onReminderOpenChange: (open: boolean) => void;
+  readonly onPreviewBulkReminder?: DeliverablesWorkspaceViewProps["onPreviewBulkReminder"];
   readonly onSendBulkReminder?: DeliverablesWorkspaceViewProps["onSendBulkReminder"];
   readonly onAssignmentOpenChange: (open: boolean) => void;
   readonly onAddComment?: DeliverablesWorkspaceViewProps["onAddComment"];
@@ -917,6 +1039,7 @@ function WorkspaceCanvas({
   onPreviewSelectedReminders,
   onPreviewAllReminders,
   onReminderOpenChange,
+  onPreviewBulkReminder,
   onSendBulkReminder,
   onAssignmentOpenChange,
   onAddComment,
@@ -978,6 +1101,7 @@ function WorkspaceCanvas({
               onPreviewSelectedReminders={onPreviewSelectedReminders}
               onPreviewAllReminders={onPreviewAllReminders}
               onReminderOpenChange={onReminderOpenChange}
+              {...(onPreviewBulkReminder === undefined ? {} : { onPreviewBulkReminder })}
               {...(onSendBulkReminder === undefined ? {} : { onSendBulkReminder })}
               onAssignmentOpenChange={onAssignmentOpenChange}
               {...(onInspectAsset === undefined ? {} : { onInspectAsset })}
@@ -1118,6 +1242,7 @@ export function DeliverablesWorkspaceView({
   onDownloadVersion,
   onExportFiles,
   onReviewAsset,
+  onPreviewBulkReminder,
   onSendBulkReminder,
   onSaveSession,
   onApproveSession,
@@ -1307,6 +1432,7 @@ export function DeliverablesWorkspaceView({
       onReminderOpenChange={(open) => {
         if (!open) setReminderPreviewMode(null);
       }}
+      {...(onPreviewBulkReminder === undefined ? {} : { onPreviewBulkReminder })}
       {...(onSendBulkReminder === undefined ? {} : { onSendBulkReminder })}
       onAssignmentOpenChange={(open) => {
         if (!open) updateViewOverrides((current) => ({ ...current, selectedAssignmentId: null }));

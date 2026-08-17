@@ -24,6 +24,10 @@ import type {
   SpeakerOrganizerAccessScope,
   SpeakerPortalContext,
   SpeakerProfile,
+  SpeakerReminderRecord,
+  SpeakerReminderReceiptAttempt,
+  SpeakerReminderReservationResult,
+  SpeakerReminderStoredReceipt,
   SpeakerRepository,
   SpeakerRosterEntry,
   SpeakerSubmission,
@@ -78,6 +82,7 @@ class LifecycleRepository implements SpeakerRepository {
     },
   ];
   readonly assets: SpeakerAsset[] = [];
+  readonly reminders = new Map<string, SpeakerReminderRecord>();
   readonly roster: SpeakerRosterEntry[] = [];
   readonly forms: SpeakerTaskFormDefinition[] = [
     {
@@ -213,6 +218,51 @@ class LifecycleRepository implements SpeakerRepository {
         participantIds: [],
       },
     );
+  }
+
+  getReminder(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null> {
+    return Promise.resolve(
+      structuredClone(this.reminders.get(`${eventId}:${idempotencyKey}`) ?? null),
+    );
+  }
+
+  reserveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderReservationResult> {
+    const key = `${record.eventId}:${record.idempotencyKey}`;
+    const existing = this.reminders.get(key);
+    if (existing !== undefined) {
+      return Promise.resolve({ kind: "existing", record: structuredClone(existing) });
+    }
+    this.reminders.set(key, structuredClone(record));
+    return Promise.resolve({ kind: "created", record: structuredClone(record) });
+  }
+
+  mergeReminderReceipts(input: {
+    eventId: string;
+    idempotencyKey: string;
+    taskIds: readonly string[];
+    recipientIds: readonly string[];
+    attempted: readonly SpeakerReminderReceiptAttempt[];
+  }): Promise<SpeakerReminderRecord> {
+    const key = `${input.eventId}:${input.idempotencyKey}`;
+    const current = this.reminders.get(key);
+    if (current === undefined) throw new Error("The reminder reservation is unavailable.");
+    const attemptsByRecipient = new Map(
+      input.attempted.map((entry) => [entry.participantId, entry] as const),
+    );
+    const receipts: SpeakerReminderStoredReceipt[] = current.receipts.map((receipt) => {
+      const attempted = attemptsByRecipient.get(receipt.participantId);
+      if (attempted === undefined || receipt.state === "queued") {
+        return structuredClone(receipt);
+      }
+      return {
+        ...structuredClone(receipt),
+        state: attempted.nextState,
+        outboxJobId: attempted.outboxJobId ?? receipt.outboxJobId,
+      };
+    });
+    const updated = { ...structuredClone(current), receipts };
+    this.reminders.set(key, updated);
+    return Promise.resolve(structuredClone(updated));
   }
   getOrganizerAccessScope(
     eventId: string,
@@ -1878,24 +1928,34 @@ describe("organizer content-management contracts", () => {
     const preview = await service.previewOutstandingReminders({
       eventId: "event-1",
       accountId: "organizer",
+      idempotencyKey: "reminder-1",
     });
     expect(preview.recipientIds).toEqual(["participant-1", "participant-2"]);
+    const singlePreview = await service.previewOutstandingReminders({
+      eventId: "event-1",
+      accountId: "organizer",
+      recipientIds: ["participant-1"],
+      idempotencyKey: "single-reminder",
+    });
     const singleReminder = await service.queueReminders({
       eventId: "event-1",
       accountId: "organizer",
       recipientIds: ["participant-1"],
       idempotencyKey: "single-reminder",
+      snapshotFingerprint: singlePreview.snapshotFingerprint,
     });
     expect(singleReminder.recipientIds).toEqual(["participant-1"]);
     const firstReminder = await service.queueReminders({
       eventId: "event-1",
       accountId: "organizer",
       idempotencyKey: "reminder-1",
+      snapshotFingerprint: preview.snapshotFingerprint,
     });
     const secondReminder = await service.queueReminders({
       eventId: "event-1",
       accountId: "organizer",
       idempotencyKey: "reminder-1",
+      snapshotFingerprint: preview.snapshotFingerprint,
     });
     expect(firstReminder).toMatchObject({ queued: true, duplicate: false, sentCount: 2 });
     expect(firstReminder.recipientIds).toEqual(preview.recipientIds);

@@ -184,6 +184,12 @@ const reminderSchema = z.object({
   recipientIds: z.array(z.string().trim().min(1)).optional(),
   idempotencyKey: z.string().trim().min(1).max(300).optional(),
 });
+const reminderPreviewSchema = reminderSchema.extend({
+  idempotencyKey: z.string().trim().min(1).max(300),
+});
+const reminderQueueSchema = reminderPreviewSchema.extend({
+  snapshotFingerprint: z.string().regex(/^[0-9a-f]{64}$/u),
+});
 
 const speakerEmailTemplateSchema = z.object({
   templateId: z.string().trim().min(1).max(200).optional(),
@@ -629,7 +635,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
   });
 
   app.post("/events/:eventId/organizer/reminders/preview", async (context) => {
-    const body = await parseBody(context, reminderSchema);
+    const body = await parseBody(context, reminderPreviewSchema);
     if (!body) {
       return context.json(
         errorBody(context, "VALIDATION_ERROR", "The reminder preview payload is invalid."),
@@ -641,12 +647,13 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       accountId: context.get("speakerAccountId"),
       ...(body.taskIds === undefined ? {} : { taskIds: body.taskIds }),
       ...(body.recipientIds === undefined ? {} : { recipientIds: body.recipientIds }),
+      ...(body.idempotencyKey === undefined ? {} : { idempotencyKey: body.idempotencyKey }),
     });
     return context.json({ data: preview });
   });
 
   app.post("/events/:eventId/organizer/reminders/queue", async (context) => {
-    const body = await parseBody(context, reminderSchema);
+    const body = await parseBody(context, reminderQueueSchema);
     if (!body) {
       return context.json(
         errorBody(context, "VALIDATION_ERROR", "The reminder queue payload is invalid."),
@@ -659,8 +666,17 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.taskIds === undefined ? {} : { taskIds: body.taskIds }),
       ...(body.recipientIds === undefined ? {} : { recipientIds: body.recipientIds }),
       ...(body.idempotencyKey === undefined ? {} : { idempotencyKey: body.idempotencyKey }),
+      snapshotFingerprint: body.snapshotFingerprint,
     });
     return context.json({ data: result });
+  });
+  app.get("/events/:eventId/organizer/reminders/history/:idempotencyKey", async (context) => {
+    const record = await dependencies.service.getReminderRecord({
+      eventId: context.req.param("eventId"),
+      accountId: context.get("speakerAccountId"),
+      idempotencyKey: context.req.param("idempotencyKey"),
+    });
+    return context.json({ data: record });
   });
   app.get("/events/:eventId/organizer/content/:entityType/:entityId", async (context) => {
     const entityType = contentTypeParam(context.req.param("entityType"));
@@ -866,7 +882,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
     return context.json({ data });
   });
   app.post("/events/:eventId/reminders/preview", async (context) => {
-    const body = await parseBody(context, reminderSchema);
+    const body = await parseBody(context, reminderPreviewSchema);
     if (!body) {
       return context.json(
         errorBody(context, "VALIDATION_ERROR", "The reminder preview payload is invalid."),
@@ -878,12 +894,13 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       accountId: context.get("speakerAccountId"),
       ...(body.taskIds === undefined ? {} : { taskIds: body.taskIds }),
       ...(body.recipientIds === undefined ? {} : { recipientIds: body.recipientIds }),
+      ...(body.idempotencyKey === undefined ? {} : { idempotencyKey: body.idempotencyKey }),
     });
     return context.json({ data: preview });
   });
 
   app.post("/events/:eventId/reminders/queue", async (context) => {
-    const body = await parseBody(context, reminderSchema);
+    const body = await parseBody(context, reminderQueueSchema);
     if (!body) {
       return context.json(
         errorBody(context, "VALIDATION_ERROR", "The reminder queue payload is invalid."),
@@ -896,11 +913,12 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.taskIds === undefined ? {} : { taskIds: body.taskIds }),
       ...(body.recipientIds === undefined ? {} : { recipientIds: body.recipientIds }),
       ...(body.idempotencyKey === undefined ? {} : { idempotencyKey: body.idempotencyKey }),
+      snapshotFingerprint: body.snapshotFingerprint,
     });
     return context.json({ data: result });
   });
   app.post("/events/:eventId/reminders", async (context) => {
-    const body = await parseBody(context, reminderSchema);
+    const body = await parseBody(context, reminderQueueSchema);
     if (!body) {
       return context.json(
         errorBody(context, "VALIDATION_ERROR", "The reminder queue payload is invalid."),
@@ -913,6 +931,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.taskIds === undefined ? {} : { taskIds: body.taskIds }),
       ...(body.recipientIds === undefined ? {} : { recipientIds: body.recipientIds }),
       ...(body.idempotencyKey === undefined ? {} : { idempotencyKey: body.idempotencyKey }),
+      snapshotFingerprint: body.snapshotFingerprint,
     });
     return context.json({ data: result });
   });

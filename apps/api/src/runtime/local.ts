@@ -117,6 +117,10 @@ import type {
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerProfile,
+  SpeakerReminderRecord,
+  SpeakerReminderReceiptAttempt,
+  SpeakerReminderReservationResult,
+  SpeakerReminderStoredReceipt,
   SpeakerSubmission,
   SpeakerTask,
   TransitionSpeakerTaskCommand,
@@ -529,6 +533,7 @@ class LocalSpeakerRepository
   readonly #assets = new Map<string, SpeakerAsset[]>();
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
+  readonly #reminders = new Map<string, SpeakerReminderRecord>();
   readonly #cfpPortalContexts = new Map<string, SpeakerPortalContext>();
   readonly #importPreviews = new Map<
     string,
@@ -1179,6 +1184,53 @@ class LocalSpeakerRepository
     this.#ensureEvent(eventId);
     const allowed = new Set(taskIds);
     return clone((this.#tasks.get(eventId) ?? []).filter(({ id }) => allowed.has(id)));
+  }
+
+  async getReminder(
+    eventId: string,
+    idempotencyKey: string,
+  ): Promise<SpeakerReminderRecord | null> {
+    return clone(this.#reminders.get(`${eventId}\u0000${idempotencyKey}`) ?? null);
+  }
+
+  async saveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderRecord> {
+    return (await this.reserveReminder(record)).record;
+  }
+
+  async reserveReminder(record: SpeakerReminderRecord): Promise<SpeakerReminderReservationResult> {
+    this.#ensureEvent(record.eventId);
+    const key = `${record.eventId}\u0000${record.idempotencyKey}`;
+    const existing = this.#reminders.get(key);
+    if (existing !== undefined) return { kind: "existing", record: clone(existing) };
+    this.#reminders.set(key, clone(record));
+    return { kind: "created", record: clone(record) };
+  }
+
+  async mergeReminderReceipts(input: {
+    eventId: string;
+    idempotencyKey: string;
+    taskIds: readonly string[];
+    recipientIds: readonly string[];
+    attempted: readonly SpeakerReminderReceiptAttempt[];
+  }): Promise<SpeakerReminderRecord> {
+    const key = `${input.eventId}\u0000${input.idempotencyKey}`;
+    const current = this.#reminders.get(key);
+    if (current === undefined) throw new Error("The reminder reservation is unavailable.");
+    const attemptsByRecipient = new Map(
+      input.attempted.map((entry) => [entry.participantId, entry] as const),
+    );
+    const receipts: SpeakerReminderStoredReceipt[] = current.receipts.map((receipt) => {
+      const attempted = attemptsByRecipient.get(receipt.participantId);
+      if (attempted === undefined || receipt.state === "queued") return clone(receipt);
+      return {
+        ...clone(receipt),
+        state: attempted.nextState,
+        outboxJobId: attempted.outboxJobId ?? receipt.outboxJobId,
+      };
+    });
+    const updated = { ...clone(current), receipts };
+    this.#reminders.set(key, updated);
+    return clone(updated);
   }
 
   async transitionTask(command: TransitionSpeakerTaskCommand) {
@@ -3189,6 +3241,16 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       communicationService,
       "http://127.0.0.1:3015",
     ),
+    delivery: {
+      enqueue(input) {
+        return Promise.resolve({
+          id: `local-reminder:${input.eventId}:${input.recipient.participantId}`,
+          status: "queued" as const,
+          queued: true,
+          duplicate: false,
+        });
+      },
+    },
     invitationCreator: eventRoleInvitationAdapters.speakerCreator,
   });
   let programGraphSeeded!: Promise<void>;

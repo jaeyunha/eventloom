@@ -55,6 +55,7 @@ import {
   type DeliverableAsset,
   type DeliverableAssetKind,
   type DeliverableContentHistoryEntry,
+  type DeliverableReminderPreview,
   type DeliverableSession,
   type DeliverableSpeakerProfile,
   DeliverablesApiError,
@@ -1316,26 +1317,24 @@ export function ContentRequestInspector({
 }
 
 export function ReminderPreview({
-  rows,
+  preview,
   busy,
   onSend,
   sendAvailable,
 }: Readonly<{
-  rows: readonly DeliverableRow[];
+  preview: DeliverableReminderPreview | null;
   busy: boolean;
   onSend: () => void;
   sendAvailable: boolean;
 }>) {
-  const effective = rows.filter((row) => isOutstanding(row.status));
-  const recipients = [
-    ...new Map(effective.map((row) => [row.task.participantId, row.speakerLabel])).entries(),
-  ];
-  const snapshotKey = effective
-    .map(
-      (row) =>
-        `${row.task.id}\u0000${row.task.version}\u0000${row.task.participantId}\u0000${row.task.dueAt ?? ""}\u0000${row.status}`,
-    )
-    .join("\u0001");
+  const recipients = preview?.recipients ?? [];
+  const assignments = recipients.flatMap((recipient) =>
+    recipient.tasks.map((task) => ({
+      ...task,
+      displayName: recipient.displayName,
+    })),
+  );
+  const snapshotKey = preview?.snapshotFingerprint ?? "";
   const [confirmedSnapshotKey, setConfirmedSnapshotKey] = useState<string | null>(null);
   const confirmed = confirmedSnapshotKey === snapshotKey;
   return (
@@ -1351,7 +1350,7 @@ export function ReminderPreview({
         </div>
         <div className={styles.previewCounts}>
           <Badge variant="outline">
-            {effective.length} assignment{effective.length === 1 ? "" : "s"}
+            {assignments.length} assignment{assignments.length === 1 ? "" : "s"}
           </Badge>
           <Badge variant="outline">
             {recipients.length} recipient{recipients.length === 1 ? "" : "s"}
@@ -1359,10 +1358,20 @@ export function ReminderPreview({
         </div>
       </CardHeader>
       <CardContent className={stackClass}>
-        {recipients.length === 0 ? (
+        <ul className={styles.reminderRecipientList} aria-label="Reminder recipients">
+          {recipients.map((recipient) => (
+            <li className={styles.reminderRecipientIdentity} key={recipient.participantId}>
+              <strong>{recipient.displayName}</strong>
+              <small>{recipient.participantId}</small>
+            </li>
+          ))}
+        </ul>
+        {preview === null ? (
+          <p className={mutedClass}>Loading the authoritative reminder snapshot…</p>
+        ) : recipients.length === 0 ? (
           <p className={mutedClass}>No outstanding assignments are available for a reminder.</p>
         ) : (
-          <div className={tableWrapClass}>
+          <div className={`${tableWrapClass} ${styles.reminderSnapshotTable}`}>
             <Table>
               <TableCaption>Recipient and assignment snapshot</TableCaption>
               <TableHeader>
@@ -1373,12 +1382,12 @@ export function ReminderPreview({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {effective.map((row) => (
-                  <TableRow key={`preview-${row.task.id}`}>
-                    <TableHead scope="row">{row.speakerLabel}</TableHead>
-                    <TableCell>{row.task.title}</TableCell>
+                {assignments.map((assignment) => (
+                  <TableRow key={`preview-${assignment.participantId}-${assignment.taskId}`}>
+                    <TableHead scope="row">{assignment.displayName}</TableHead>
+                    <TableCell>{assignment.title}</TableCell>
                     <TableCell>
-                      <ClientFormattedDate value={row.task.dueAt} />
+                      <ClientFormattedDate value={assignment.dueAt} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -1386,11 +1395,11 @@ export function ReminderPreview({
             </Table>
           </div>
         )}
-        <div className={clusterClass}>
+        <div className={`${clusterClass} ${styles.reminderConfirmation}`}>
           <Checkbox
             id="reminder-confirm"
             checked={confirmed}
-            disabled={effective.length === 0 || !sendAvailable || busy}
+            disabled={assignments.length === 0 || !sendAvailable || busy}
             onCheckedChange={(checked) =>
               setConfirmedSnapshotKey(checked === true ? snapshotKey : null)
             }
@@ -1399,10 +1408,10 @@ export function ReminderPreview({
             I confirm this exact outstanding recipient and assignment snapshot.
           </Label>
         </div>
-        <div className={clusterClass}>
+        <div className={`${clusterClass} ${styles.reminderActions}`}>
           <Button
             type="button"
-            disabled={busy || !sendAvailable || effective.length === 0 || !confirmed}
+            disabled={busy || !sendAvailable || assignments.length === 0 || !confirmed}
             onClick={() => {
               onSend();
               setConfirmedSnapshotKey(null);

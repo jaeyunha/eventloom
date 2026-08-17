@@ -6410,7 +6410,12 @@ async function enqueueCloudflareOutbox(input: {
   readonly deduplicationKey: string;
   readonly payload: unknown;
   readonly now?: string;
-}): Promise<{ readonly inserted: boolean; readonly queued: boolean }> {
+}): Promise<{
+  readonly jobId: string;
+  readonly inserted: boolean;
+  readonly queued: boolean;
+  readonly state: string | undefined;
+}> {
   const now = input.now ?? new Date().toISOString();
   const jobId = `runtime:${input.tenantId}:${input.topic}:${input.deduplicationKey}`;
   const result = await input.database
@@ -6442,7 +6447,7 @@ async function enqueueCloudflareOutbox(input: {
           .bind(jobId)
           .first<{ state: string }>()
       )?.state;
-  if (state !== "pending") return { inserted, queued: false };
+  if (state !== "pending") return { jobId, inserted, queued: false, state };
   await input.queue.send({
     version: 1,
     jobId,
@@ -6456,7 +6461,7 @@ async function enqueueCloudflareOutbox(input: {
     )
     .bind(now, jobId)
     .run();
-  return { inserted, queued: true };
+  return { jobId, inserted, queued: true, state: "queued" };
 }
 
 async function enqueueCommunicationDeliveryOutbox(input: {
@@ -6709,7 +6714,7 @@ export class CloudflareSpeakerDeliveryAdapter
     input: SpeakerReminderDeliveryInput,
   ): Promise<SpeakerReminderDeliveryReceipt> {
     const recipientEmail = await this.verifiedRecipientEmail(input.recipient.email);
-    if (recipientEmail === null) return { queued: false, duplicate: true };
+    if (recipientEmail === null) return { status: "failed", queued: false, duplicate: false };
     const deliveryKey = await speakerDeliveryKey(
       "reminder",
       input.organizationId,
@@ -6748,9 +6753,25 @@ export class CloudflareSpeakerDeliveryAdapter
         actorAccountId: input.actorAccountId,
       },
     });
+    if (result.queued) {
+      return {
+        id: result.jobId,
+        queued: true,
+        duplicate: false,
+      };
+    }
+    if (["queued", "processing", "delivered"].includes(result.state ?? "")) {
+      return {
+        id: result.jobId,
+        queued: false,
+        duplicate: true,
+      };
+    }
     return {
-      queued: result.queued,
-      duplicate: !result.inserted,
+      id: result.jobId,
+      status: "failed",
+      queued: false,
+      duplicate: false,
     };
   }
 
