@@ -630,6 +630,37 @@ export async function loadOrganizerEvaluationWorkspace(
   );
 }
 
+export async function loadOrganizerDecisionPlanId(
+  baseUrl: string,
+  eventId: string,
+): Promise<string | undefined> {
+  const { plans } = await evaluationRequest<{
+    readonly plans: readonly {
+      readonly id: string;
+      readonly status: string;
+      readonly updatedAt: string;
+    }[];
+  }>(baseUrl, `/plans?eventId=${encodeURIComponent(eventId)}`);
+  return [...plans].sort(
+    (left, right) =>
+      (right.status === "open" ? 1 : 0) - (left.status === "open" ? 1 : 0) ||
+      right.updatedAt.localeCompare(left.updatedAt) ||
+      right.id.localeCompare(left.id),
+  )[0]?.id;
+}
+
+export async function loadOrganizerEvaluationDecision(
+  baseUrl: string,
+  planId: string,
+  submissionId: string,
+): Promise<EvaluationDecisionRecord | undefined> {
+  const decision = await evaluationRequest<EvaluationDecisionRecord | null>(
+    baseUrl,
+    `/plans/${encodeURIComponent(planId)}/submissions/${encodeURIComponent(submissionId)}/decision`,
+  );
+  return decision ?? undefined;
+}
+
 export function indexOrganizerEvaluationWorkspace(
   workspace: OrganizerEvaluationWorkspace,
 ): OrganizerEvaluationIndex {
@@ -803,8 +834,22 @@ export async function enrichCanonicalSubmission(
       reviewerMembers,
     );
   } catch (reason: unknown) {
+    const evaluationPlanId = await loadOrganizerDecisionPlanId(
+      baseUrl,
+      envelope.submission.eventId,
+    ).catch(() => undefined);
+    const decision =
+      evaluationPlanId === undefined
+        ? undefined
+        : await loadOrganizerEvaluationDecision(
+            baseUrl,
+            evaluationPlanId,
+            envelope.submission.id,
+          ).catch(() => undefined);
     return {
       ...canonical,
+      ...(evaluationPlanId === undefined ? {} : { evaluationPlanId }),
+      ...(decision === undefined ? {} : { decision }),
       reviewData: reviewDataStateFromError(reason),
     };
   }

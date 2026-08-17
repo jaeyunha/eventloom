@@ -1493,7 +1493,12 @@ function SubmissionDetailPrimary({
         </ol>
       </section>
 
-      <DecisionControl submission={submission} baseUrl={baseUrl} onSaved={onDecisionSaved} />
+      <DecisionControl
+        key={`${submission.id}:${submission.decision?.version ?? 0}`}
+        submission={submission}
+        baseUrl={baseUrl}
+        onSaved={onDecisionSaved}
+      />
       <AcceptedHandoffSummary submission={submission} />
       <ReopenControl submission={submission} baseUrl={baseUrl} />
     </div>
@@ -1701,9 +1706,9 @@ function DecisionControl({
         ? "waitlisted"
         : submission.status === "declined"
           ? "rejected"
-          : "accepted");
-  const [status, setStatus] = useState<EvaluationDecisionStatus>(initialStatus);
-  const [reason, setReason] = useState("");
+          : "");
+  const [status, setStatus] = useState<EvaluationDecisionStatus | "">(initialStatus);
+  const [reason, setReason] = useState(submission.decision?.history.at(-1)?.reason ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notificationState, setNotificationState] = useState<"idle" | "queued" | "confirmed">(
@@ -1711,7 +1716,7 @@ function DecisionControl({
   );
   const hasDecisionApi = submission.evaluationPlanId !== undefined;
   const decisionHistory = submission.decision?.history ?? [];
-  const canSubmit = hasDecisionApi && reason.trim().length >= 5 && !busy;
+  const canSubmit = hasDecisionApi && status !== "" && reason.trim().length >= 5 && !busy;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -1719,13 +1724,14 @@ function DecisionControl({
     setBusy(true);
     setError(null);
     try {
+      const selectedStatus = status as EvaluationDecisionStatus;
       const decision = await evaluationRequest<EvaluationDecisionRecord>(
         baseUrl,
         `/plans/${encodeURIComponent(submission.evaluationPlanId)}/submissions/${encodeURIComponent(submission.id)}/decision`,
         {
           method: "PUT",
           body: JSON.stringify({
-            status,
+            status: selectedStatus,
             reason: reason.trim(),
             ...(submission.decision === undefined
               ? {}
@@ -1782,14 +1788,14 @@ function DecisionControl({
 type DecisionNotificationState = "idle" | "queued" | "confirmed";
 
 type DecisionFormProps = Readonly<{
-  status: EvaluationDecisionStatus;
+  status: EvaluationDecisionStatus | "";
   reason: string;
   error: string | null;
   busy: boolean;
   hasDecisionApi: boolean;
   canSubmit: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onStatusChange: (status: EvaluationDecisionStatus) => void;
+  onStatusChange: (status: EvaluationDecisionStatus | "") => void;
   onReasonChange: (reason: string) => void;
 }>;
 
@@ -1814,9 +1820,10 @@ function DecisionForm({
             value={status}
             disabled={!hasDecisionApi || busy}
             onChange={(event) =>
-              onStatusChange(event.currentTarget.value as EvaluationDecisionStatus)
+              onStatusChange(event.currentTarget.value as EvaluationDecisionStatus | "")
             }
           >
+            <option value="">Choose an outcome</option>
             <option value="accepted">Accept</option>
             <option value="waitlisted">Waitlist</option>
             <option value="rejected">Reject</option>
@@ -1865,7 +1872,7 @@ function DecisionForm({
 
 type DecisionHistoryProps = Readonly<{
   submission: SubmissionRecord;
-  status: EvaluationDecisionStatus;
+  status: EvaluationDecisionStatus | "";
   decisionHistory: EvaluationDecisionRecord["history"];
   notificationState: DecisionNotificationState;
 }>;

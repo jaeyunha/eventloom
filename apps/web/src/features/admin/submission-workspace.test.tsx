@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -730,6 +731,42 @@ describe("organizer submission workspace", () => {
           { status: evaluationStatus },
         );
       }
+      if (url.includes("/plans?eventId=")) {
+        return Response.json({
+          plans:
+            evaluationStatus === 404
+              ? []
+              : [
+                  {
+                    id: "plan-fallback",
+                    status: "open",
+                    updatedAt: "2026-08-16T12:00:00.000Z",
+                  },
+                ],
+        });
+      }
+      if (url.includes("/plans/plan-fallback/submissions/") && url.endsWith("/decision")) {
+        return Response.json({
+          id: "decision-fallback",
+          planId: "plan-fallback",
+          submissionId: canonicalEnvelope.submission.id,
+          status: "waitlisted",
+          version: 3,
+          decidedByUserId: "organizer-1",
+          decidedAt: "2026-08-16T12:30:00.000Z",
+          history: [
+            {
+              fromStatus: "undecided",
+              toStatus: "waitlisted",
+              reason: "Waiting for the final room allocation.",
+              decidedByUserId: "organizer-1",
+              decidedAt: "2026-08-16T12:30:00.000Z",
+              idempotencyKey: "decision-fallback-v3",
+              version: 3,
+            },
+          ],
+        });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -751,20 +788,27 @@ describe("organizer submission workspace", () => {
 
       evaluationStatus = 503;
       const unavailable = await enrichCanonicalSubmission("", canonicalEnvelope);
-      expect(unavailable).toMatchObject({
-        id: canonicalEnvelope.submission.id,
-        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
-        answers: expect.arrayContaining([
-          {
-            question: "Session title",
-            answer: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
-          },
-        ]),
-        reviewData: {
-          status: "unavailable",
-          message: "Review data is unavailable: Evaluation unavailable.",
-        },
+      assert.equal(unavailable.id, canonicalEnvelope.submission.id);
+      assert.equal(unavailable.title, "Taming 40-Minute CI: Incremental Builds at Monorepo Scale");
+      assert.equal(unavailable.evaluationPlanId, "plan-fallback");
+      assert.equal(unavailable.decision?.status, "waitlisted");
+      assert.equal(unavailable.decision?.version, 3);
+      assert.equal(
+        unavailable.decision?.history.at(-1)?.reason,
+        "Waiting for the final room allocation.",
+      );
+      assert.deepEqual(unavailable.reviewData, {
+        status: "unavailable",
+        message: "Review data is unavailable: Evaluation unavailable.",
       });
+      assert.equal(
+        unavailable.answers.some(
+          (answer) =>
+            answer.question === "Session title" &&
+            answer.answer === "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+        ),
+        true,
+      );
     } finally {
       fetchMock.mockRestore();
     }
