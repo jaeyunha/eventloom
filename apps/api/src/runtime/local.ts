@@ -552,6 +552,7 @@ class LocalSpeakerRepository
     private readonly invitationRecipientForEmail: (
       email: string,
     ) => { userId: string; normalizedEmail: string } | null,
+    private readonly decisionFenceChecker?: (fence: DecisionVersionFence) => Promise<boolean>,
   ) {}
 
   async resolveVerifiedInvitationRecipient(email: string) {
@@ -1081,8 +1082,16 @@ class LocalSpeakerRepository
     task: SpeakerTask;
     expectedVersion: number | null;
     actorAccountId: string;
+    decisionFence?: DecisionVersionFence;
   }): Promise<RepositoryResult<SpeakerTask>> {
     this.#ensureEvent(command.task.eventId);
+    if (
+      command.decisionFence !== undefined &&
+      this.decisionFenceChecker !== undefined &&
+      !(await this.decisionFenceChecker(command.decisionFence))
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
     const tasks = this.#tasks.get(command.task.eventId) ?? [];
     if (command.expectedVersion !== null || tasks.some(({ id }) => id === command.task.id)) {
       return { ok: false, reason: "version_conflict" };
@@ -2511,15 +2520,20 @@ function localCfpEvent(event: Event): EventCfp {
 
 export function createLocalDependencies(aiProviders?: CloudflareAiProviders): ApiDependencies {
   const personas = [...LOCAL_PERSONAS];
-  const speakerRepository = new LocalSpeakerRepository((email) => {
-    const recipients = personas.filter(
-      (persona) => persona.email.trim().toLowerCase() === email.trim().toLowerCase(),
-    );
-    const recipient = recipients.length === 1 ? recipients[0] : undefined;
-    return recipient === undefined
-      ? null
-      : { userId: recipient.userId, normalizedEmail: recipient.email.trim().toLowerCase() };
-  });
+  let localDecisionFenceChecker: (fence: DecisionVersionFence) => Promise<boolean> = async () =>
+    true;
+  const speakerRepository = new LocalSpeakerRepository(
+    (email) => {
+      const recipients = personas.filter(
+        (persona) => persona.email.trim().toLowerCase() === email.trim().toLowerCase(),
+      );
+      const recipient = recipients.length === 1 ? recipients[0] : undefined;
+      return recipient === undefined
+        ? null
+        : { userId: recipient.userId, normalizedEmail: recipient.email.trim().toLowerCase() };
+    },
+    (fence) => localDecisionFenceChecker(fence),
+  );
   const localEventInvitationSeed: EventRoleInvitation[] = [
     ...LOCAL_REVIEW_SCENARIO_REVIEWERS.map(
       (reviewer): EventRoleInvitation => ({
@@ -2700,8 +2714,6 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       })(),
     },
   );
-  let localDecisionFenceChecker: (fence: DecisionVersionFence) => Promise<boolean> = async () =>
-    true;
   const sessionRepository = new LocalSessionRepository(speakerRepository, (fence) =>
     localDecisionFenceChecker(fence),
   );

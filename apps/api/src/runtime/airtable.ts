@@ -3420,6 +3420,25 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
             .first<{ state: string }>()
         )?.state;
     if (state === "pending") {
+      const current = await this.#database
+        .prepare(
+          `SELECT version, status
+             FROM evaluation_decisions
+            WHERE organization_id = ?
+              AND event_id = ?
+              AND plan_id = ?
+              AND submission_id = ?
+            LIMIT 1`,
+        )
+        .bind(input.tenantId, input.eventId, input.planId, input.submissionId)
+        .first<{ version: number; status: EvaluationDecisionStatus }>();
+      if (
+        current === null ||
+        current.version !== input.decisionVersion ||
+        current.status !== "accepted"
+      ) {
+        return;
+      }
       await this.#queue.send({
         version: 1,
         jobId,
@@ -6647,6 +6666,37 @@ async function enqueueCloudflareOutbox(input: {
       queued: false,
       state: staged.state,
     };
+  }
+  if (!staged.inserted && input.decisionFence !== undefined) {
+    const current = await input.database
+      .prepare(
+        `SELECT version, status
+           FROM evaluation_decisions
+          WHERE organization_id = ?
+            AND event_id = ?
+            AND plan_id = ?
+            AND submission_id = ?
+          LIMIT 1`,
+      )
+      .bind(
+        input.tenantId,
+        input.decisionFence.eventId,
+        input.decisionFence.planId,
+        input.decisionFence.submissionId,
+      )
+      .first<{ version: number; status: EvaluationDecisionStatus }>();
+    if (
+      current === null ||
+      current.version !== input.decisionFence.version ||
+      current.status !== input.decisionFence.status
+    ) {
+      return {
+        jobId: staged.jobId,
+        inserted: false,
+        queued: false,
+        state: staged.state,
+      };
+    }
   }
   await input.queue.send({
     version: 1,
