@@ -770,7 +770,7 @@ describe("D1EvaluationRepository compound CAS", () => {
   it("blocks successor insertion between oversized reconciliation batches", async () => {
     const database = new SqliteD1("eventloom-review-sync-lock-", fullEvaluationSchema);
     try {
-      database.executeScript(migration("0035_review_plan_revision_lineage.sql"));
+      database.executeScript(migration("0044_review_plan_revision_lineage.sql"));
       database.executeScript(migration("0039_review_plan_revision_sync_lock.sql"));
       database.executeScript(migration("0040_review_plan_revision_sync_token.sql"));
       database.executeScript(`
