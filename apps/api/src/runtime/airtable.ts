@@ -74,10 +74,15 @@ import { conflict } from "../features/evaluations/errors";
 import type {
   EvaluationProjectionReader,
   EvaluationReminderPlanSource,
+  EvaluationPlanScheduleSync,
+  EvaluationPlanScheduleState,
+  EvaluationRepository,
+  EvaluationReviewWriteAdmission,
   OrganizerWorkspaceRecords,
   ReviewerWorkspaceRecords,
   SubmissionReviewLookup,
   SubmissionReviewSource,
+  WriteEvaluationReview,
 } from "../features/evaluations/repository";
 import type {
   EvaluationReminderBoundary,
@@ -92,14 +97,22 @@ import type {
   EvaluationSubmissionSource,
 } from "../features/evaluations/service";
 import { EvaluationService } from "../features/evaluations/service";
+import type { OrganizationPolicy } from "../features/organizations/policy";
 import type {
   EvaluationActor,
   EvaluationAssignment,
+  EvaluationAssignmentDistributionInput,
+  EvaluationAssignmentDistributionResult,
+  EvaluationAssignmentReplacementInput,
+  EvaluationAssignmentReplacementResult,
+  EvaluationAssignmentScope,
+  EvaluationReviewHistory,
   EvaluationConflictDeclaration,
   EvaluationDecision,
   EvaluationPlan,
   EvaluationReview,
   EvaluationSuggestion,
+  EvaluationSuggestionResolution,
   SubmissionReviewMaterial,
 } from "../features/evaluations/types";
 import { EventService, ProgramPublicationService } from "../features/events/service";
@@ -1600,7 +1613,60 @@ export class AirtableCfpRepository implements CfpRepository {
   }
 }
 
-export class AirtableEvaluationProjectionStore implements EvaluationProjectionReader {
+function assertAirtableAssignmentWriteAdmission(
+  plan: EvaluationPlan,
+  scope: EvaluationAssignmentScope,
+  authorizedAt: string,
+  requireRoundOpen: boolean,
+  allowClosed = false,
+): void {
+  if (allowClosed) return;
+  const round = plan.rounds.find((candidate) => candidate.id === scope.roundId);
+  const timestamp = Date.parse(authorizedAt);
+  if (
+    round === undefined ||
+    !Number.isFinite(timestamp) ||
+    plan.status !== "open" ||
+    (plan.closesAt !== null && Date.parse(plan.closesAt) <= timestamp) ||
+    (requireRoundOpen && round.opensAt != null && Date.parse(round.opensAt) > timestamp) ||
+    (round.closesAt != null && Date.parse(round.closesAt) <= timestamp)
+  ) {
+    throw conflict("The evaluation plan is closed.");
+  }
+}
+
+function evaluationAssignmentMatchesScope(
+  assignment: EvaluationAssignment,
+  scope: EvaluationAssignmentScope,
+): boolean {
+  return (
+    assignment.tenantId === scope.tenantId &&
+    assignment.eventId === scope.eventId &&
+    assignment.planId === scope.planId &&
+    assignment.roundId === scope.roundId &&
+    (scope.submissionId === undefined || assignment.submissionId === scope.submissionId)
+  );
+}
+
+function assertEvaluationVersion(
+  actual: number,
+  expected: number,
+  label: string,
+): void {
+  if (actual !== expected) throw conflict(`${label} changed since it was loaded.`);
+}
+
+function evaluationReviewHistory(
+  reviews: readonly EvaluationReview[],
+  assignment: EvaluationAssignment,
+): readonly EvaluationReviewHistory[] {
+  const review = reviews.find((candidate) => candidate.assignmentId === assignment.id);
+  return review === undefined ? [] : [{ assignment: clone(assignment), review: clone(review) }];
+}
+
+export class AirtableEvaluationRepository implements EvaluationRepository {
+  readonly supportsAtomicPlanRevisionSync = false;
+  readonly authority = "transactional" as const;
   readonly #plans: AirtableJsonStore<AirtableEvaluationPlanRecord>;
   readonly #assignments: AirtableJsonStore<EvaluationAssignment>;
   readonly #reviews: AirtableJsonStore<EvaluationReview>;
@@ -1657,6 +1723,41 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
     return plan !== undefined && plan.tenantId === tenantId ? publicEvaluationPlan(plan) : null;
   }
 
+  async getPlanScheduleState(
+    tenantId: string,
+    planId: string,
+  ): Promise<EvaluationPlanScheduleState | null> {
+    const plan = await this.getPlan(tenantId, planId);
+    return plan === null
+      ? null
+      : {
+          id: plan.id,
+          tenantId: plan.tenantId,
+          eventId: plan.eventId,
+          predecessorPlanId: plan.predecessorPlanId,
+          status: plan.status,
+          closesAt: plan.closesAt,
+          version: plan.version,
+          updatedAt: plan.updatedAt,
+          rounds: plan.rounds.map((round) => ({
+            id: round.id,
+            predecessorRoundId: round.predecessorRoundId,
+            revision: round.revision ?? 1,
+            opensAt: round.opensAt ?? null,
+            closesAt: round.closesAt,
+          })),
+        };
+  }
+
+  async getPlanSuccessor(
+    tenantId: string,
+    eventId: string,
+    predecessorPlanId: string,
+  ): Promise<EvaluationPlan | null> {
+    const plans = await this.listPlans(tenantId, eventId);
+    return plans.find((plan) => plan.predecessorPlanId === predecessorPlanId) ?? null;
+  }
+
   async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
     const plans = await this.#plans.list({
       filterByFormula: jsonContainsAllFormula(
@@ -1669,6 +1770,71 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
         (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
       )
       .map((plan) => clone(publicEvaluationPlan(plan)));
+  }
+
+  async hasPendingPlanLineageRepair(): Promise<boolean> {
+    return false;
+  }
+
+  async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
+    const existingRecord = await this.#plans.findWithRecordId(plan.id);
+    const existing = existingRecord?.entity;
+    if (
+      (existing?.version ?? null) !== expectedVersion ||
+      (existing !== undefined && existing.tenantId !== plan.tenantId)
+    ) {
+      throw conflict("Evaluation plan changed since it was loaded.");
+    }
+    const stored: AirtableEvaluationPlanRecord = {
+      ...clone(plan),
+      ...(existing?.assignmentGenerationSnapshot === undefined
+        ? {}
+        : { assignmentGenerationSnapshot: existing.assignmentGenerationSnapshot }),
+    };
+    if (existingRecord === undefined) await this.#plans.create(stored);
+    else await this.#plans.updateByRecordId(plan.id, existingRecord.recordId, stored);
+  }
+
+  async putPlanState(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncPending = false,
+    _revisionSyncToken?: string,
+  ): Promise<void> {
+    if (scheduleSyncs.length > 0 || revisionSyncPending) {
+      throw conflict("Atomic review plan revision synchronization requires D1.");
+    }
+    await this.putPlan(plan, expectedVersion);
+  }
+
+  async putPlanSchedule(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncPending = false,
+    _revisionSyncToken?: string,
+  ): Promise<void> {
+    if (scheduleSyncs.length > 0 || revisionSyncPending) {
+      throw conflict("Atomic review plan revision synchronization requires D1.");
+    }
+    await this.putPlan(plan, expectedVersion);
+  }
+
+  async reconcilePlanRevisionFamily(): Promise<void> {
+    throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+  }
+
+  async completePlanRevisionSync(): Promise<void> {
+    throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+  }
+
+  async beginPlanRevisionSync(): Promise<void> {
+    throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+  }
+
+  async resumePlanRevisionSync(): Promise<void> {
+    throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
   }
 
   async getAssignment(
@@ -1726,6 +1892,299 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
     const assignments = latestEvaluationAssignmentRows(rows, tenantId, planId);
     if (plan === undefined || plan.tenantId !== tenantId) return assignments;
     return overlayEvaluationAssignmentSnapshot(plan, assignments);
+  }
+
+  async replaceAssignment(
+    scope: EvaluationAssignmentScope,
+    input: EvaluationAssignmentReplacementInput,
+  ): Promise<EvaluationAssignmentReplacementResult> {
+    const [planRecord, records] = await Promise.all([
+      this.#plans.findWithRecordId(scope.planId),
+      this.#evaluations.listWithRecordIds(),
+    ]);
+    if (
+      planRecord === undefined ||
+      planRecord.entity.tenantId !== scope.tenantId ||
+      planRecord.entity.eventId !== scope.eventId
+    ) {
+      throw conflict("Reviewer assignment replacement is outside its target scope.");
+    }
+    assertAirtableAssignmentWriteAdmission(planRecord.entity, scope, input.authorizedAt, true);
+    const assignmentRows = latestEvaluationAssignmentRows(
+      records.map(({ entity }) => entity),
+      scope.tenantId,
+      scope.planId,
+    );
+    const assignments = overlayEvaluationAssignmentSnapshot(planRecord.entity, assignmentRows);
+    const reviews = records
+      .filter(({ entity }) => isEvaluationReviewRecord(entity))
+      .map(({ entity }) => untagged(entity as unknown as EvaluationReview));
+    const oldAssignment = assignments.find(
+      (assignment) =>
+        assignment.tenantId === scope.tenantId && assignment.id === input.oldAssignmentId,
+    );
+    if (oldAssignment === undefined) {
+      throw conflict("The reviewer assignment to replace was not found.");
+    }
+    if (!evaluationAssignmentMatchesScope(oldAssignment, scope)) {
+      throw conflict("Reviewer assignment replacement is outside its target scope.");
+    }
+    if (oldAssignment.status === "superseded") {
+      throw conflict("The reviewer assignment has already been superseded.");
+    }
+    assertEvaluationVersion(
+      oldAssignment.version,
+      input.expectedAssignmentVersion,
+      "Reviewer assignment",
+    );
+
+    const successor = input.successorAssignment;
+    if (
+      successor.id === oldAssignment.id ||
+      successor.status === "abstained" ||
+      successor.status === "superseded" ||
+      successor.reviewerId !== input.replacementReviewerId ||
+      !evaluationAssignmentMatchesScope(successor, scope)
+    ) {
+      throw conflict("Reviewer assignment replacement is outside its target scope.");
+    }
+    if (input.reason.trim().length === 0) {
+      throw conflict("A replacement reason is required.");
+    }
+    if (records.some(({ entity }) => entity.id === successor.id)) {
+      throw conflict("The successor reviewer assignment already exists.");
+    }
+
+    const supersededAt = successor.updatedAt;
+    const supersededAssignment: EvaluationAssignment = {
+      ...clone(oldAssignment),
+      status: "superseded",
+      successorAssignmentId: successor.id,
+      supersededReason: input.reason,
+      lineage: {
+        predecessorAssignmentId: oldAssignment.predecessorAssignmentId ?? null,
+        successorAssignmentId: successor.id,
+        reason: input.reason,
+        supersededAt,
+      },
+      version: oldAssignment.version + 1,
+      updatedAt: supersededAt,
+    };
+    const successorAssignment: EvaluationAssignment = {
+      ...clone(successor),
+      predecessorAssignmentId: oldAssignment.id,
+      successorAssignmentId: null,
+      supersededReason: null,
+      lineage: {
+        predecessorAssignmentId: oldAssignment.id,
+        successorAssignmentId: null,
+        reason: input.reason,
+        supersededAt,
+      },
+    };
+
+    const resultScope: EvaluationAssignmentScope = {
+      ...scope,
+      submissionId: scope.submissionId ?? oldAssignment.submissionId,
+    };
+    const assignmentsById = new Map(
+      assignments.map((assignment) => [assignment.id, clone(assignment)]),
+    );
+    assignmentsById.set(supersededAssignment.id, clone(supersededAssignment));
+    assignmentsById.set(successorAssignment.id, clone(successorAssignment));
+    await this.#commitAssignmentGeneration(planRecord, [...assignmentsById.values()], supersededAt);
+
+    return {
+      scope: resultScope,
+      replacedAssignment: clone(supersededAssignment),
+      successorAssignment: clone(successorAssignment),
+      activeAssignments: [...assignmentsById.values()]
+        .filter(
+          (assignment) =>
+            evaluationAssignmentMatchesScope(assignment, resultScope) &&
+            assignment.status !== "superseded",
+        )
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      history: evaluationReviewHistory(reviews, supersededAssignment),
+    };
+  }
+
+  async applyAssignmentDistribution(
+    scope: EvaluationAssignmentScope,
+    input: EvaluationAssignmentDistributionInput,
+  ): Promise<EvaluationAssignmentDistributionResult> {
+    if (input.reason.trim().length === 0) {
+      throw conflict("A distribution reason is required.");
+    }
+
+    const [planRecord, records] = await Promise.all([
+      this.#plans.findWithRecordId(scope.planId),
+      this.#evaluations.listWithRecordIds(),
+    ]);
+    if (
+      planRecord === undefined ||
+      planRecord.entity.tenantId !== scope.tenantId ||
+      planRecord.entity.eventId !== scope.eventId
+    ) {
+      throw conflict("Reviewer assignment distribution is outside its target scope.");
+    }
+    assertAirtableAssignmentWriteAdmission(
+      planRecord.entity,
+      scope,
+      input.authorizedAt,
+      false,
+      input.allowClosedCleanup === true,
+    );
+    const assignmentRows = latestEvaluationAssignmentRows(
+      records.map(({ entity }) => entity),
+      scope.tenantId,
+      scope.planId,
+    );
+    const assignments = overlayEvaluationAssignmentSnapshot(planRecord.entity, assignmentRows);
+    const assignmentsByStorageKey = new Map(
+      assignments.map(
+        (assignment) => [`${assignment.tenantId}\u0000${assignment.id}`, assignment] as const,
+      ),
+    );
+    const reviews = records
+      .filter(({ entity }) => isEvaluationReviewRecord(entity))
+      .map(({ entity }) => untagged(entity as unknown as EvaluationReview));
+    const scopedAssignments = assignments.filter((assignment) =>
+      evaluationAssignmentMatchesScope(assignment, scope),
+    );
+
+    const expected = new Map<string, number>();
+    for (const expectedVersion of input.expectedActiveVersions) {
+      if (expected.has(expectedVersion.assignmentId)) {
+        throw conflict("Expected reviewer assignment versions must be unique.");
+      }
+      expected.set(expectedVersion.assignmentId, expectedVersion.version);
+    }
+
+    const desired = [...input.assignments];
+    const targetSubmissionIds = new Set(desired.map((assignment) => assignment.submissionId));
+    for (const assignmentId of expected.keys()) {
+      const assignment = scopedAssignments.find((candidate) => candidate.id === assignmentId);
+      if (assignment !== undefined) targetSubmissionIds.add(assignment.submissionId);
+    }
+    const target = scopedAssignments.filter((assignment) =>
+      targetSubmissionIds.has(assignment.submissionId),
+    );
+    const active = target.filter(
+      (assignment) => assignment.status !== "superseded" && assignment.status !== "abstained",
+    );
+    if (
+      expected.size !== active.length ||
+      active.some(
+        (assignment) =>
+          expected.get(assignment.id) === undefined ||
+          expected.get(assignment.id) !== assignment.version,
+      ) ||
+      [...expected.keys()].some(
+        (assignmentId) => !active.some((assignment) => assignment.id === assignmentId),
+      )
+    ) {
+      throw conflict("Reviewer assignments changed since the distribution was previewed.");
+    }
+
+    const desiredIds = new Set<string>();
+    for (const assignment of desired) {
+      if (
+        assignment.status === "abstained" ||
+        assignment.status === "superseded" ||
+        !evaluationAssignmentMatchesScope(assignment, scope)
+      ) {
+        throw conflict("Reviewer assignment distribution is outside its target scope.");
+      }
+      if (desiredIds.has(assignment.id)) {
+        throw conflict("Reviewer assignment distribution contains duplicates.");
+      }
+      desiredIds.add(assignment.id);
+
+      const existing = assignmentsByStorageKey.get(`${scope.tenantId}\u0000${assignment.id}`);
+      const collidingRecord = records.find(({ entity }) => entity.id === assignment.id);
+      if (existing === undefined && collidingRecord !== undefined) {
+        throw conflict("A reviewer assignment already exists outside the distribution scope.");
+      }
+      if (existing !== undefined) {
+        if (!evaluationAssignmentMatchesScope(existing, scope)) {
+          throw conflict("A reviewer assignment already exists outside the distribution scope.");
+        }
+        if (existing.status === "abstained") {
+          throw conflict("A reviewer who declared a conflict cannot be reassigned.");
+        }
+        if (existing.status === "superseded") {
+          throw conflict("A superseded reviewer assignment cannot be reused.");
+        }
+        if (
+          existing.reviewerId !== assignment.reviewerId ||
+          existing.version !== assignment.version
+        ) {
+          throw conflict("A reviewer assignment changed since the distribution was previewed.");
+        }
+      }
+    }
+
+    const desiredById = new Map(desired.map((assignment) => [assignment.id, assignment]));
+    const supersededAssignments = active.filter((assignment) => !desiredById.has(assignment.id));
+    const supersededAt =
+      desired[0]?.updatedAt ?? active[0]?.updatedAt ?? planRecord.entity.updatedAt;
+    const nextSuperseded = supersededAssignments.map(
+      (assignment): EvaluationAssignment => ({
+        ...clone(assignment),
+        status: "superseded",
+        successorAssignmentId: null,
+        supersededReason: input.reason,
+        lineage: {
+          predecessorAssignmentId: assignment.predecessorAssignmentId ?? null,
+          successorAssignmentId: null,
+          reason: input.reason,
+          supersededAt,
+        },
+        version: assignment.version + 1,
+        updatedAt: supersededAt,
+      }),
+    );
+    const nextAssignments = desired.map((assignment) => {
+      const existing = assignmentsByStorageKey.get(`${scope.tenantId}\u0000${assignment.id}`);
+      if (existing === undefined) return clone(assignment);
+      return {
+        ...clone(existing),
+        ...clone(assignment),
+        predecessorAssignmentId:
+          assignment.predecessorAssignmentId ?? existing.predecessorAssignmentId,
+        successorAssignmentId: assignment.successorAssignmentId ?? existing.successorAssignmentId,
+        supersededReason: assignment.supersededReason ?? existing.supersededReason,
+        lineage: assignment.lineage ?? existing.lineage,
+      };
+    });
+
+    const resultAssignments = new Map(
+      assignments.map((assignment) => [assignment.id, clone(assignment)]),
+    );
+    for (const assignment of [...nextSuperseded, ...nextAssignments]) {
+      resultAssignments.set(assignment.id, clone(assignment));
+    }
+    await this.#commitAssignmentGeneration(
+      planRecord,
+      [...resultAssignments.values()],
+      supersededAt,
+    );
+    const activeAssignments = [...resultAssignments.values()]
+      .filter(
+        (assignment) =>
+          evaluationAssignmentMatchesScope(assignment, scope) &&
+          assignment.status !== "superseded" &&
+          targetSubmissionIds.has(assignment.submissionId),
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
+
+    return {
+      scope: clone(scope),
+      activeAssignments,
+      supersededAssignments: nextSuperseded.map(clone),
+      history: nextSuperseded.flatMap((assignment) => evaluationReviewHistory(reviews, assignment)),
+    };
   }
 
   async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
@@ -1790,6 +2249,25 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
     }
   }
 
+  async putSuggestion(
+    _suggestion: EvaluationSuggestion,
+    _expectedVersion: number | null,
+    _admission?: EvaluationReviewWriteAdmission,
+  ): Promise<void> {
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
+  }
+
+  async resolveSuggestion(
+    _suggestion: EvaluationSuggestion,
+    _expectedSuggestionVersion: number,
+    _assignment: EvaluationAssignment | null,
+    _expectedAssignmentVersion: number | null,
+    _review: EvaluationReview | null,
+    _expectedReviewVersion: number | null,
+    _admission: EvaluationReviewWriteAdmission,
+  ): Promise<EvaluationSuggestionResolution> {
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
+  }
   async listReviewerWorkspaceRecords(
     tenantId: string,
     reviewerId: string,
@@ -1930,6 +2408,25 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
       decisions: records.decisions.filter((decision) => decision.planId === planId),
     };
   }
+
+  async putReview(
+    _review: EvaluationReview,
+    _expectedVersion: number | null,
+    _admission: EvaluationReviewWriteAdmission,
+  ): Promise<void> {
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
+  }
+
+  async saveReviewDraft(
+    _assignment: EvaluationAssignment,
+    _expectedAssignmentVersion: number,
+    _review: EvaluationReview,
+    _expectedReviewVersion: number | null,
+    _authorizedAt: string,
+  ): Promise<void> {
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
+  }
+
   async getConflict(
     tenantId: string,
     assignmentId: string,
@@ -1938,6 +2435,36 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
     return declaration !== undefined && declaration.tenantId === tenantId
       ? untagged(declaration)
       : null;
+  }
+
+  async abstainAssignment(
+    assignment: EvaluationAssignment,
+    expectedAssignmentVersion: number,
+    declaration: EvaluationConflictDeclaration,
+  ): Promise<void> {
+    const current = await this.getAssignment(assignment.tenantId, assignment.id);
+    if (current?.version !== expectedAssignmentVersion)
+      throw conflict("Assignment changed since it was loaded.");
+    if (await this.getConflict(assignment.tenantId, assignment.id)) {
+      throw conflict("A conflict has already been declared for this assignment.");
+    }
+    await this.#upsertEvaluationEntities([
+      tagged(assignment, "evaluation_assignment") as unknown as JsonRecord,
+      tagged(
+        { ...declaration, id: `conflict:${assignment.id}` },
+        "evaluation_conflict",
+      ) as unknown as JsonRecord,
+    ]);
+  }
+
+  async submitReview(
+    _assignment: EvaluationAssignment,
+    _expectedAssignmentVersion: number,
+    _review: EvaluationReview,
+    _expectedReviewVersion: number,
+    _authorizedAt: string,
+  ): Promise<void> {
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
 
   async getDecision(
@@ -1958,6 +2485,115 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
     assignmentId: string,
   ): Promise<EvaluationAssignment | null> {
     return this.getAssignment(tenantId, assignmentId);
+  }
+
+  async writeReview(_input: WriteEvaluationReview): Promise<void> {
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
+  }
+
+  async putDecision(
+    _decision: EvaluationDecision,
+    _expectedVersion: number | null,
+  ): Promise<void> {
+    throw conflict("Evaluation decision writes require the authoritative D1 runtime.");
+  }
+
+  async #commitAssignmentGeneration(
+    planRecord: { readonly entity: EvaluationPlan },
+    assignments: readonly EvaluationAssignment[],
+    _updatedAt: string,
+  ): Promise<void> {
+    await this.#upsertEvaluationEntities(
+      assignments.map(
+        (assignment) => tagged(assignment, "evaluation_assignment") as unknown as JsonRecord,
+      ),
+    );
+    await this.#plans.update(planRecord.entity.id, planRecord.entity);
+  }
+
+  async #upsertEvaluationEntities(entities: readonly JsonRecord[]): Promise<void> {
+    for (const entity of entities) {
+      const id = typeof entity.id === "string" ? entity.id : null;
+      if (id === null) continue;
+      const existing = await this.#evaluations.findWithRecordId(id);
+      if (existing === undefined) {
+        await this.#evaluations.create(entity);
+      } else {
+        await this.#evaluations.updateByRecordId(id, existing.recordId, entity);
+      }
+    }
+  }
+}
+
+export class AirtableEvaluationProjectionStore implements EvaluationProjectionReader {
+  readonly #repository: AirtableEvaluationRepository;
+
+  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+    this.#repository = new AirtableEvaluationRepository(options);
+  }
+
+  getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
+    return this.#repository.getPlan(tenantId, planId);
+  }
+  getPlanScheduleState(
+    tenantId: string,
+    planId: string,
+  ): Promise<EvaluationPlanScheduleState | null> {
+    return this.#repository.getPlanScheduleState(tenantId, planId);
+  }
+  getPlanSuccessor(
+    tenantId: string,
+    eventId: string,
+    predecessorPlanId: string,
+  ): Promise<EvaluationPlan | null> {
+    return this.#repository.getPlanSuccessor(tenantId, eventId, predecessorPlanId);
+  }
+  listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
+    return this.#repository.listPlans(tenantId, eventId);
+  }
+  getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null> {
+    return this.#repository.getAssignment(tenantId, assignmentId);
+  }
+  listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]> {
+    return this.#repository.listAssignments(tenantId, planId);
+  }
+  getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
+    return this.#repository.getReview(tenantId, assignmentId);
+  }
+  listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]> {
+    return this.#repository.listReviews(tenantId, planId);
+  }
+  getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null> {
+    return this.#repository.getSuggestion(tenantId, suggestionId);
+  }
+  listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]> {
+    return this.#repository.listSuggestions(tenantId, planId);
+  }
+  listReviewerWorkspaceRecords(
+    tenantId: string,
+    reviewerId: string,
+    eventIds: readonly string[],
+  ): Promise<ReviewerWorkspaceRecords> {
+    return this.#repository.listReviewerWorkspaceRecords(tenantId, reviewerId, eventIds);
+  }
+  listOrganizerWorkspaceRecords(
+    tenantId: string,
+    eventId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    return this.#repository.listOrganizerWorkspaceRecords(tenantId, eventId);
+  }
+  getConflict(
+    tenantId: string,
+    assignmentId: string,
+  ): Promise<EvaluationConflictDeclaration | null> {
+    return this.#repository.getConflict(tenantId, assignmentId);
+  }
+  getDecision(
+    tenantId: string,
+    planId: string,
+    submissionId: string,
+  ): Promise<EvaluationDecision | null> {
+    return this.#repository.getDecision(tenantId, planId, submissionId);
   }
 }
 
@@ -3420,11 +4056,17 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         scope,
         key,
         fingerprint,
+        ...(claim.leaseId === undefined ? {} : { leaseId: claim.leaseId }),
         response: { status: 200, body: value },
       });
       return value;
     } catch (error) {
-      await this.release({ scope, key, fingerprint });
+      await this.release({
+        scope,
+        key,
+        fingerprint,
+        ...(claim.leaseId === undefined ? {} : { leaseId: claim.leaseId }),
+      });
       throw error;
     }
   }
@@ -6841,6 +7483,7 @@ export interface D1ApplicationRuntimeOptions {
   readonly eventRoleInvitationAdapters: RuntimeEventRoleInvitationAdapters;
   readonly senderAddresses: OpenSendSenderAddresses;
   readonly calendarIntegrationOptions: CalendarIntegrationOptions;
+  readonly organizationPolicy?: OrganizationPolicy;
 }
 
 export async function reconcilePublishedAgendaCalendarInvitations(input: {
@@ -7344,43 +7987,51 @@ export function createD1ApplicationDependencies(
 ): ApiDependencies {
   const cfpRepository = options.businessRepositories.cfp;
   const eventRepository = options.businessRepositories.events;
-  const eventService = new EventService(eventRepository, {
-    async reviewBoundaries(organizationId, eventId) {
-      const plans = await options.businessRepositories.evaluations.listPlans(
-        organizationId,
-        eventId,
-      );
-      return plans.flatMap((plan) => [
-        ...(plan.closesAt === null ? [] : [{ label: "Review deadline", occursAt: plan.closesAt }]),
-        ...plan.rounds.flatMap((round) => [
-          ...(round.opensAt == null
+  const eventService = new EventService(
+    eventRepository,
+    {
+      async reviewBoundaries(organizationId, eventId) {
+        const plans = await options.businessRepositories.evaluations.listPlans(
+          organizationId,
+          eventId,
+        );
+        return plans.flatMap((plan) => [
+          ...(plan.closesAt === null
             ? []
-            : [{ label: `Review round ${round.sequence} opening`, occursAt: round.opensAt }]),
-          ...(round.closesAt == null
-            ? []
-            : [{ label: `Review round ${round.sequence} deadline`, occursAt: round.closesAt }]),
-        ]),
-      ]);
+            : [{ label: "Review deadline", occursAt: plan.closesAt }]),
+          ...plan.rounds.flatMap((round) => [
+            ...(round.opensAt == null
+              ? []
+              : [{ label: `Review round ${round.sequence} opening`, occursAt: round.opensAt }]),
+            ...(round.closesAt == null
+              ? []
+              : [{ label: `Review round ${round.sequence} deadline`, occursAt: round.closesAt }]),
+          ]),
+        ]);
+      },
+      async agendaState(_organizationId, eventId) {
+        const state = await options.businessRepositories.agenda.load(eventId);
+        return state === null ? null : { timeZone: state.timeZone };
+      },
+      async agendaEntries(_organizationId, eventId) {
+        const state = await options.businessRepositories.agenda.load(eventId);
+        if (state === null) return [];
+        const published = state.revisions.find(
+          (revision) => revision.id === state.currentPublishedRevisionId,
+        );
+        return [...state.draft.entries, ...(published?.entries ?? [])].map((entry) => ({
+          label: `Agenda entry ${entry.id}`,
+          startsAt: entry.startsAt,
+          endsAt: entry.endsAt,
+          startsAtLocal: entry.startsAtLocal,
+          endsAtLocal: entry.endsAtLocal,
+        }));
+      },
     },
-    async agendaState(_organizationId, eventId) {
-      const state = await options.businessRepositories.agenda.load(eventId);
-      return state === null ? null : { timeZone: state.timeZone };
-    },
-    async agendaEntries(_organizationId, eventId) {
-      const state = await options.businessRepositories.agenda.load(eventId);
-      if (state === null) return [];
-      const published = state.revisions.find(
-        (revision) => revision.id === state.currentPublishedRevisionId,
-      );
-      return [...state.draft.entries, ...(published?.entries ?? [])].map((entry) => ({
-        label: `Agenda entry ${entry.id}`,
-        startsAt: entry.startsAt,
-        endsAt: entry.endsAt,
-        startsAtLocal: entry.startsAtLocal,
-        endsAtLocal: entry.endsAtLocal,
-      }));
-    },
-  });
+    options.organizationPolicy === undefined
+      ? {}
+      : { organizationPolicy: options.organizationPolicy },
+  );
   const publicationRepository = options.businessRepositories.programPublication;
   let publicationService!: ProgramPublicationService;
   publicationService = new ProgramPublicationService(publicationRepository, {

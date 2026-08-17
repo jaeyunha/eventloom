@@ -50,9 +50,13 @@ describe("buildWorkHubModel", () => {
 
     expect(model.organizer).toEqual({
       organizationCount: 1,
-      organizationNames: ["Civic Design Guild"],
-      continueHref: "/admin/organizations/org-a/events",
-      continueLabel: "Continue with Civic Design Guild",
+      organizations: [
+        {
+          organizationId: "org-a",
+          name: "Civic Design Guild",
+          href: "/admin/organizations/org-a/events",
+        },
+      ],
     });
     expect(model.reviewer).toMatchObject({
       assignmentCount: 2,
@@ -87,8 +91,7 @@ describe("buildWorkHubModel", () => {
       preferredOrganizationId: "org-a",
     });
 
-    expect(model.organizer?.organizationNames).toEqual([]);
-    expect(model.organizer?.continueLabel).toBeNull();
+    expect(model.organizer?.organizations).toEqual([]);
     expect(model.reviewer?.organizationNames).toEqual([]);
     expect(model.reviewer?.eventNames).toEqual([]);
     expect(model.participant).toBeNull();
@@ -178,7 +181,7 @@ describe("buildWorkHubModel", () => {
     expect(model.invitations).toHaveLength(1);
   });
 
-  it("does not add a continue destination without supported saved state", () => {
+  it("exposes each authorized organization without requiring saved state", () => {
     const model = buildWorkHubModel({
       session,
       organizations: [{ organizationId: "org-a", name: "Civic Design Guild" }],
@@ -187,7 +190,12 @@ describe("buildWorkHubModel", () => {
       preferredOrganizationId: null,
     });
 
-    expect(model.organizer?.continueHref).toBeNull();
-    expect(model.organizer?.continueLabel).toBeNull();
+    expect(model.organizer?.organizations).toEqual([
+      {
+        organizationId: "org-a",
+        name: "Civic Design Guild",
+        href: "/admin/organizations/org-a/events",
+      },
+    ]);
   });
 });

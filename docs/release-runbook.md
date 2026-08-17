@@ -163,6 +163,61 @@ the deployment environment. `D1_DATABASE_ID` is the single D1 database ID
 variable; do not introduce a separate Drizzle-only alias. Drizzle inspection
 does not replace the Wrangler-owned numbered migration path.
 
+### Legacy review-plan lineage repair
+
+Migrations `0035_review_plan_revision_lineage.sql`,
+`0037_review_plan_lineage_repairs.sql`, and
+`0038_review_plan_lineage_repair_triggers.sql` record plausible repair
+candidates but do not infer predecessor relationships from legacy
+user-controlled IDs. The candidate predicate rejects independent roots whose
+IDs merely contain `-revision-` while preserving the old 100-character
+truncation format. Migration `0038` installs the same final predicate as
+durable insert triggers so revisions written by the old Worker during
+migration/deployment overlap are still recorded.
+Migration `0039_review_plan_revision_sync_lock.sql` adds the internal
+family-synchronization lock used by the candidate Worker, and migration
+`0040_review_plan_revision_sync_token.sql` adds its resumable owner token.
+Apply all five migrations before deploying that Worker. After applying them to
+an environment that already contains review-plan revisions:
+
+Every review-plan open, close, or schedule request must include a caller-owned
+UUID in `revisionSyncToken`. Keep that token until the request and any required
+family reconciliation succeed; reuse it after a transport interruption. The
+authoritative tip retains the completed operation's token with its pending bit
+cleared, so retrying a successfully committed single-batch operation after a
+lost response returns the completed result instead of taking a new lock.
+
+1. After the new Worker is deployed and old in-flight requests have drained,
+   query `review_plan_lineage_repairs_required` and retain the result with the
+   migration evidence.
+2. For each row, use organizer change history and the exact plan/round records
+   to identify the predecessor. Set `review_plans.predecessor_plan_id` and
+   `review_rounds.predecessor_round_id` explicitly. Never approve a mapping
+   from a matching `-revision-` suffix alone.
+3. Keep one direct successor per plan. If a legacy draft was intentionally
+   abandoned or is an independent root, record that operator decision before
+   deleting its repair row without a predecessor mapping.
+4. Delete only repair rows that have an explicit mapping or a documented
+   independent-root decision.
+5. Call
+   `POST /api/admin/evaluations/plans/:planId/reconcile-revision-family` for the
+   authoritative tip with its `expectedVersion` and a newly generated UUID in
+   `revisionSyncToken`. Reuse that same token if the request must be retried.
+   This works for already-closed and past-due tips without reopening them. Then
+   verify the retained reviewer assignment, draft review, open/closed state,
+   and round opening/closing instants through the reviewer workspace.
+
+Do not declare the migration complete while
+`review_plan_lineage_repairs_required` contains an unresolved row.
+
+If an operator reconciliation process exits after taking the lock, retry the
+endpoint with the same `revisionSyncToken`; a different token is rejected. If
+the original token is irretrievably lost, drain or stop the affected Worker,
+verify that no reconciliation request remains active, clear that one
+authoritative tip's pending bit and token in D1, restart the Worker, and invoke
+the endpoint with a new UUID. The pending lock blocks reviewer writes and
+successor creation until the family is reconciled.
+
 ### Legacy Airtable business-data cutover
 
 Deploying a D1-authoritative Worker does not migrate historical Airtable

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderApiWrangler } from "../cloudflare/config.mjs";
 import {
+  assertOrganizationProvisioningConfiguration,
   ENVIRONMENTS,
   inspectOrganizationIdMigrationReadiness,
   PreflightError,
@@ -168,6 +169,7 @@ async function run() {
     targetEnvironment: options.environment,
     wranglerInventory,
   });
+  assertOrganizationProvisioningConfiguration(configurations[options.environment] ?? process.env);
   const migrationReadiness = inspectOrganizationIdMigrationReadiness({
     configurations,
     wranglerInventory,

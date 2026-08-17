@@ -1,5 +1,10 @@
 import { canonicalizeTimeZone } from "../agenda/timezone";
 import {
+  type OrganizationPolicy,
+  OrganizationPolicyError,
+  SelfHostedOrganizationPolicy,
+} from "../organizations/policy";
+import {
   assertEventTemporalDependencies,
   EventTemporalDependencyConflictError,
   type EventTemporalDependencySource,
@@ -18,6 +23,7 @@ import {
   type EventEmbedDisplayField,
   type EventOrganizationRole,
   type EventRepository,
+  EventRepositoryCapacityError,
   EventRepositoryConflictError,
   type EventRepositorySeed,
   eventEmbedDisplayFields,
@@ -75,6 +81,7 @@ export class EventServiceError extends Error {
 export interface EventServiceOptions {
   clock?: () => Date;
   generateId?: () => string;
+  organizationPolicy?: OrganizationPolicy;
 }
 
 export type { EventTemporalDependencySource } from "./event-temporal-dependencies";
@@ -643,6 +650,7 @@ function eventInputOrganization(input: { organizationId?: string }): string | un
 export class EventService {
   readonly #repository: EventRepository;
   readonly #temporalDependencies: EventTemporalDependencySource;
+  readonly #organizationPolicy: OrganizationPolicy;
   readonly #clock: () => Date;
   readonly #generateId: () => string;
 
@@ -653,6 +661,7 @@ export class EventService {
   ) {
     this.#repository = repository;
     this.#temporalDependencies = temporalDependencies;
+    this.#organizationPolicy = options.organizationPolicy ?? new SelfHostedOrganizationPolicy();
     this.#clock = options.clock ?? (() => new Date());
     this.#generateId = options.generateId ?? (() => crypto.randomUUID());
   }
@@ -676,6 +685,27 @@ export class EventService {
     assertFields(inputValue, "event", CREATE_EVENT_FIELDS);
     const organizationId = organizationFromInput(actor, eventInputOrganization(input));
     const userId = actorUserId(actor);
+    let creationEntitlement:
+      | {
+          readonly revision: number;
+          readonly activeEventLimit: number | null;
+        }
+      | undefined;
+    try {
+      const authorization = await this.#organizationPolicy.authorizeEventCreation(organizationId);
+      creationEntitlement =
+        authorization.kind === "entitled"
+          ? {
+              revision: authorization.entitlement.revision,
+              activeEventLimit: authorization.entitlement.limits.activeEvents,
+            }
+          : undefined;
+    } catch (error) {
+      if (error instanceof OrganizationPolicyError) {
+        throw forbidden(error.message);
+      }
+      throw error;
+    }
     const name = text(input.name, "name", 200);
     const eventSlug = slug(input.slug === undefined ? generatedSlug(name) : input.slug);
     const startsAt = instant(input.startsAt, "startsAt");
@@ -742,12 +772,20 @@ export class EventService {
     };
     try {
       if (this.#repository.commitEvent !== undefined) {
-        await this.#repository.commitEvent({ event, expectedVersion: null, audit });
+        await this.#repository.commitEvent({
+          event,
+          expectedVersion: null,
+          audit,
+          ...(creationEntitlement === undefined ? {} : { creationEntitlement }),
+        });
       } else {
         await this.#repository.saveEvent(event, null);
         await this.#repository.appendAudit(audit);
       }
     } catch (error) {
+      if (error instanceof EventRepositoryCapacityError) {
+        throw conflict(error.message);
+      }
       if (repositoryConflict(error)) throw conflict("An event with this id already exists.");
       throw error;
     }
@@ -954,6 +992,33 @@ export class InMemoryEventRepository implements EventRepository {
       throw new EventRepositoryConflictError();
     }
     this.#events.set(key, clone(event));
+  }
+
+  async commitEvent(command: {
+    readonly event: Event;
+    readonly expectedVersion: number | null;
+    readonly audit?: EventAuditEntry;
+    readonly creationEntitlement?: {
+      readonly revision: number;
+      readonly activeEventLimit: number | null;
+    };
+  }): Promise<void> {
+    if (
+      command.expectedVersion === null &&
+      command.creationEntitlement !== undefined &&
+      command.creationEntitlement.activeEventLimit !== null
+    ) {
+      const activeEventCount = [...this.#events.values()].filter(
+        (event) => event.organizationId === command.event.organizationId,
+      ).length;
+      if (activeEventCount >= command.creationEntitlement.activeEventLimit) {
+        throw new EventRepositoryCapacityError();
+      }
+    }
+    await this.saveEvent(command.event, command.expectedVersion);
+    if (command.audit !== undefined) {
+      await this.appendAudit(command.audit);
+    }
   }
 
   async appendAudit(entry: EventAuditEntry): Promise<void> {

@@ -1,4 +1,4 @@
-import { conflict } from "./errors";
+import { closed, conflict } from "./errors";
 import type {
   EvaluationAssignment,
   EvaluationAssignmentDistributionInput,
@@ -49,8 +49,57 @@ export interface SubmissionReviewLookup {
   readonly submissionId: string;
 }
 
+export interface EvaluationRoundScheduleState {
+  readonly id: string;
+  readonly predecessorRoundId?: string | null | undefined;
+  readonly revision?: number | undefined;
+  readonly opensAt?: string | null | undefined;
+  readonly closesAt?: string | null | undefined;
+}
+
+export interface EvaluationPlanScheduleState {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly predecessorPlanId?: string | null | undefined;
+  readonly status: EvaluationPlan["status"];
+  readonly closesAt?: string | null | undefined;
+  readonly version: number;
+  readonly updatedAt: string;
+  readonly rounds: readonly EvaluationRoundScheduleState[];
+}
+
+export interface EvaluationPlanScheduleSync {
+  readonly plan: EvaluationPlanScheduleState;
+  readonly expectedVersion: number;
+}
+
+export interface EvaluationPlanRevisionPrecondition {
+  readonly predecessorPlanId: string;
+  readonly expectedVersion: number;
+  readonly lineageVersions: readonly {
+    readonly planId: string;
+    readonly expectedVersion: number;
+  }[];
+}
+
+export interface EvaluationReviewWriteAdmission {
+  readonly assignment: EvaluationAssignment;
+  readonly expectedAssignmentVersion: number;
+  readonly authorizedAt: string;
+}
+
 export interface EvaluationProjectionReader {
   getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null>;
+  getPlanScheduleState(
+    tenantId: string,
+    planId: string,
+  ): Promise<EvaluationPlanScheduleState | null>;
+  getPlanSuccessor(
+    tenantId: string,
+    eventId: string,
+    predecessorPlanId: string,
+  ): Promise<EvaluationPlan | null>;
   listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]>;
   getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
   listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
@@ -84,10 +133,49 @@ export type EvaluationReminderPlanSource = Pick<
 >;
 
 export interface EvaluationRepository extends EvaluationProjectionReader {
+  readonly supportsAtomicPlanRevisionSync: boolean;
   readonly authority: "transactional";
-  putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void>;
-  putPlanState?(plan: EvaluationPlan, expectedVersion: number): Promise<void>;
-  putPlanSchedule?(plan: EvaluationPlan, expectedVersion: number): Promise<void>;
+  hasPendingPlanLineageRepair(tenantId?: string, eventId?: string): Promise<boolean>;
+  putPlan(
+    plan: EvaluationPlan,
+    expectedVersion: number | null,
+    revisionPrecondition?: EvaluationPlanRevisionPrecondition,
+  ): Promise<void>;
+  putPlanState(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncPending?: boolean,
+    revisionSyncToken?: string,
+  ): Promise<void>;
+  putPlanSchedule(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncPending?: boolean,
+    revisionSyncToken?: string,
+  ): Promise<void>;
+  reconcilePlanRevisionFamily(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncToken: string,
+  ): Promise<void>;
+  beginPlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void>;
+  resumePlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void>;
+  completePlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void>;
   replaceAssignment(
     scope: EvaluationAssignmentScope,
     input: EvaluationAssignmentReplacementInput,
@@ -99,15 +187,16 @@ export interface EvaluationRepository extends EvaluationProjectionReader {
   putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
-    expectedAssignmentVersion: number,
+    admission?: EvaluationReviewWriteAdmission | number,
   ): Promise<void>;
   resolveSuggestion(
     suggestion: EvaluationSuggestion,
     expectedSuggestionVersion: number,
     assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number,
+    expectedAssignmentVersion: number | null,
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
+    admission?: EvaluationReviewWriteAdmission,
   ): Promise<EvaluationSuggestionResolution>;
   writeReview(input: WriteEvaluationReview): Promise<void>;
   listOrganizerExportRecords(
@@ -115,12 +204,17 @@ export interface EvaluationRepository extends EvaluationProjectionReader {
     eventId: string,
     planId: string,
   ): Promise<OrganizerWorkspaceRecords>;
-  putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void>;
+  putReview(
+    review: EvaluationReview,
+    expectedVersion: number | null,
+    admission: EvaluationReviewWriteAdmission,
+  ): Promise<void>;
   saveReviewDraft(
     assignment: EvaluationAssignment,
     expectedAssignmentVersion: number,
     review: EvaluationReview,
     expectedReviewVersion: number | null,
+    authorizedAt: string,
   ): Promise<void>;
   abstainAssignment(
     assignment: EvaluationAssignment,
@@ -132,6 +226,7 @@ export interface EvaluationRepository extends EvaluationProjectionReader {
     expectedAssignmentVersion: number,
     review: EvaluationReview,
     expectedReviewVersion: number,
+    authorizedAt: string,
   ): Promise<void>;
   putDecision(decision: EvaluationDecision, expectedVersion: number | null): Promise<void>;
 }
@@ -158,6 +253,50 @@ function decisionKey(tenantId: string, planId: string, submissionId: string): st
 
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+function planScheduleState(plan: EvaluationPlan): EvaluationPlanScheduleState {
+  return {
+    id: plan.id,
+    tenantId: plan.tenantId,
+    eventId: plan.eventId,
+    predecessorPlanId: plan.predecessorPlanId,
+    status: plan.status,
+    closesAt: plan.closesAt,
+    version: plan.version,
+    updatedAt: plan.updatedAt,
+    rounds: plan.rounds.map((round) => ({
+      id: round.id,
+      predecessorRoundId: round.predecessorRoundId,
+      revision: round.revision ?? 1,
+      opensAt: round.opensAt ?? null,
+      closesAt: round.closesAt,
+    })),
+  };
+}
+
+function applyScheduleState(
+  plan: EvaluationPlan,
+  state: EvaluationPlanScheduleState,
+): EvaluationPlan {
+  const rounds = new Map(state.rounds.map((round) => [round.id, round]));
+  return {
+    ...plan,
+    status: state.status,
+    closesAt: state.closesAt ?? null,
+    version: state.version,
+    updatedAt: state.updatedAt,
+    rounds: plan.rounds.map((round) => {
+      const schedule = rounds.get(round.id);
+      return schedule === undefined
+        ? round
+        : {
+            ...round,
+            opensAt: schedule.opensAt ?? null,
+            closesAt: schedule.closesAt ?? null,
+          };
+    }),
+  };
 }
 
 function assertVersion(
@@ -206,12 +345,15 @@ function reviewHistoryFor(
 
 export class InMemoryEvaluationRepository implements EvaluationRepository {
   readonly authority = "transactional" as const;
+  readonly supportsAtomicPlanRevisionSync: boolean = true;
   readonly #plans = new Map<string, EvaluationPlan>();
   readonly #assignments = new Map<string, EvaluationAssignment>();
   readonly #reviews = new Map<string, EvaluationReview>();
   readonly #suggestions = new Map<string, EvaluationSuggestion>();
   readonly #conflicts = new Map<string, EvaluationConflictDeclaration>();
   readonly #decisions = new Map<string, EvaluationDecision>();
+  readonly #revisionSyncTokens = new Map<string, string>();
+  readonly #completedRevisionSyncTokens = new Map<string, string>();
 
   constructor(
     private readonly submissionSource?: Pick<SubmissionReviewSource, "getSubmissionForReview">,
@@ -221,6 +363,28 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     const plan = this.#plans.get(storageKey(tenantId, planId));
     return plan === undefined ? null : clone(plan);
   }
+
+  async getPlanScheduleState(
+    tenantId: string,
+    planId: string,
+  ): Promise<EvaluationPlanScheduleState | null> {
+    const plan = this.#plans.get(storageKey(tenantId, planId));
+    return plan === undefined ? null : planScheduleState(plan);
+  }
+
+  async getPlanSuccessor(
+    tenantId: string,
+    eventId: string,
+    predecessorPlanId: string,
+  ): Promise<EvaluationPlan | null> {
+    const successor = [...this.#plans.values()].find(
+      (plan) =>
+        plan.tenantId === tenantId &&
+        plan.eventId === eventId &&
+        plan.predecessorPlanId === predecessorPlanId,
+    );
+    return successor === undefined ? null : clone(successor);
+  }
   async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
     return [...this.#plans.values()]
       .filter(
@@ -229,14 +393,357 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       .map(clone);
   }
 
-  async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
+  async hasPendingPlanLineageRepair(): Promise<boolean> {
+    return false;
+  }
+
+  async putPlan(
+    plan: EvaluationPlan,
+    expectedVersion: number | null,
+    revisionPrecondition?: EvaluationPlanRevisionPrecondition,
+  ): Promise<void> {
     const key = storageKey(plan.tenantId, plan.id);
     assertVersion(this.#plans.get(key)?.version ?? null, expectedVersion, "Evaluation plan");
+    if (revisionPrecondition !== undefined) {
+      const predecessor = this.#plans.get(
+        storageKey(plan.tenantId, revisionPrecondition.predecessorPlanId),
+      );
+      if (
+        expectedVersion !== null ||
+        plan.predecessorPlanId !== revisionPrecondition.predecessorPlanId ||
+        predecessor === undefined ||
+        predecessor.eventId !== plan.eventId ||
+        predecessor.version !== revisionPrecondition.expectedVersion ||
+        predecessor.status === "draft" ||
+        predecessor.gradingLockedAt === null ||
+        this.#revisionSyncTokens.has(
+          storageKey(plan.tenantId, revisionPrecondition.predecessorPlanId),
+        ) ||
+        [...this.#plans.values()].some(
+          (candidate) =>
+            candidate.tenantId === plan.tenantId &&
+            candidate.eventId === plan.eventId &&
+            candidate.predecessorPlanId === revisionPrecondition.predecessorPlanId,
+        )
+      ) {
+        throw conflict("The evaluation plan changed since it was loaded.");
+      }
+      for (const lineageVersion of revisionPrecondition.lineageVersions) {
+        const lineagePlan = this.#plans.get(storageKey(plan.tenantId, lineageVersion.planId));
+        if (
+          lineagePlan === undefined ||
+          lineagePlan.eventId !== plan.eventId ||
+          lineagePlan.version !== lineageVersion.expectedVersion
+        ) {
+          throw conflict("The evaluation plan changed since it was loaded.");
+        }
+      }
+    }
+    if (
+      plan.predecessorPlanId !== undefined &&
+      plan.predecessorPlanId !== null &&
+      [...this.#plans.values()].some(
+        (candidate) =>
+          candidate.id !== plan.id &&
+          candidate.tenantId === plan.tenantId &&
+          candidate.eventId === plan.eventId &&
+          candidate.predecessorPlanId === plan.predecessorPlanId,
+      )
+    ) {
+      throw conflict("The evaluation plan already has a successor revision.");
+    }
     this.#plans.set(key, clone(plan));
   }
 
-  async putPlanSchedule(plan: EvaluationPlan, expectedVersion: number): Promise<void> {
-    await this.putPlan(plan, expectedVersion);
+  async putPlanState(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[] = [],
+    revisionSyncPending = false,
+    revisionSyncToken?: string,
+  ): Promise<void> {
+    const tipKey = storageKey(plan.tenantId, plan.id);
+    if (revisionSyncPending && revisionSyncToken === undefined) {
+      throw conflict("Evaluation plan revision synchronization token is required.");
+    }
+    if (this.#revisionSyncTokens.has(tipKey)) {
+      throw conflict("Evaluation plan revision synchronization is already in progress.");
+    }
+    if (
+      [...this.#plans.values()].some(
+        (candidate) =>
+          candidate.tenantId === plan.tenantId &&
+          candidate.eventId === plan.eventId &&
+          candidate.predecessorPlanId === plan.id,
+      )
+    ) {
+      throw conflict("Only the latest review plan revision can change lifecycle or schedule.");
+    }
+    const updates = [{ plan, expectedVersion }, ...scheduleSyncs];
+    const keys = updates.map((update) => storageKey(update.plan.tenantId, update.plan.id));
+    if (new Set(keys).size !== keys.length) {
+      throw conflict("Evaluation plan schedule synchronization contains duplicates.");
+    }
+    for (const update of updates) {
+      const key = storageKey(update.plan.tenantId, update.plan.id);
+      assertVersion(
+        this.#plans.get(key)?.version ?? null,
+        update.expectedVersion,
+        "Evaluation plan",
+      );
+    }
+    this.#plans.set(tipKey, clone(plan));
+    for (const update of scheduleSyncs) {
+      const key = storageKey(update.plan.tenantId, update.plan.id);
+      const current = this.#plans.get(key);
+      if (current === undefined) throw conflict("Evaluation plan changed since it was loaded.");
+      this.#plans.set(key, clone(applyScheduleState(current, update.plan)));
+    }
+    if (revisionSyncPending) {
+      this.#revisionSyncTokens.set(tipKey, revisionSyncToken as string);
+      this.#completedRevisionSyncTokens.delete(tipKey);
+    } else {
+      this.#revisionSyncTokens.delete(tipKey);
+      if (revisionSyncToken === undefined) {
+        this.#completedRevisionSyncTokens.delete(tipKey);
+      } else {
+        this.#completedRevisionSyncTokens.set(tipKey, revisionSyncToken);
+      }
+    }
+  }
+
+  async putPlanSchedule(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[] = [],
+    revisionSyncPending = false,
+    revisionSyncToken?: string,
+  ): Promise<void> {
+    await this.putPlanState(
+      plan,
+      expectedVersion,
+      scheduleSyncs,
+      revisionSyncPending,
+      revisionSyncToken,
+    );
+  }
+
+  async reconcilePlanRevisionFamily(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncToken: string,
+  ): Promise<void> {
+    if (this.#revisionSyncTokens.get(storageKey(tip.tenantId, tip.id)) !== revisionSyncToken) {
+      throw conflict("Evaluation plan revision synchronization ownership changed.");
+    }
+    assertVersion(
+      this.#plans.get(storageKey(tip.tenantId, tip.id))?.version ?? null,
+      expectedVersion,
+      "Evaluation plan",
+    );
+    if (
+      [...this.#plans.values()].some(
+        (candidate) =>
+          candidate.tenantId === tip.tenantId &&
+          candidate.eventId === tip.eventId &&
+          candidate.predecessorPlanId === tip.id,
+      )
+    ) {
+      throw conflict("Only the latest review plan revision can be reconciled.");
+    }
+    const keys = scheduleSyncs.map((sync) => storageKey(sync.plan.tenantId, sync.plan.id));
+    if (new Set(keys).size !== keys.length || keys.includes(storageKey(tip.tenantId, tip.id))) {
+      throw conflict("Evaluation plan schedule synchronization contains duplicates.");
+    }
+    for (const sync of scheduleSyncs) {
+      assertVersion(
+        this.#plans.get(storageKey(sync.plan.tenantId, sync.plan.id))?.version ?? null,
+        sync.expectedVersion,
+        "Evaluation plan",
+      );
+    }
+    for (const sync of scheduleSyncs) {
+      const key = storageKey(sync.plan.tenantId, sync.plan.id);
+      const current = this.#plans.get(key);
+      if (current === undefined) throw conflict("Evaluation plan changed since it was loaded.");
+      this.#plans.set(key, clone(applyScheduleState(current, sync.plan)));
+    }
+  }
+
+  async completePlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    assertVersion(
+      this.#plans.get(storageKey(tip.tenantId, tip.id))?.version ?? null,
+      expectedVersion,
+      "Evaluation plan",
+    );
+    if (
+      [...this.#plans.values()].some(
+        (candidate) =>
+          candidate.tenantId === tip.tenantId &&
+          candidate.eventId === tip.eventId &&
+          candidate.predecessorPlanId === tip.id,
+      )
+    ) {
+      throw conflict("Only the latest review plan revision can be reconciled.");
+    }
+    const tipKey = storageKey(tip.tenantId, tip.id);
+    if (
+      this.#revisionSyncTokens.get(tipKey) !== revisionSyncToken &&
+      this.#completedRevisionSyncTokens.get(tipKey) !== revisionSyncToken
+    ) {
+      throw conflict("Evaluation plan revision synchronization ownership changed.");
+    }
+    this.#revisionSyncTokens.delete(tipKey);
+    this.#completedRevisionSyncTokens.set(tipKey, revisionSyncToken);
+  }
+
+  async beginPlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    assertVersion(
+      this.#plans.get(storageKey(tip.tenantId, tip.id))?.version ?? null,
+      expectedVersion,
+      "Evaluation plan",
+    );
+    if (
+      (this.#revisionSyncTokens.has(storageKey(tip.tenantId, tip.id)) &&
+        this.#revisionSyncTokens.get(storageKey(tip.tenantId, tip.id)) !== revisionSyncToken) ||
+      [...this.#plans.values()].some(
+        (candidate) =>
+          candidate.tenantId === tip.tenantId &&
+          candidate.eventId === tip.eventId &&
+          candidate.predecessorPlanId === tip.id,
+      )
+    ) {
+      throw conflict("Only the latest review plan revision can be reconciled.");
+    }
+    const tipKey = storageKey(tip.tenantId, tip.id);
+    this.#revisionSyncTokens.set(tipKey, revisionSyncToken);
+    this.#completedRevisionSyncTokens.delete(tipKey);
+  }
+
+  async resumePlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    assertVersion(
+      this.#plans.get(storageKey(tip.tenantId, tip.id))?.version ?? null,
+      expectedVersion,
+      "Evaluation plan",
+    );
+    const tipKey = storageKey(tip.tenantId, tip.id);
+    if (
+      (this.#revisionSyncTokens.get(tipKey) !== revisionSyncToken &&
+        this.#completedRevisionSyncTokens.get(tipKey) !== revisionSyncToken) ||
+      [...this.#plans.values()].some(
+        (candidate) =>
+          candidate.tenantId === tip.tenantId &&
+          candidate.eventId === tip.eventId &&
+          candidate.predecessorPlanId === tip.id,
+      )
+    ) {
+      throw conflict("Evaluation plan revision synchronization ownership changed.");
+    }
+  }
+
+  #assertAuthoritativePlanWritable(
+    scope: Pick<EvaluationAssignment, "tenantId" | "eventId" | "planId">,
+    allowClosed = false,
+  ): void {
+    let plan = this.#plans.get(storageKey(scope.tenantId, scope.planId));
+    const visited = new Set<string>();
+    for (let depth = 0; depth <= 16; depth += 1) {
+      if (plan === undefined || plan.eventId !== scope.eventId || visited.has(plan.id)) {
+        throw conflict("Evaluation plan revision lineage is unavailable.");
+      }
+      visited.add(plan.id);
+      const successor = [...this.#plans.values()].find(
+        (candidate) =>
+          candidate.tenantId === scope.tenantId &&
+          candidate.eventId === scope.eventId &&
+          candidate.predecessorPlanId === plan?.id,
+      );
+      if (successor === undefined || successor.status === "draft") {
+        if (
+          (!allowClosed && plan.status !== "open") ||
+          this.#revisionSyncTokens.has(storageKey(plan.tenantId, plan.id))
+        ) {
+          throw closed("The evaluation plan is closed.");
+        }
+        return;
+      }
+      plan = successor;
+    }
+    throw conflict("Review plan revision depth exceeds the synchronization limit.");
+  }
+
+  #assertAssignmentWriteAdmission(
+    scope: EvaluationAssignmentScope,
+    authorizedAt: string,
+    requireRoundOpen: boolean,
+    allowClosed = false,
+  ): void {
+    this.#assertAuthoritativePlanWritable(scope, allowClosed);
+    if (allowClosed) return;
+    const plan = this.#plans.get(storageKey(scope.tenantId, scope.planId));
+    const round = plan?.rounds.find((candidate) => candidate.id === scope.roundId);
+    const timestamp = Date.parse(authorizedAt);
+    if (
+      plan === undefined ||
+      round === undefined ||
+      plan.eventId !== scope.eventId ||
+      !Number.isFinite(timestamp) ||
+      plan.status !== "open" ||
+      (plan.closesAt !== null && Date.parse(plan.closesAt) <= timestamp) ||
+      (requireRoundOpen && round.opensAt != null && Date.parse(round.opensAt) > timestamp) ||
+      (round.closesAt != null && Date.parse(round.closesAt) <= timestamp)
+    ) {
+      throw closed("The evaluation plan is closed.");
+    }
+  }
+
+  #assertReviewWriteAdmission(admission: EvaluationReviewWriteAdmission): void {
+    const current = this.#assignments.get(
+      storageKey(admission.assignment.tenantId, admission.assignment.id),
+    );
+    if (
+      current === undefined ||
+      current.version !== admission.expectedAssignmentVersion ||
+      current.eventId !== admission.assignment.eventId ||
+      current.planId !== admission.assignment.planId ||
+      current.roundId !== admission.assignment.roundId ||
+      current.submissionId !== admission.assignment.submissionId ||
+      current.reviewerId !== admission.assignment.reviewerId ||
+      current.planVersion !== admission.assignment.planVersion ||
+      current.rubricRevision !== admission.assignment.rubricRevision ||
+      current.roundRevision !== admission.assignment.roundRevision ||
+      current.submissionRevision !== admission.assignment.submissionRevision ||
+      (current.status !== "assigned" && current.status !== "in_progress")
+    ) {
+      throw conflict("Assignment changed since it was loaded.");
+    }
+    this.#assertAuthoritativePlanWritable(current);
+    const plan = this.#plans.get(storageKey(current.tenantId, current.planId));
+    const round = plan?.rounds.find((candidate) => candidate.id === current.roundId);
+    const authorizedAt = Date.parse(admission.authorizedAt);
+    if (
+      plan === undefined ||
+      round === undefined ||
+      plan.status !== "open" ||
+      (plan.closesAt != null && Date.parse(plan.closesAt) <= authorizedAt) ||
+      (round.opensAt != null && Date.parse(round.opensAt) > authorizedAt) ||
+      (round.closesAt != null && Date.parse(round.closesAt) <= authorizedAt)
+    ) {
+      throw closed("The evaluation plan is closed.");
+    }
   }
 
   async getAssignment(
@@ -270,6 +777,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     scope: EvaluationAssignmentScope,
     input: EvaluationAssignmentReplacementInput,
   ): Promise<EvaluationAssignmentReplacementResult> {
+    this.#assertAssignmentWriteAdmission(scope, input.authorizedAt, true);
     const oldKey = storageKey(scope.tenantId, input.oldAssignmentId);
     const oldAssignment = this.#assignments.get(oldKey);
     if (oldAssignment === undefined) {
@@ -350,6 +858,12 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     scope: EvaluationAssignmentScope,
     input: EvaluationAssignmentDistributionInput,
   ): Promise<EvaluationAssignmentDistributionResult> {
+    this.#assertAssignmentWriteAdmission(
+      scope,
+      input.authorizedAt,
+      false,
+      input.allowClosedCleanup === true,
+    );
     if (input.reason.trim().length === 0) {
       throw conflict("A distribution reason is required.");
     }
@@ -506,8 +1020,15 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
   async putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
-    expectedAssignmentVersion: number,
+    admission?: EvaluationReviewWriteAdmission | number,
   ): Promise<void> {
+    if (typeof admission === "object") this.#assertReviewWriteAdmission(admission);
+    const expectedAssignmentVersion =
+      typeof admission === "number"
+        ? admission
+        : (admission?.expectedAssignmentVersion ??
+          this.#assignments.get(storageKey(suggestion.tenantId, suggestion.assignmentId))?.version ??
+          0);
     await this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
     const key = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(this.#suggestions.get(key)?.version ?? null, expectedVersion, "Suggestion");
@@ -521,8 +1042,15 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     expectedAssignmentVersion: number,
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
+    admission: EvaluationReviewWriteAdmission,
   ): Promise<EvaluationSuggestionResolution> {
-    await this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
+    this.#assertReviewWriteAdmission(admission);
+    const writableScope = review ?? assignment;
+    if (writableScope !== null) this.#assertAuthoritativePlanWritable(writableScope);
+    await this.#assertSuggestionAssignmentWritable(
+      suggestion,
+      expectedAssignmentVersion ?? assignment?.version ?? 0,
+    );
     const suggestionKey = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(
       this.#suggestions.get(suggestionKey)?.version ?? null,
@@ -685,7 +1213,12 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     };
   }
 
-  async putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void> {
+  async putReview(
+    review: EvaluationReview,
+    expectedVersion: number | null,
+    admission: EvaluationReviewWriteAdmission,
+  ): Promise<void> {
+    this.#assertReviewWriteAdmission(admission);
     const key = storageKey(review.tenantId, review.assignmentId);
     assertVersion(this.#reviews.get(key)?.version ?? null, expectedVersion, "Review");
     this.#reviews.set(key, clone(review));
@@ -757,6 +1290,11 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     }
     if (assignmentUpdate !== undefined)
       this.#assignments.set(assignmentKey, clone(assignmentUpdate));
+
+    this.#reviews.set(storageKey(review.tenantId, review.assignmentId), clone(review));
+  }
+
+  async putReviewForTesting(review: EvaluationReview): Promise<void> {
     this.#reviews.set(storageKey(review.tenantId, review.assignmentId), clone(review));
   }
   async saveReviewDraft(
@@ -764,7 +1302,13 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     expectedAssignmentVersion: number,
     review: EvaluationReview,
     expectedReviewVersion: number | null,
+    authorizedAt: string,
   ): Promise<void> {
+    this.#assertReviewWriteAdmission({
+      assignment,
+      expectedAssignmentVersion,
+      authorizedAt,
+    });
     const assignmentStorageKey = storageKey(assignment.tenantId, assignment.id);
     const reviewStorageKey = storageKey(review.tenantId, review.assignmentId);
     assertVersion(
@@ -813,7 +1357,13 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     expectedAssignmentVersion: number,
     review: EvaluationReview,
     expectedReviewVersion: number,
+    authorizedAt: string,
   ): Promise<void> {
+    this.#assertReviewWriteAdmission({
+      assignment,
+      expectedAssignmentVersion,
+      authorizedAt,
+    });
     const assignmentStorageKey = storageKey(assignment.tenantId, assignment.id);
     const reviewStorageKey = storageKey(review.tenantId, review.assignmentId);
     assertVersion(

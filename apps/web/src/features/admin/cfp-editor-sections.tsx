@@ -27,6 +27,7 @@ type CfpConfigurationUpdater = <K extends keyof CfpConfiguration>(
 
 type CfpSaveState = "idle" | "saving" | "saved" | "error";
 type CfpTaxonomyKey = "formats" | "levels" | "tags" | "tracks";
+type CfpCanonicalTaxonomy = Readonly<Record<CfpTaxonomyKey, readonly string[]>>;
 type CfpPreviewSelectionKey = "format" | "track" | "level";
 
 interface CfpPreviewSelections {
@@ -345,7 +346,8 @@ function renderEventStatusAndLimits({
           aria-describedby="participant-limit-help"
         />
         <p id="participant-limit-help" className={styles.fieldHint}>
-          Up to 15 participants can collaborate on one submission.
+          {configuration.participantLimit} participants can collaborate on one submission (maximum
+          15).
         </p>
       </div>
       <div className={styles.fieldGroup}>
@@ -582,6 +584,8 @@ function renderMessagingSection({
 interface CfpTaxonomySectionProps {
   readonly active: boolean;
   readonly configuration: CfpConfiguration;
+  readonly canonicalTaxonomy?: CfpCanonicalTaxonomy | null | undefined;
+  readonly taxonomyManageHref?: string | undefined;
   readonly onTaxonomyChange: (key: CfpTaxonomyKey, values: string[]) => void;
   readonly onHelpfulLinkChange: (
     index: number,
@@ -592,7 +596,12 @@ interface CfpTaxonomySectionProps {
 function renderTaxonomyOptions({
   configuration,
   onTaxonomyChange,
-}: Pick<CfpTaxonomySectionProps, "configuration" | "onTaxonomyChange">) {
+  canonicalTaxonomy,
+  taxonomyManageHref,
+}: Pick<
+  CfpTaxonomySectionProps,
+  "configuration" | "onTaxonomyChange" | "canonicalTaxonomy" | "taxonomyManageHref"
+>) {
   return (
     <div className={styles.formGrid}>
       <CfpOptionListEditor
@@ -601,6 +610,8 @@ function renderTaxonomyOptions({
         description="Route proposals into program areas."
         required
         values={configuration.tracks}
+        availableValues={canonicalTaxonomy?.tracks}
+        manageHref={taxonomyManageHref}
         onChange={(values) => onTaxonomyChange("tracks", values)}
       />
       <CfpOptionListEditor
@@ -609,6 +620,8 @@ function renderTaxonomyOptions({
         description="Define the session formats applicants can propose."
         required
         values={configuration.formats}
+        availableValues={canonicalTaxonomy?.formats}
+        manageHref={taxonomyManageHref}
         onChange={(values) => onTaxonomyChange("formats", values)}
       />
       <CfpOptionListEditor
@@ -616,6 +629,8 @@ function renderTaxonomyOptions({
         label="Levels"
         description="Describe the intended audience experience."
         values={configuration.levels}
+        availableValues={canonicalTaxonomy?.levels}
+        manageHref={taxonomyManageHref}
         onChange={(values) => onTaxonomyChange("levels", values)}
       />
       <CfpOptionListEditor
@@ -623,6 +638,8 @@ function renderTaxonomyOptions({
         label="Tags"
         description="Add searchable labels for reviewers."
         values={configuration.tags}
+        availableValues={canonicalTaxonomy?.tags}
+        manageHref={taxonomyManageHref}
         onChange={(values) => onTaxonomyChange("tags", values)}
       />
     </div>
@@ -671,6 +688,8 @@ function renderTaxonomySection({
   configuration,
   onTaxonomyChange,
   onHelpfulLinkChange,
+  canonicalTaxonomy,
+  taxonomyManageHref,
 }: CfpTaxonomySectionProps) {
   return (
     <section
@@ -688,7 +707,12 @@ function renderTaxonomySection({
       <p className={styles.sectionDescription}>
         Add the choices applicants use to classify a proposal. Press Enter after each option.
       </p>
-      {renderTaxonomyOptions({ configuration, onTaxonomyChange })}
+      {renderTaxonomyOptions({
+        configuration,
+        onTaxonomyChange,
+        canonicalTaxonomy,
+        taxonomyManageHref,
+      })}
       {renderHelpfulLinks({ configuration, onHelpfulLinkChange })}
     </section>
   );
@@ -1422,6 +1446,8 @@ function renderPublicPreviewSection({
 interface CfpEditorSectionsProps {
   readonly activeSection: string;
   readonly configuration: CfpConfiguration;
+  readonly canonicalTaxonomy?: CfpCanonicalTaxonomy | null;
+  readonly taxonomyManageHref?: string;
   readonly effectiveClosed: boolean;
   readonly publicRoute: string | null;
   readonly publicRoutePath: string | null;
@@ -1474,6 +1500,8 @@ export function CfpEditorSections({
   activeSection,
   configuration,
   effectiveClosed,
+  canonicalTaxonomy,
+  taxonomyManageHref,
   publicRoute,
   publicRoutePath,
   minimumCfpDate,
@@ -1551,6 +1579,8 @@ export function CfpEditorSections({
           configuration,
           onHelpfulLinkChange,
           onTaxonomyChange,
+          canonicalTaxonomy,
+          taxonomyManageHref,
         })}
         {renderFieldsRulesSection({
           active: activeSection === "fields-rules",

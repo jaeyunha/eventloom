@@ -15,6 +15,7 @@ import type {
 
 import {
   type AirtableRequest,
+  type AirtableResponse,
   type AirtableTransport,
   FakeAirtableTransport,
 } from "../infrastructure/airtable";
@@ -23,6 +24,7 @@ import {
   AirtableAgendaRepository,
   AirtableCommunicationRepository,
   AirtableCrmRepository,
+  AirtableEvaluationRepository,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationProjectionStore,
   AirtableEventRepository,
@@ -3303,7 +3305,13 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       blindReview: false,
       closesAt: null,
       assignmentRule: { reviewsPerSubmission: 3, maxAssignmentsPerReviewer: 10 },
-      rounds: [],
+      rounds: [
+        {
+          id: roundId,
+          opensAt: null,
+          closesAt: "2026-08-10T13:00:00.000Z",
+        },
+      ],
       version: 4,
       createdAt: now,
       updatedAt: now,
@@ -3349,6 +3357,67 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       baseId: "base-test",
       transport,
     });
+    const expiredRepository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport,
+    });
+    await expect(
+      expiredRepository.applyAssignmentDistribution(
+        {
+          tenantId,
+          eventId,
+          planId,
+          roundId,
+          submissionId,
+          planVersion: assignmentA.planVersion,
+        },
+        {
+          assignments: [assignmentA, assignmentB],
+          expectedActiveVersions: [
+            { assignmentId: assignmentA.id, version: assignmentA.version },
+            { assignmentId: assignmentB.id, version: assignmentB.version },
+          ],
+          reason: "Organizer applied reviewer distribution.",
+          authorizedAt: "2026-08-10T14:00:00.000Z",
+        },
+      ),
+    ).rejects.toThrow("closed");
+
+    let rejectNextMutation = true;
+    const mutationTransport: AirtableTransport = {
+      async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
+        if (
+          rejectNextMutation &&
+          request.method === "PATCH" &&
+          request.table === "Review Plans" &&
+          request.recordId === "rec00000000000100"
+        ) {
+          rejectNextMutation = false;
+          return { status: 503, headers: {}, body: {} as TBody };
+        }
+        return transport.request<TBody>(request);
+      },
+    };
+    const repository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport,
+    });
+    const scope = {
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      planVersion: assignmentA.planVersion,
+    };
+    const replacement = {
+      oldAssignmentId: assignmentA.id,
+      replacementReviewerId: assignmentC.reviewerId,
+      successorAssignment: assignmentC,
+      expectedAssignmentVersion: assignmentA.version,
+      reason: "Reviewer conflict disclosed after assignment.",
+      authorizedAt: replacedAt,
+    };
 
     await expect(projection.getAssignment(tenantId, assignmentA.id)).resolves.toEqual(
       supersededAssignment,
@@ -3361,6 +3430,69 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       supersededAssignment,
       assignmentB,
       successorAssignment,
+    ]);
+    await expect(repository.getAssignment(tenantId, assignmentC.id)).resolves.toBeNull();
+    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
+
+    const replaced = await repository.replaceAssignment(scope, replacement);
+    expect(replaced).toMatchObject({
+      scope,
+      replacedAssignment: {
+        ...assignmentA,
+        status: "superseded",
+        successorAssignmentId: assignmentC.id,
+        supersededReason: replacement.reason,
+        version: 2,
+        updatedAt: replacedAt,
+      },
+      successorAssignment: {
+        ...assignmentC,
+        predecessorAssignmentId: assignmentA.id,
+        successorAssignmentId: null,
+        supersededReason: null,
+      },
+      activeAssignments: [assignmentB, expect.objectContaining(assignmentC)],
+      history: [{ assignment: expect.objectContaining({ id: assignmentA.id }), review: reviewA }],
+    });
+    expect(replaced.successorAssignment).toMatchObject({
+      planVersion: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+    });
+    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
+
+    await expect(
+      repository.applyAssignmentDistribution(scope, {
+        assignments: [replaced.successorAssignment],
+        expectedActiveVersions: [
+          { assignmentId: assignmentB.id, version: 1 },
+          { assignmentId: assignmentC.id, version: 1 },
+        ],
+        reason: "Organizer removed the completed reviewer.",
+        authorizedAt: replacedAt,
+      }),
+    ).rejects.toThrow("changed since the distribution was previewed");
+    await expect(repository.getAssignment(tenantId, assignmentB.id)).resolves.toMatchObject(
+      assignmentB,
+    );
+
+    const distributed = await repository.applyAssignmentDistribution(scope, {
+      assignments: [replaced.successorAssignment],
+      expectedActiveVersions: [
+        { assignmentId: assignmentB.id, version: assignmentB.version },
+        { assignmentId: assignmentC.id, version: assignmentC.version },
+      ],
+      reason: "Organizer removed the completed reviewer.",
+      authorizedAt: replacedAt,
+    });
+    expect(distributed.activeAssignments).toEqual([
+      expect.objectContaining({
+        id: assignmentC.id,
+        planVersion: 4,
+        rubricRevision: 7,
+        roundRevision: 3,
+      }),
     ]);
   });
 
@@ -3382,7 +3514,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       blindReview: false,
       closesAt: null,
       assignmentRule: { reviewsPerSubmission: 20, maxAssignmentsPerReviewer: 20 },
-      rounds: [],
+      rounds: [{ id: roundId, opensAt: null, closesAt: null }],
       version: 3,
       createdAt: now,
       updatedAt: now,
@@ -3530,7 +3662,6 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       baseId: "base-test",
       transport,
     });
-
     expect("putSuggestion" in projection).toBe(false);
     expect("resolveSuggestion" in projection).toBe(false);
     expect(

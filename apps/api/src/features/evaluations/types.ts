@@ -68,6 +68,7 @@ export interface EvaluationReviewerPool {
 
 export interface ReviewRound {
   id: string;
+  predecessorRoundId?: string | null | undefined;
   name: string;
   sequence: number;
   /** Immutable round configuration revision used by assignments and aggregates. */
@@ -96,6 +97,7 @@ export interface EvaluationAssignmentRule {
 
 export interface EvaluationPlan {
   id: string;
+  predecessorPlanId?: string | null | undefined;
   tenantId: string;
   eventId: string;
   name: string;
@@ -188,6 +190,7 @@ export interface EvaluationAssignmentReplacementInput {
   readonly successorAssignment: EvaluationAssignment;
   readonly expectedAssignmentVersion: number;
   readonly reason: string;
+  readonly authorizedAt: string;
 }
 
 export interface EvaluationReviewHistory {
@@ -207,6 +210,8 @@ export interface EvaluationAssignmentDistributionInput {
   readonly assignments: readonly EvaluationAssignment[];
   readonly expectedActiveVersions: readonly EvaluationDistributionExpectedVersion[];
   readonly reason: string;
+  readonly authorizedAt: string;
+  readonly allowClosedCleanup?: boolean | undefined;
 }
 
 export interface EvaluationAssignmentDistributionResult {

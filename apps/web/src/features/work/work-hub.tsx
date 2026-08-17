@@ -10,15 +10,24 @@ import { ORGANIZER_ORGANIZATION_STORAGE_KEY } from "@/lib/organizer-workspace-pr
 import { signOutAccount } from "../account/account-actions";
 import { WorkEventInvitations } from "./work-event-invitations";
 import styles from "./work-hub.module.css";
+import type { WorkHubOrganizationRequest } from "./work-hub-cards";
 import { WorkHubCards } from "./work-hub-cards";
 import { loadWorkHubModel } from "./work-hub-loader";
 import type { WorkHubModel } from "./work-hub-model";
 
-export function WorkHubView({ model }: Readonly<{ model: WorkHubModel }>) {
+export function WorkHubView({
+  model,
+  organizationRequest = null,
+}: Readonly<{
+  model: WorkHubModel;
+  organizationRequest?: WorkHubOrganizationRequest | null;
+}>) {
   const [invitations, setInvitations] = useState(model.invitations ?? []);
   const acceptedEventCount = invitations.filter(({ status }) => status === "accepted").length;
   const availableCount =
-    [model.organizer, model.reviewer, model.participant].filter(Boolean).length +
+    (model.organizer?.organizationCount ?? 0) +
+    (model.reviewer === null ? 0 : 1) +
+    (model.participant === null ? 0 : 1) +
     acceptedEventCount;
   return (
     <div className={styles.shell} data-role-workspace-shell="true">

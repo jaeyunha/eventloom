@@ -154,10 +154,17 @@ async function jsonRequest(
   body: unknown,
   actor = "organizer",
 ) {
+  const requestBody =
+    body !== null &&
+    typeof body === "object" &&
+    /\/plans\/[^/]+\/(?:open|close)$/.test(path) &&
+    !("revisionSyncToken" in body)
+      ? { ...body, revisionSyncToken: crypto.randomUUID() }
+      : body;
   return app.request(path, {
     method,
     headers: { "content-type": "application/json", "x-test-actor": actor },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
   });
 }
 
@@ -357,6 +364,30 @@ describe("evaluation HTTP routes", () => {
     expect(body.submission.participants).toEqual([]);
     expect(body.submission.answers).toEqual({ topic: "Visible" });
   });
+
+  it("exposes organizer revision-family reconciliation", async () => {
+    const app = createTestApp();
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+
+    const reconciled = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/reconcile-revision-family",
+      "POST",
+      {
+        expectedVersion: 2,
+        revisionSyncToken: "11111111-1111-4111-8111-111111111111",
+      },
+    );
+
+    expect(reconciled.status).toBe(200);
+    await expect(reconciled.json()).resolves.toMatchObject({
+      id: "plan-1",
+      status: "open",
+      version: 2,
+    });
+  });
+
   it("previews deterministic distribution, rejects stale apply, and retains replacement evidence", async () => {
     const app = createTestApp();
     await jsonRequest(app, "/evaluations/plans", "POST", {

@@ -169,8 +169,8 @@ export function organizerNavigationGroupsFor(
   const eventItems = eventNavigationFor(eventContext);
   if (eventItems.length === 0) return [];
   return [
-    { label: "Program", items: eventItems.slice(0, 6) },
-    { label: "People", items: eventItems.slice(6, 8) },
+    { label: "Program", items: eventItems.slice(0, 7) },
+    { label: "People", items: eventItems.slice(7, 8) },
     { label: "Content operations", items: eventItems.slice(8, 10) },
     { label: "Publish", items: eventItems.slice(10) },
   ];
