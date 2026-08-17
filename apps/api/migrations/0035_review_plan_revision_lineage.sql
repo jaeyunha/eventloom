@@ -1,3 +1,5 @@
+PRAGMA foreign_keys = ON;
+
 ALTER TABLE review_plans ADD COLUMN predecessor_plan_id TEXT;
 ALTER TABLE review_rounds ADD COLUMN predecessor_round_id TEXT;
 
