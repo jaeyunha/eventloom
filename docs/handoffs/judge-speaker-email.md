@@ -16,8 +16,8 @@ current github/main. This lane remains source-only: do not deploy production.
 | Local branch | `judge-speaker-email` |
 | Worktree | `/Users/jaeyunha/wt/open-sessionboard/judge-speaker-email` |
 | Current committed HEAD | Live PR #62 head; see the PR body for the exact SHA |
-| Integrated `github/main` | `5de02118b194c429bee50bf3eac9acd5ffeecf1e` |
-| Merge base | `5de02118b194c429bee50bf3eac9acd5ffeecf1e` |
+| Integrated `github/main` | `e0bf50188e031c33709bb1585923fdf88d9a2124` |
+| Merge base | `e0bf50188e031c33709bb1585923fdf88d9a2124` |
 | Remote branch | `github/judge-speaker-email` (live tip tracked by PR #62) |
 | Upstream | `github/judge-speaker-email` |
 | Pull request | [#62](https://github.com/jaeyunha/eventloom/pull/62), final five-review gate pending |
