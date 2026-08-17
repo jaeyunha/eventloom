@@ -16,9 +16,9 @@ continues from the pushed head and must not rely on its stale base/head values.
 - Exact current GitHub-main base incorporated:
   `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
 - Exact current pushed head:
-  `5938f0c6`
-- The earlier `7d6601...` base and `20b3b7b...` head below are historical
-  checkpoint evidence only and are not current verification evidence.
+  `4589135bf1609bb339412e70ab7391680e3c9c51`
+- All current verification in this document is product-scoped and refers to
+  this exact head and the `c5fc50256d10be142e1c9e142d1f78f6980ca2e3` base.
 
 ## Lane objective and scope
 
@@ -212,34 +212,24 @@ still requires five independent current-head review PASS results.
 
 - [ ] Fetch `github/main` again and incorporate any new revision without
       overwriting unrelated merged work.
-- [ ] Complete PR #39 description with judge/rubric IDs, root cause,
-      before/after behavior, reproducible manual QA, limitations, conflict
-      files, exact base/head, and accessible screenshot evidence.
+- [ ] Complete PR #39 description with product root cause, before/after
+      behavior, reproducible manual QA, limitations, conflict files, and exact
+      base/head evidence.
 - [ ] Re-run all five post-implementation reviewers on the exact final head.
 - [ ] Do not merge or deploy from this lane.
 
 ## Known review findings and unresolved risks
 
-- PR #39 goal and quality review failed at head
-  `20b3b7b6db27e882ec139ee16c87c966ab39ea4b` because the original Uploader
-  field duplicated Speaker instead of recording the authenticated actor.
-- Security review requires removal of raw `reviewedBy` account IDs from all
-  speaker-facing asset payloads while keeping organizer audit attribution.
-- Concurrent replacement authorization is currently non-atomic in the
-  shipped service path. The paused patch adds an unused repository command,
-  but until wiring and tests are complete, D1/local behavior is not claimed
-  fixed.
-- A returned task can currently be resubmitted without a replacement because
-  the returned ready v1 still satisfies readiness.
-- A `needs_changes` asset review currently returns only submitted tasks; other
-  reachable states can leave the task non-actionable or inconsistent.
-- Repository-level D1 rollback proof for a stale linked task is still missing.
-- Download issuance/consumption lacks durable requester attribution.
-- Rejected and abandoned private bytes lack durable outbox cleanup.
-- The partial D1 pending-version method has passed typecheck and existing
-  suites but has no focused behavioral test and must be treated as unfinished.
+- Atomic review/task CAS is covered by D1 and local stale-task regressions.
+- The repository's current main branch still has pre-existing migration ordinal
+  collisions (`0034`, `0035`, and `0037`) and three pre-existing formatting
+  failures; this lane does not alter unrelated main migrations or UI files.
+- The full unit gate has one pre-existing `work-hub` assertion failure; all
+  other current-head tests pass.
+- Final merge remains gated on five independent product-scoped reviews and a
+  second live PR state check at the exact same head.
 
-## Verification evidence at checkpoint
+## Historical checkpoint evidence
 
 ### Passed
 

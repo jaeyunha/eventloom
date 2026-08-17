@@ -113,6 +113,7 @@ class LifecycleRepository implements SpeakerRepository {
     },
   ];
   readonly responses: SpeakerTaskResponseRecord[] = [];
+  readonly taskTransitions: SpeakerTaskTransition[] = [];
   readonly comments: SpeakerAssetComment[] = [];
   readonly contexts: SpeakerPortalContext[] = [
     {
@@ -324,6 +325,9 @@ class LifecycleRepository implements SpeakerRepository {
       returnTask.replacementBaselineAssetId = command.returnTask.baselineAssetId;
       returnTask.version = command.returnTask.expectedVersion + 1;
       returnTask.updatedAt = command.returnTask.transition?.occurredAt ?? command.reviewedAt;
+      if (command.returnTask.transition !== undefined) {
+        this.taskTransitions.push(command.returnTask.transition);
+      }
     }
     return Promise.resolve({ ok: true, value: asset });
   }
@@ -358,6 +362,7 @@ class LifecycleRepository implements SpeakerRepository {
     task.status = command.toStatus;
     if (command.toStatus === "submitted") delete task.replacementBaselineAssetId;
     task.version += 1;
+    this.taskTransitions.push(command.transition);
     return Promise.resolve({ ok: true, value: { task, transition: command.transition } });
   }
   createPendingAsset(asset: SpeakerAsset): Promise<SpeakerAsset> {
@@ -1231,6 +1236,72 @@ describe("private speaker asset lifecycle", () => {
         }),
       ]),
     );
+  });
+
+  it.each([
+    "not_started",
+    "in_progress",
+    "submitted",
+    "needs_changes",
+    "completed",
+    "waived",
+    "overdue",
+    "reopened",
+  ] as const)("returns every linked upload task state to needs_changes: %s", async (status) => {
+    const repository = new LifecycleRepository();
+    repository.organizerScopes.set("event-1:organizer", {
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      role: "owner",
+    });
+    const uploadTask = repository.tasks.find((task) => task.id === "upload-task");
+    if (uploadTask === undefined) throw new Error("Expected the upload task fixture.");
+    uploadTask.status = "in_progress";
+    uploadTask.version = 1;
+    const gateway = new CapabilityGateway();
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+      speakerSender,
+      now: () => new Date(now),
+      generateId: () => "linked-state-id",
+    });
+    const authorization = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: uploadTask.id,
+      kind: "slides",
+      fileName: "linked-state.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+    gateway.uploaded.add(authorization.asset.objectKey);
+    await service.finalizeAsset({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: authorization.asset.id,
+      state: "ready",
+    });
+    uploadTask.status = status;
+    uploadTask.version = 1;
+
+    await service.reviewAsset({
+      eventId: "event-1",
+      accountId: "organizer",
+      assetId: authorization.asset.id,
+      state: "needs_changes",
+      note: "The linked task must become actionable.",
+    });
+
+    expect(repository.tasks.find((task) => task.id === uploadTask.id)).toMatchObject({
+      status: "needs_changes",
+      replacementBaselineAssetId: authorization.asset.id,
+      version: 2,
+    });
+    expect(
+      repository.taskTransitions.filter((transition) => transition.taskId === uploadTask.id),
+    ).toHaveLength(status === "needs_changes" ? 0 : 1);
   });
 
   it("does not persist a needs-changes review when the linked task CAS conflicts", async () => {
