@@ -101,7 +101,10 @@ describe("API foundation", () => {
             origin,
             "content-type": "text/plain",
           },
-          body: JSON.stringify({ expectedVersion: 1 }),
+          body: JSON.stringify({
+            expectedVersion: 1,
+            revisionSyncToken: "11111111-1111-4111-8111-111111111111",
+          }),
         },
         production,
       );
