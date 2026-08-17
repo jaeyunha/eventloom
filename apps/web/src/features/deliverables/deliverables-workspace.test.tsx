@@ -1281,7 +1281,7 @@ describe("deliverables workspace", () => {
       }),
     );
     expect(markup).toContain("slides.pdf");
-    expect(markup).toContain("Authoritative current v2 · 2 versions");
+    expect(markup).toContain("Current v2 · 2 versions");
     expect(markup).toContain("Review state");
     expect(markup).toContain("Review file");
   });
@@ -1339,11 +1339,10 @@ describe("deliverables workspace", () => {
       }),
     );
     expect(markup).toContain("Search files");
-    expect(markup).toContain("Filter by session");
-    expect(markup).toContain("Filter by review state");
+    expect(markup).toContain("Filter uploaded files");
     expect(markup).toContain("Select approved files from a session");
     expect(markup).toContain("Download rules");
-    expect(markup).toContain(">Select ready current file slides.pdf</");
+    expect(markup).toContain('aria-label="Select ready current file slides.pdf"');
   });
 
   it("selects only the server-authoritative current ready version", () => {
@@ -1362,7 +1361,7 @@ describe("deliverables workspace", () => {
     );
 
     expect(markup).toContain('data-current-version="asset-1"');
-    expect(markup).toContain("Authoritative current v1 · 2 versions");
+    expect(markup).toContain("Current v1 · 2 versions");
     expect(markup).toContain("Slides · application/pdf · 1 KiB");
     expect(markup).not.toContain('data-current-version="asset-2"');
   });
