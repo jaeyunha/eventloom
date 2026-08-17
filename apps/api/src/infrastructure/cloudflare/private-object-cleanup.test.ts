@@ -6,6 +6,7 @@ import { SqliteD1 } from "../../test-support/sqlite-d1";
 import type { CloudflareFileScanPayload, CloudflareOutboxMessage } from "./bindings";
 import {
   D1PrivateObjectDeletionGateway,
+  privateObjectCleanupOutboxStatement,
   reconcilePrivateObjectCleanup,
 } from "./private-object-cleanup";
 
@@ -193,6 +194,39 @@ describe("private object deletion authority", () => {
     expect(db.query<{ state: string }>("SELECT state FROM private_uploads")).toEqual([
       { state: "scanning" },
     ]);
+  });
+
+  it("requeues an expired cleanup intent after a scan-time no-op was delivered", async () => {
+    const db = database();
+    const payload: CloudflareFileScanPayload = {
+      kind: "private_object_delete",
+      source: "private-upload",
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      assetId: "upload-scanning",
+      objectKey: "private/scanning.pdf",
+      expiresAt: "2026-08-09T11:00:00.000Z",
+    };
+    await privateObjectCleanupOutboxStatement(
+      db,
+      payload,
+      "2026-08-09T12:00:00.000Z",
+    ).run();
+    db.executeScript(
+      "UPDATE outbox_jobs SET state = 'delivered', completed_at = updated_at WHERE id LIKE 'private-object-delete:%';",
+    );
+
+    await privateObjectCleanupOutboxStatement(
+      db,
+      payload,
+      "2026-08-09T13:00:00.000Z",
+    ).run();
+
+    expect(
+      db.query<{ state: string; completed_at: string | null }>(
+        "SELECT state, completed_at FROM outbox_jobs",
+      ),
+    ).toEqual([{ state: "pending", completed_at: null }]);
   });
 
   it("reconciles expired uploads and retries queue publication without losing the intent", async () => {

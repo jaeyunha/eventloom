@@ -44,7 +44,17 @@ export function privateObjectCleanupOutboxStatement(
           available_at, lease_owner, lease_expires_at, last_error_code,
           created_at, updated_at, completed_at)
        VALUES (?, ?, 'file-scan', ?, ?, 'pending', 0, ?, NULL, NULL, NULL, ?, ?, NULL)
-       ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
+       ON CONFLICT (tenant_id, topic, deduplication_key) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         state = 'pending',
+         attempt_count = 0,
+         available_at = excluded.available_at,
+         lease_owner = NULL,
+         lease_expires_at = NULL,
+         last_error_code = NULL,
+         updated_at = excluded.updated_at,
+         completed_at = NULL
+       WHERE outbox_jobs.state IN ('delivered', 'failed')`,
     )
     .bind(id, payload.tenantId, id, JSON.stringify(payload), createdAt, createdAt, createdAt);
 }
