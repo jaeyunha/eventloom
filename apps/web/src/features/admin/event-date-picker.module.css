@@ -33,6 +33,24 @@
   font-size: 0.8rem;
   line-height: 1.5;
 }
+.headingCopy {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 0;
+}
+.clearDate {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 2rem;
+  margin: 0.45rem 0 0;
+  padding-inline: 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+}
+.clearDate:hover {
+  color: var(--foreground);
+}
 
 .headingActions {
   display: flex;

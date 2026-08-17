@@ -325,7 +325,24 @@
 .sheetNavigation {
   display: flex;
   justify-self: end;
+  align-items: center;
   gap: var(--space-1);
+}
+.sheetNavigation [data-slot="button"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.sheetFullPageIcon {
+  display: block;
+  flex: none;
+  width: 0.95rem;
+  height: 0.95rem;
+}
+.sheetFullPageLabel {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
 }
 
 .sheetNavigationLabel {

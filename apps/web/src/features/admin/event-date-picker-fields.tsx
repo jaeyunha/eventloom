@@ -798,18 +798,24 @@ export function EventDatePickerFields({
       data-selection-mode={selectionMode}
     >
       <div className={styles.heading}>
-        <div>
+        <div className={styles.headingCopy}>
           <span className={styles.eyebrow}>{eyebrow}</span>
           <h3 id={`${id}-title`}>{title}</h3>
           <p>{description}</p>
-        </div>
-        <div className={styles.headingActions}>
           {clearable && (startDate !== "" || endDate !== "" || scheduleDates.length > 0) ? (
-            <Button type="button" variant="ghost" onClick={clearSelection} disabled={disabled}>
+            <Button
+              className={styles.clearDate}
+              type="button"
+              variant="ghost"
+              onClick={clearSelection}
+              disabled={disabled}
+            >
               Clear {isSingleSelection ? "date" : "dates"}
             </Button>
           ) : null}
-          {showModeToggle ? (
+        </div>
+        {showModeToggle ? (
+          <div className={styles.headingActions}>
             <ToggleGroup
               aria-label="Event date selection mode"
               className={styles.modeToggle}
@@ -828,8 +834,8 @@ export function EventDatePickerFields({
                 Individual days
               </ToggleGroupItem>
             </ToggleGroup>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
 
       {renderDatePickerSummary({
