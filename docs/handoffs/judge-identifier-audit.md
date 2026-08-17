@@ -11,11 +11,11 @@ checkpoint. Resume only when the user explicitly asks to continue the lane.
 - GitHub PR repository: `https://github.com/jaeyunha/eventloom`
 - Branch: `judge-identifier-audit`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-identifier-audit`
-- Integrated base: `7d6601961367e3eefb87ddbc1cd3236332cc7ee3`
+- Integrated base: `a9d0019eac57aa90503a6623011e570e22620fcf`
 - Pre-checkpoint local HEAD: `79a747ae06fc33b8be6cfa07911f1cd39a650427`
-- Current fetched `github/main`: `6467ff1f48c73229c5c45dba6b4716df724a3bdd`
+- Current fetched `github/main`: `a9d0019eac57aa90503a6623011e570e22620fcf`
 - Current merge base with fetched `github/main`:
-  `7d6601961367e3eefb87ddbc1cd3236332cc7ee3`
+  `a9d0019eac57aa90503a6623011e570e22620fcf`
 
 The pushed checkpoint commit is the commit containing this document. Resolve its
 exact SHA with:
@@ -23,6 +23,18 @@ exact SHA with:
 ```sh
 git rev-parse HEAD
 ```
+
+## Post-merge shutdown verification
+
+Before local retirement, the branch integrated `github/main` at
+`a9d0019eac57aa90503a6623011e570e22620fcf`. The resulting checkpoint passed:
+
+- focused identifier/auth/session/review suite: **14 files, 175 tests**
+- `make check`: **passed**
+- `git diff --check`: **passed**
+
+No post-merge production build or browser rerun was performed. Those remain
+explicit resume tasks and must be completed before PR delivery.
 
 ## Pull request
 
