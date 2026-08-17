@@ -15,18 +15,18 @@ current github/main. This lane remains source-only: do not deploy production.
 | Repository | [`jaeyunha/eventloom`](https://github.com/jaeyunha/eventloom) |
 | Local branch | `judge-speaker-email` |
 | Worktree | `/Users/jaeyunha/wt/open-sessionboard/judge-speaker-email` |
-| Pre-retirement committed HEAD | `214ea50056bd4c3ab9b02b5d37ab0bfdfc08ac4c` |
-| Integrated `github/main` | `a9d0019eac57aa90503a6623011e570e22620fcf` |
-| Merge base | `a9d0019eac57aa90503a6623011e570e22620fcf` |
-| Remote branch before retirement push | `272b6044e9eda4c4243f0b06162168dd4eb61e28` |
+| Current committed HEAD | `91304614e37fc3764896587e664dfa32e3884c43` |
+| Integrated `github/main` | `5de02118b194c429bee50bf3eac9acd5ffeecf1e` |
+| Merge base | `5de02118b194c429bee50bf3eac9acd5ffeecf1e` |
+| Remote branch | `github/judge-speaker-email` at `91304614e37fc3764896587e664dfa32e3884c43` |
 | Upstream | `github/judge-speaker-email` |
-| Pull request | None; intentionally not created under the retirement boundary |
+| Pull request | [#62](https://github.com/jaeyunha/eventloom/pull/62), staging verification in progress |
 | GitHub handoff issue | [#53](https://github.com/jaeyunha/eventloom/issues/53) |
 
-`214ea500` is the local merge of exact `github/main` into the pushed checkpoint. The
-retirement commit adds the final replay-security source/tests and this handoff. The
-exact pushed retirement SHA is recorded in GitHub issue #53 and is the final branch
-HEAD.
+The earlier retirement checkpoint remains historical. The active branch integrates
+current `github/main` and contains the verified canonicalization fix; PR #62 is the
+only active delivery record for this staging checkpoint. No production deployment is
+part of this lane.
 
 ## Objective and Scope
 

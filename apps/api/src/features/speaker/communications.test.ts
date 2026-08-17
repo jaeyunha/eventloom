@@ -1,6 +1,6 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { createTransport } from "nodemailer";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { D1CommunicationRepository } from "../../infrastructure/cloudflare/repositories/communications";
 import {
   createSpeakerLifecycleFixture,
@@ -251,7 +251,7 @@ describe("durable speaker communications", () => {
     );
     const legacy = await durable.service.createTemplate(actor, {
       eventId: ids.eventId,
-      id: "speaker-legacy-template",
+      id: "speaker-approved-welcome:custom",
       name: "Legacy speaker message",
       purpose: "organizer_group_email",
       subject: "Hello {{first_name}}",
@@ -265,14 +265,41 @@ describe("durable speaker communications", () => {
       legacy.version,
     );
 
-    const preview = await durable.facade.preview({
+    const previewInput = {
       organizationId: ids.organizationId,
       eventId: ids.eventId,
       accountId: ids.organizerAccountId,
       participantIds: ["participant-priya"],
       templateId: approved.id,
       templateVersion: approved.version,
+    } as const;
+    const originalCreateTemplateVersion = durable.service.createTemplateVersion.bind(
+      durable.service,
+    );
+    let releaseCreateVersion!: () => void;
+    const createVersionGate = new Promise<void>((resolve) => {
+      releaseCreateVersion = resolve;
     });
+    let createVersionCalls = 0;
+    const createVersion = vi
+      .spyOn(durable.service, "createTemplateVersion")
+      .mockImplementation(async (actor, input) => {
+        createVersionCalls += 1;
+        if (createVersionCalls === 2) releaseCreateVersion();
+        await createVersionGate;
+        return originalCreateTemplateVersion(actor, input);
+      });
+    const concurrentPreviews = await Promise.allSettled([
+      durable.facade.preview(previewInput),
+      durable.facade.preview(previewInput),
+    ]);
+    createVersion.mockRestore();
+    expect(createVersionCalls).toBe(2);
+    expect(concurrentPreviews.every((result) => result.status === "fulfilled")).toBe(true);
+    if (concurrentPreviews[0]?.status !== "fulfilled") {
+      throw concurrentPreviews[0]?.reason;
+    }
+    const preview = concurrentPreviews[0].value;
 
     expect(preview.templateVersion).toBe(approved.version + 1);
     expect(preview.recipients[0]?.html).toBe(
@@ -280,14 +307,7 @@ describe("durable speaker communications", () => {
     );
     expect(preview.recipients[0]?.html).not.toContain("attacker.example");
 
-    const repeatedPreview = await durable.facade.preview({
-      organizationId: ids.organizationId,
-      eventId: ids.eventId,
-      accountId: ids.organizerAccountId,
-      participantIds: ["participant-priya"],
-      templateId: approved.id,
-      templateVersion: approved.version,
-    });
+    const repeatedPreview = await durable.facade.preview(previewInput);
     expect(repeatedPreview.templateVersion).toBe(preview.templateVersion);
 
     await durable.facade.send({

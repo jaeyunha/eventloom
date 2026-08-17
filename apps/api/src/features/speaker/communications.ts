@@ -126,9 +126,12 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       input.templateId,
       input.templateVersion,
     );
+    const scopedWelcomeId = await scopedWelcomeTemplateId(input.organizationId, input.eventId);
     const isTrustedWelcomeTemplate =
-      template.id === SPEAKER_WELCOME_TEMPLATE_ID ||
-      template.id.startsWith(`${SPEAKER_WELCOME_TEMPLATE_ID}:`);
+      (template.id === SPEAKER_WELCOME_TEMPLATE_ID || template.id === scopedWelcomeId) &&
+      template.subject === welcome.subject &&
+      template.html === welcome.html &&
+      template.text === welcome.text;
     const canonicalHtml = speakerEmailHtmlFromText(template.text);
     if (
       isTrustedWelcomeTemplate ||
@@ -137,16 +140,84 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     ) {
       return speakerTemplateDto(template);
     }
-    const existingCanonical = (
-      await this.communications.listTemplates(actor, input.eventId, "organizer_group_email")
-    )
+    const existingCanonical = await this.findCanonicalTemplate(
+      actor,
+      input.eventId,
+      template.id,
+      template.subject,
+      template.text,
+      canonicalHtml,
+    );
+    if (existingCanonical !== undefined) return existingCanonical;
+    try {
+      return await this.createTemplateVersion({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        accountId: input.accountId,
+        templateId: template.id,
+        subject: template.subject,
+        text: template.text,
+        status: "approved",
+      });
+    } catch (error) {
+      if (!(error instanceof CommunicationError) || error.status !== 409) throw error;
+      const recovered = await this.findCanonicalTemplate(
+        actor,
+        input.eventId,
+        template.id,
+        template.subject,
+        template.text,
+        canonicalHtml,
+        true,
+      );
+      if (recovered?.status === "draft") {
+        try {
+          return speakerTemplateDto(
+            await this.communications.approveTemplate(
+              actor,
+              input.eventId,
+              recovered.id,
+              recovered.version,
+            ),
+          );
+        } catch (approvalError) {
+          if (!(approvalError instanceof CommunicationError) || approvalError.status !== 409) {
+            throw approvalError;
+          }
+          const approved = await this.findCanonicalTemplate(
+            actor,
+            input.eventId,
+            template.id,
+            template.subject,
+            template.text,
+            canonicalHtml,
+          );
+          if (approved !== undefined) return approved;
+          throw approvalError;
+        }
+      }
+      if (recovered !== undefined) return recovered;
+      throw error;
+    }
+  }
+
+  private async findCanonicalTemplate(
+    actor: ReturnType<typeof speakerCommunicationActor>,
+    eventId: string,
+    templateId: string,
+    subject: string,
+    text: string,
+    html: string,
+    includeDraft = false,
+  ): Promise<SpeakerEmailTemplate | undefined> {
+    return (await this.communications.listTemplates(actor, eventId, "organizer_group_email"))
       .filter(
         (candidate) =>
-          candidate.id === template.id &&
-          candidate.status === "approved" &&
-          candidate.subject === template.subject &&
-          candidate.text === template.text &&
-          candidate.html === canonicalHtml,
+          candidate.id === templateId &&
+          (candidate.status === "approved" || (includeDraft && candidate.status === "draft")) &&
+          candidate.subject === subject &&
+          candidate.text === text &&
+          candidate.html === html,
       )
       .reduce<SpeakerEmailTemplate | undefined>(
         (latest, candidate) =>
@@ -155,16 +226,6 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
             : latest,
         undefined,
       );
-    if (existingCanonical !== undefined) return existingCanonical;
-    return this.createTemplateVersion({
-      organizationId: input.organizationId,
-      eventId: input.eventId,
-      accountId: input.accountId,
-      templateId: template.id,
-      subject: template.subject,
-      text: template.text,
-      status: "approved",
-    });
   }
 
   async preview(input: Parameters<SpeakerCommunications["preview"]>[0]) {
