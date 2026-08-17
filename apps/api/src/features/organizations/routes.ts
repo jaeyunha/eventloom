@@ -10,8 +10,8 @@ import {
 } from "../members/service";
 import type { MemberActor } from "../members/types";
 import {
-  OrganizationEntitlementConflictError,
   type OrganizationEntitlementCommandRepository,
+  OrganizationEntitlementConflictError,
 } from "./policy";
 
 const identifierSchema = z.string().trim().min(1).max(200);

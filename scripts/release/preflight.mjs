@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderApiWrangler } from "../cloudflare/config.mjs";
 import {
+  assertOrganizationProvisioningConfiguration,
   ENVIRONMENTS,
   inspectOrganizationIdMigrationReadiness,
   PreflightError,
@@ -13,7 +14,6 @@ import {
   validateReleaseConfiguration,
   verifyCloudflare,
   verifyForgePrivacy,
-  assertOrganizationProvisioningConfiguration,
 } from "./preflight-lib.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
