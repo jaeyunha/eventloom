@@ -706,14 +706,14 @@ function usePortalProviderValue({
             : listResources !== undefined &&
                 hasPortalCapability(target.capabilities, "resource-read")
               ? safely(
-                () => listResources(target.eventId, signal),
-                [] as PortalResource[],
-                (resourceError) => {
-                  nextGuideErrors.resources = participantSafeGuideFailure(
-                    resourceError,
-                    "resources",
-                  );
-                },
+                  () => listResources(target.eventId, signal),
+                  [] as PortalResource[],
+                  (resourceError) => {
+                    nextGuideErrors.resources = participantSafeGuideFailure(
+                      resourceError,
+                      "resources",
+                    );
+                  },
                 )
               : Promise.resolve([] as PortalResource[]);
 
@@ -723,11 +723,11 @@ function usePortalProviderValue({
             ? Promise.resolve([...nextView.wiki])
             : listWiki !== undefined && hasPortalCapability(target.capabilities, "resource-read")
               ? safely(
-                () => listWiki(target.eventId, signal),
-                [] as PortalWikiPage[],
-                (wikiError) => {
-                  nextGuideErrors.wiki = participantSafeGuideFailure(wikiError, "wiki");
-                },
+                  () => listWiki(target.eventId, signal),
+                  [] as PortalWikiPage[],
+                  (wikiError) => {
+                    nextGuideErrors.wiki = participantSafeGuideFailure(wikiError, "wiki");
+                  },
                 )
               : Promise.resolve([] as PortalWikiPage[]);
 

@@ -34,7 +34,8 @@ export function participantSafeGuideFailure(
   error: unknown,
   resource: "resources" | "wiki",
 ): ParticipantSafeGuideFailure {
-  const label = resource === "resources" ? "Published event resources" : "Published event guide pages";
+  const label =
+    resource === "resources" ? "Published event resources" : "Published event guide pages";
   if (error instanceof PortalApiError) {
     const code = error.code.toUpperCase();
     if (

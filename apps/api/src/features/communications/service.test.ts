@@ -832,8 +832,7 @@ function reminderCandidate(overrides: Partial<ReminderCandidate> = {}): Reminder
 
 const recoveryIdempotencyKey =
   "reminder:tenant-1:event-1:automatic:task:task-1:application-1:2026-08-09T12:00:00.000Z";
-const recoveryRunId =
-  "reminder-run:tenant-1:event-1:automatic:2026-08-09T12:00:00.000Z";
+const recoveryRunId = "reminder-run:tenant-1:event-1:automatic:2026-08-09T12:00:00.000Z";
 
 function recoveryRun(): ReminderRun {
   return {
@@ -858,9 +857,7 @@ function recoveryRun(): ReminderRun {
   };
 }
 
-function recoveryDispatch(
-  status: "candidate" | "eligible" | "failed",
-): ReminderDispatch {
+function recoveryDispatch(status: "candidate" | "eligible" | "failed"): ReminderDispatch {
   const eligible = status !== "candidate";
   const failed = status === "failed";
   return {
@@ -954,7 +951,11 @@ describe("reminder domain", () => {
           repository,
           source: {
             async listCandidates() {
-              return { audienceType: "task", audienceRevision: "revision-2", candidates: [candidate] };
+              return {
+                audienceType: "task",
+                audienceRevision: "revision-2",
+                candidates: [candidate],
+              };
             },
           },
           outbox,

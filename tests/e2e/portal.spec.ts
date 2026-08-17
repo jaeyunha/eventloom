@@ -399,11 +399,13 @@ test("optional resource failure stays local while accepted session data remains 
 
   await page.goto("/portal?workspace=resources");
   await expect(page.getByRole("heading", { level: 1, name: "Event guide" })).toBeVisible();
-  await expect(page.getByText("Event resources unavailable", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("Published event resources are not available for this event.", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText("Support ID: e2e-portal-trace.", { exact: true })).toBeVisible();
+  const guideFailure = page
+    .getByRole("alert")
+    .filter({ hasText: "Event resources unavailable" });
+  await expect(guideFailure).toContainText(
+    "Published event resources are not available for this event.",
+  );
+  await expect(guideFailure).toContainText("Support ID: e2e-portal-trace.");
   await expect(page.getByText(sensitiveMessage, { exact: true })).toHaveCount(0);
   await expect(page.getByText("secret-value", { exact: false })).toHaveCount(0);
   await expect(
