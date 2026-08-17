@@ -30,21 +30,6 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
     setSubmitError,
     suggestions,
   } = scope;
-  function reportDraft(
-    nextScores: Readonly<Record<string, string>> = scoreValues,
-    nextResponses: Readonly<Record<string, string>> = responseValues,
-    nextConfirmed: ReadonlySet<string> = humanConfirmed,
-    nextComment: string = comment,
-    nextVersion: number | undefined = reviewVersionRef.current,
-  ): void {
-    onDraftChange?.({
-      scoreValues: nextScores,
-      responseValues: nextResponses,
-      humanConfirmed: [...nextConfirmed],
-      comment: nextComment,
-      reviewVersion: nextVersion,
-    });
-  }
   function suggestionForCriterion(criterionId: string): {
     suggestion: ApiSuggestion;
     candidate: {
@@ -67,7 +52,21 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
     }
     return null;
   }
-
+  function reportDraft(
+    nextScores: Readonly<Record<string, string>> = scoreValues,
+    nextResponses: Readonly<Record<string, string>> = responseValues,
+    nextConfirmed: ReadonlySet<string> = humanConfirmed,
+    nextComment: string = comment,
+    nextVersion: number | undefined = reviewVersionRef.current,
+  ): void {
+    onDraftChange?.({
+      scoreValues: nextScores,
+      responseValues: nextResponses,
+      humanConfirmed: [...nextConfirmed],
+      comment: nextComment,
+      reviewVersion: nextVersion,
+    });
+  }
   function applyAuthoritativeReview(review: NonNullable<ApiReviewContext["review"]>): void {
     setReviewVersion(review.version);
     reviewVersionRef.current = review.version;
@@ -129,29 +128,21 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
         }
         continue;
       }
-      const generated = suggestionForCriterion(criterion.id)?.candidate;
-      const hasSuggestionRecord = suggestions.some(
-        (candidate) => candidate.candidates[criterion.id]?.length !== undefined,
-      );
-      const suggestion =
-        generated ?? (hasSuggestionRecord ? undefined : assignment.aiSuggestions[criterion.id]);
+      const confirmed = nextConfirmed.has(criterion.id);
+      if (!confirmed) continue;
       const rawValue =
         criterionType(criterion) === "dropdown"
           ? (nextScores[criterion.id] ?? "")
-          : (nextScores[criterion.id] ??
-            (suggestion === undefined ? "" : String(suggestion.value)));
+          : (nextScores[criterion.id] ?? "");
       const numericValue =
         criterionType(criterion) === "dropdown"
           ? criterionNumericValue(criterion, rawValue)
           : Number(rawValue);
       if (!Number.isFinite(numericValue)) continue;
-      const confirmed = nextConfirmed.has(criterion.id);
-      if (!confirmed && suggestion === undefined) continue;
       scores.push({
         criterionId: criterion.id,
         value: numericValue,
-        origin: confirmed ? "human" : "ai",
-        ...(confirmed || suggestion === undefined ? {} : { evidence: suggestion.evidence }),
+        origin: "human",
       });
     }
     const review = await evaluationRequest<NonNullable<ApiReviewContext["review"]>>(
