@@ -6,7 +6,7 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3` (`github/main`)
-- Exact pushed head: `2544d07abaf1b82b686241be231d4c7f7b1a6a86`
+- Exact pushed head: `aa17828594fb1b744a0edb805603da6ea9a13910`
 - PR: https://github.com/jaeyunha/eventloom/pull/34
 - Issue: https://github.com/jaeyunha/eventloom/issues/47
 - PR is open and not merged. No production deployment was performed.
@@ -32,7 +32,7 @@ confirmation. Completed behavior includes:
 - Preservation of merged Eventloom work from PRs #31, #33, #40, #60, #61, #62,
   #63, and #66 through the c5fc502 integration.
 
-## Exact-head verification at 2544d07
+## Exact-head verification at aa178285
 
 - Focused matrix: PASS — 8 files, 297 passed, 1 skipped.
 - Authority-focused service/D1/composition suites: PASS — 198 passed.
@@ -55,18 +55,18 @@ confirmation. Completed behavior includes:
 
 All five must inspect the same exact pushed head and PASS before merge:
 
-- [ ] Security — exact `2544d07abaf1b82b686241be231d4c7f7b1a6a86`
-- [ ] Code quality — exact `2544d07abaf1b82b686241be231d4c7f7b1a6a86`
-- [ ] Functional/visual QA — exact `2544d07abaf1b82b686241be231d4c7f7b1a6a86`
-- [ ] Context/dependencies — exact `2544d07abaf1b82b686241be231d4c7f7b1a6a86`
-- [ ] Goal/compliance — exact `2544d07abaf1b82b686241be231d4c7f7b1a6a86`
+- [ ] Security — exact `aa17828594fb1b744a0edb805603da6ea9a13910`
+- [ ] Code quality — exact `aa17828594fb1b744a0edb805603da6ea9a13910`
+- [ ] Functional/visual QA — exact `aa17828594fb1b744a0edb805603da6ea9a13910`
+- [ ] Context/dependencies — exact `aa17828594fb1b744a0edb805603da6ea9a13910`
+- [ ] Goal/compliance — exact `aa17828594fb1b744a0edb805603da6ea9a13910`
 
 The lane must not merge until each checkbox is updated with a PASS verdict
 and exact-head evidence.
 
 ## Remaining tasks
 
-- [ ] Finish the five independent reviews on exact 2544d07.
+- [ ] Finish the five independent reviews on exact aa178285.
 - [ ] Record five PASS verdicts and evidence in this handoff and PR body.
 - [ ] Rerun full relevant gates and classify canonical-main-only formatter
   failures without modifying unrelated main files.
