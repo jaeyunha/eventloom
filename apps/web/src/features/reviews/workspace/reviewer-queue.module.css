@@ -169,7 +169,6 @@
 
 .cardSelected {
   background: var(--muted);
-  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .groupHeader {

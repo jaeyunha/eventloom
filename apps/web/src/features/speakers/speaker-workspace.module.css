@@ -189,10 +189,6 @@
   color: var(--foreground);
 }
 
-.attentionFilter[aria-pressed="true"] {
-  box-shadow: inset 2px 0 0 var(--primary);
-}
-
 .attentionFilter strong {
   display: inline-grid;
   min-width: 1.35rem;
@@ -363,7 +359,6 @@
 
 .speakerRow[data-state="selected"] {
   background: color-mix(in srgb, var(--primary) 8%, var(--card));
-  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .checkboxCell {

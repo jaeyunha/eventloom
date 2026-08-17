@@ -201,7 +201,6 @@
 
 .rowCard[data-state="selected"] {
   background: color-mix(in srgb, var(--primary) 8%, var(--card));
-  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .fileCell {
@@ -422,7 +421,6 @@
 
 .versionCard[data-active="true"] {
   border-color: var(--primary);
-  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .versionActions {
