@@ -19,7 +19,7 @@ or delete the worktree until the lane is explicitly resumed.
 - PR state at checkpoint preparation: open, non-draft, held for quality
   re-review
 - Current GitHub main/base:
-  `6467ff1f48c73229c5c45dba6b4716df724a3bdd`
+  `a9d0019edcd8dc5f7bb19dd2c2e81539987f6ef0`
 - Local pre-checkpoint HEAD:
   `d0eaafde195ba94650249e4c723fb836bab0885f`
 - Pushed PR head before this checkpoint:
@@ -56,8 +56,10 @@ at:
 
 ## Completed implementation
 
-- Rebased the local lane onto GitHub main
-  `6467ff1f48c73229c5c45dba6b4716df724a3bdd`.
+- Rebased the local lane during implementation and then merged the newly
+  advanced GitHub main
+  `a9d0019edcd8dc5f7bb19dd2c2e81539987f6ef0` without rewriting pushed
+  history.
 - Kept the PR diff free of the rejected roster implementation.
 - Changed submitted-proposal resumability so hydration is not gated by the
   Account/Welcome save-draft affordance.
@@ -96,8 +98,13 @@ for these narrow findings:
 
 ## Known unresolved risks
 
-- The final fixture-backed isolated browser suite passed. Earlier failed runs
-  remain diagnostic-only and are not release evidence:
+- A pre-final-main fixture-backed isolated browser suite passed. The final-main
+  run is still red: the submitted edit/back/forward, participants reload,
+  review reload, server identity/version, and screenshot assertions complete,
+  but the expanded test then times out reconstructing a consumed completion
+  handoff for the pre-existing portal-handoff section. Do not remove or weaken
+  that older coverage; split or compose the surfaces correctly after resume.
+  Earlier failed runs also remain diagnostic-only:
   - one was contaminated by shared-disk `ENOSPC` and a truncated trace;
   - one proved the mocked dynamic CFP cannot survive reload because its mocked
     sign-in has no durable session cookie;
@@ -108,10 +115,10 @@ for these narrow findings:
   unrelated DOM cleanup helper: `Property 'remove' does not exist on type
   'Node'`. All other changed-file diagnostics are clean, and project typecheck
   passes.
-- The local branch was rebased while the pushed PR still points to
-  `1eca0fb...`. The user prohibited force-push. Reconcile the remote branch
-  history with a non-force merge that preserves the current tree before the
-  final push.
+- Main advanced after the initial checkpoint push and introduced substantial
+  agenda/publication changes. The final focused/full/browser gates must be
+  rerun on the merge containing
+  `a9d0019edcd8dc5f7bb19dd2c2e81539987f6ef0` before the final push.
 
 ## Verification ledger
 
@@ -136,15 +143,22 @@ Update this ledger before pushing the checkpoint.
 - [x] `git diff --check`.
   - Passed with no output.
 - [x] Focused CFP/session regressions after the final callback repair.
-  - Unit command passed: 4 files, 89 tests.
+  - Before the final main merge: 4 files, 89 tests.
+  - After the final main merge: 4 files, 76 tests.
   - Composed runtime command passed: 1 file, 10 tests.
 - [x] `make check` after the final callback repair.
-  - Passed typecheck, lint, and format checks across 1,253 files.
+  - Final current-main run passed typecheck, lint, and format checks across
+    1,256 files.
 - [x] `make test`.
   - Passed with exit code 0, including script, unit, API, and runtime suites.
-- [x] Isolated fixture-backed browser QA:
+- [x] Isolated fixture-backed browser QA was executed:
   `node scripts/run-isolated-playwright.mjs tests/e2e/cfp.spec.ts`.
-  - Passed: 13 Chromium tests in 4.1 minutes.
+  - Pre-final-main run passed: 13 Chromium tests.
+  - Final current-main run failed: 1 failed, 12 passed.
+  - Remaining failure:
+    `page.getByRole("heading", { level: 1, name: "Submission complete" })`
+    is not visible after the test restores completion storage following the
+    successful submitted-edit review assertions.
 - [x] Manual review of the generated `submitted-edit-review.png` screenshot.
   - Passed: the review surface shows the same submitted flow with the updated
     title and all progress steps complete.
@@ -160,14 +174,29 @@ Update this ledger before pushing the checkpoint.
 - [x] Run `make check`.
 - [x] Run `make test` without weakening or skipping failures.
 - [x] Run isolated CFP browser QA and inspect the submitted-edit screenshot.
+  - The run remains red for the completion/portal test-composition blocker
+    recorded above.
 - [x] Repair only an immediate failure caused by the current partial patch; do
   not expand feature scope.
 - [x] Update this verification ledger with exact results.
-- [ ] Stage only lane-owned source, test, and this handoff document.
-- [ ] Commit with the repository checkpoint/handoff convention.
-- [ ] Reconcile the old remote branch into the rebased local history without a
+- [x] Stage only lane-owned source, test, and this handoff document.
+- [x] Commit with the repository checkpoint/handoff convention.
+  - Checkpoint commit:
+    `710f042c8aa990aa1b62205aa256a523ba7fa964`.
+- [x] Reconcile the old remote branch into the rebased local history without a
   force-push and without changing the verified tree.
-- [ ] Push `judge-participant-lifecycle` to the `github` remote.
+- [x] Push the initial checkpoint to `judge-participant-lifecycle` on the
+  `github` remote without force.
+- [x] Merge the newly advanced GitHub main
+  `a9d0019edcd8dc5f7bb19dd2c2e81539987f6ef0` without conflicts.
+- [x] Rerun focused, full, and isolated browser gates after that final main
+  merge.
+  - Focused, runtime, `make check`, and `make test` passed.
+  - Isolated browser QA remains red with 1 failed and 12 passed.
+- [ ] After explicit resume, repair only the final browser test composition
+  without weakening the existing portal-handoff assertions, then rerun the
+  isolated CFP suite.
+- [ ] Push the final current-main checkpoint without force.
 - [ ] Update PR #38 metadata and verify its exact head/base/file scope.
 - [ ] Create or update exactly one open GitHub issue titled
   `[Lane handoff] judge-participant-lifecycle`.

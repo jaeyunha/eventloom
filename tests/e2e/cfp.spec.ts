@@ -474,7 +474,7 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
   await page.getByRole("button", { name: "Back" }).click();
   await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/account$`));
-  await expect(accountEmail).toHaveValue("ada@example.test");
+  await expect(page.getByLabel("Email address")).toHaveValue("ada@example.test");
   await page.getByRole("button", { name: "Continue to proposal" }).click();
   await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
   const afterBackForward = await loadSubmittedEdit(completionSubmissionId);
@@ -527,7 +527,17 @@ test("submitter completes the account-first CFP with two participants", async ({
     path: testInfo.outputPath("submitted-edit-review.png"),
     fullPage: true,
   });
-
+  await page.evaluate(
+    ({ completionKey, pointerKey, submissionId }) => {
+      window.localStorage.removeItem(pointerKey);
+      window.sessionStorage.setItem(completionKey, submissionId);
+    },
+    {
+      completionKey: completionStorageKey,
+      pointerKey: "eventloom:cfp-submission:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
+      submissionId: completionSubmissionId,
+    },
+  );
   await page.goto(`${EVALUATOR_CFP_PATH}/complete`);
   await expect(page.getByRole("heading", { level: 1, name: "Submission complete" })).toBeVisible();
   const statusDashboard = page.getByRole("button", { name: "View submission status dashboard" });
