@@ -24,6 +24,7 @@ import {
   type OutboxConsumerBindings,
   type OutboxDeliveryStatusRecorder,
 } from "../infrastructure/cloudflare/outbox-consumer";
+import { reconcilePrivateObjectCleanup } from "../infrastructure/cloudflare/private-object-cleanup";
 import {
   CloudflareReminderOutbox,
   D1ReminderRepository,
@@ -823,6 +824,9 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
             effectiveBindings.OUTBOX_QUEUE,
             { now: () => scheduledAt },
           ),
+          reconcilePrivateObjectCleanup(effectiveBindings.DB, effectiveBindings.OUTBOX_QUEUE, {
+            now: () => scheduledAt,
+          }),
         ]);
       }
       if (shouldRunScheduledReminders(controller.cron)) {

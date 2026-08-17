@@ -4161,8 +4161,13 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       .run();
   }
 
-  async run<T>(scope: string, key: string, operation: () => Promise<T>): Promise<T> {
-    const fingerprint = `cfp:${scope}:${key}`;
+  async run<T>(
+    scope: string,
+    key: string,
+    operation: () => Promise<T>,
+    requestFingerprint?: string,
+  ): Promise<T> {
+    const fingerprint = requestFingerprint ?? `cfp:${scope}:${key}`;
     const claim = await this.begin({ scope, key, fingerprint });
     if (claim.status === "replay") return claim.response.body as T;
     if (claim.status === "conflict")

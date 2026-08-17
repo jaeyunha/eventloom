@@ -2729,7 +2729,11 @@ paths:
       security:
         - sessionAuth: []
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Required for successor uploads; omitted for initial family creation.
+          schema: { type: string, minLength: 1, maxLength: 300 }
       requestBody:
         required: true
         content:
@@ -2746,6 +2750,43 @@ paths:
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/AuthenticationError" }
         "403": { $ref: "#/components/responses/AuthorizationError" }
+        "409": { $ref: "#/components/responses/ConflictError" }
+
+  /api/speaker/events/{eventId}/organizer/profiles/{participantId}/headshot:
+    parameters:
+      - $ref: "#/components/parameters/EventId"
+      - name: participantId
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/Identifier" }
+    post:
+      tags: [SpeakerOrganizer]
+      operationId: authorizeOrganizerHeadshotUpload
+      summary: Authorize an organizer headshot upload
+      description: Upload authorization requires an Idempotency-Key when superseding an existing asset.
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Required for successor uploads; omitted for initial family creation.
+          schema: { type: string, minLength: 1, maxLength: 300 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizerHeadshotUploadAuthorization" }
+      responses:
+        "201":
+          description: Organizer-authorized upload capability and sanitized asset metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizerHeadshotUploadAuthorizationResponse" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
         "409": { $ref: "#/components/responses/ConflictError" }
 
   /api/speaker/events/{eventId}/assets:
@@ -3009,7 +3050,10 @@ paths:
       tags: [Portal]
       operationId: consumeDownloadCapability
       summary: Consume a single-use download capability
-      description: The bearer capability identifier and token are supplied by the path. No account session is required.
+      description: >-
+        The bearer capability identifier and token are supplied by the path. No account session is
+        required. The capability expires two minutes after issuance, is single-use, and the
+        response is private and no-store.
       security: []
       responses:
         "200":
@@ -3017,6 +3061,7 @@ paths:
           headers:
             X-Request-ID: { $ref: "#/components/headers/RequestId" }
             Content-Disposition: { $ref: "#/components/headers/ContentDisposition" }
+            Cache-Control: { $ref: "#/components/headers/PrivateCache" }
           content:
             "*/*": { schema: { type: string, format: binary } }
         "400": { $ref: "#/components/responses/ValidationError" }
@@ -4691,19 +4736,35 @@ components:
       additionalProperties: false
     PortalAsset:
       type: object
-      required: [id, participantId, kind, fileName, contentType, sizeBytes, state, version, createdAt]
+      required: [id, eventId, participantId, kind, fileName, contentType, sizeBytes, state, version, createdAt]
       properties:
         id: { $ref: "#/components/schemas/Identifier" }
+        eventId: { $ref: "#/components/schemas/Identifier" }
         participantId: { $ref: "#/components/schemas/Identifier" }
         submissionId: { $ref: "#/components/schemas/Identifier" }
+        participantName: { type: string, maxLength: 200 }
         taskId: { $ref: "#/components/schemas/Identifier" }
+        sessionTitle: { type: string, maxLength: 500 }
         versionFamilyId: { $ref: "#/components/schemas/Identifier" }
+        supersedesAssetId: { $ref: "#/components/schemas/Identifier" }
+        latestVersionId: { $ref: "#/components/schemas/Identifier" }
+        currentVersionId: { $ref: "#/components/schemas/Identifier" }
+        approvedVersionId: { $ref: "#/components/schemas/Identifier" }
+        releasedVersionId: { $ref: "#/components/schemas/Identifier" }
         kind: { type: string, enum: [headshot, slides, supporting_file] }
         fileName: { type: string, maxLength: 512 }
         contentType: { type: string, maxLength: 200 }
         sizeBytes: { type: integer, minimum: 0 }
-        state: { type: string, enum: [pending, ready, rejected] }
+        uploaderLabel: { type: string, maxLength: 200 }
+        state: { type: string, enum: [pending_upload, ready, rejected] }
+        reviewState: { type: string, enum: [approved, needs_changes] }
+        reviewNote: { type: string }
+        reviewedAt: { $ref: "#/components/schemas/Timestamp" }
+        reviewVersion: { $ref: "#/components/schemas/Version" }
         version: { $ref: "#/components/schemas/Version" }
+        commentThreadId: { $ref: "#/components/schemas/Identifier" }
+        versionId: { $ref: "#/components/schemas/Identifier" }
+        rejectionReason: { type: string }
         createdAt: { $ref: "#/components/schemas/Timestamp" }
         finalizedAt: { $ref: "#/components/schemas/Timestamp" }
       additionalProperties: false
@@ -4721,9 +4782,23 @@ components:
         submissionId: { $ref: "#/components/schemas/Identifier" }
         taskId: { $ref: "#/components/schemas/Identifier" }
         kind: { type: string, enum: [headshot, slides, supporting_file] }
-        fileName: { type: string, maxLength: 512 }
+        fileName: { type: string, minLength: 1, maxLength: 512 }
         contentType: { type: string, maxLength: 200 }
         sizeBytes: { type: integer, minimum: 1 }
+        expectedLatestVersion: { $ref: "#/components/schemas/Version" }
+        supersedesAssetId: { $ref: "#/components/schemas/Identifier" }
+      additionalProperties: false
+    OrganizerHeadshotUploadAuthorization:
+      type: object
+      required: [participantId, kind, fileName, contentType, sizeBytes]
+      properties:
+        participantId: { $ref: "#/components/schemas/Identifier" }
+        submissionId: { $ref: "#/components/schemas/Identifier" }
+        kind: { type: string, enum: [headshot] }
+        fileName: { type: string, minLength: 1, maxLength: 120 }
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        sizeBytes: { type: integer, minimum: 1, maximum: 5242880 }
+        expectedLatestVersion: { $ref: "#/components/schemas/Version" }
         supersedesAssetId: { $ref: "#/components/schemas/Identifier" }
       additionalProperties: false
     UploadAuthorizationResponse:
@@ -4732,10 +4807,22 @@ components:
       properties:
         data:
           type: object
-          required: [asset, upload]
+          required: [asset, grant]
           properties:
             asset: { $ref: "#/components/schemas/PortalAsset" }
-            upload: { $ref: "#/components/schemas/Capability" }
+            grant: { $ref: "#/components/schemas/Capability" }
+          additionalProperties: false
+      additionalProperties: false
+    OrganizerHeadshotUploadAuthorizationResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [asset, grant]
+          properties:
+            asset: { $ref: "#/components/schemas/PortalAsset" }
+            grant: { $ref: "#/components/schemas/Capability" }
           additionalProperties: false
       additionalProperties: false
     UploadReceiptResponse:
@@ -4758,9 +4845,13 @@ components:
       additionalProperties: false
     Capability:
       type: object
-      required: [token, expiresAt]
+      required: [method, url, expiresAt]
       properties:
-        token: { type: string, minLength: 32, maxLength: 512, writeOnly: true }
+        method: { type: string, enum: [GET, PUT] }
+        url: { type: string, format: uri-reference }
+        headers:
+          type: object
+          additionalProperties: { type: string }
         expiresAt: { $ref: "#/components/schemas/Timestamp" }
       additionalProperties: false
     AssetFinalize:

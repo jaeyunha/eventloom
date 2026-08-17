@@ -57,7 +57,25 @@ const uploadSchema = z.object({
   contentType: z.string().trim().min(1),
   sizeBytes: z.number().int().positive(),
   supersedesAssetId: z.string().trim().min(1).optional(),
+  expectedLatestVersion: z.number().int().positive().optional(),
 });
+
+const organizerHeadshotUploadSchema = z
+  .object({
+    participantId: z.string().trim().min(1).max(200),
+    submissionId: z.string().trim().min(1).max(200).optional(),
+    kind: z.literal("headshot"),
+    fileName: z.string().trim().min(1).max(120),
+    contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+    sizeBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(5 * 1024 * 1024),
+    supersedesAssetId: z.string().trim().min(1).max(200).optional(),
+    expectedLatestVersion: z.number().int().positive().optional(),
+  })
+  .strict();
 
 const finalizeAssetSchema = z.object({
   state: z.enum(["ready", "rejected"]),
@@ -314,9 +332,23 @@ function normalizePartialTravelLogistics(
   };
 }
 
-/** Never serialize the server-owned R2 key or any capability binding. */
-function publicAsset(asset: SpeakerAsset): Omit<SpeakerAsset, "objectKey" | "tenantId"> {
-  const { objectKey: _objectKey, tenantId: _tenantId, ...safe } = asset;
+/** Never serialize the server-owned R2 key, account id, or any capability binding. */
+function publicAsset(
+  asset: SpeakerAsset,
+): Omit<SpeakerAsset, "objectKey" | "tenantId" | "uploaderAccountId"> {
+  const {
+    objectKey: _objectKey,
+    tenantId: _tenantId,
+    uploaderAccountId: _uploaderAccountId,
+    ...safe
+  } = asset;
+  return safe;
+}
+
+function speakerAsset(
+  asset: SpeakerAsset,
+): Omit<SpeakerAsset, "objectKey" | "tenantId" | "uploaderAccountId" | "reviewedBy"> {
+  const { reviewedBy: _reviewedBy, ...safe } = publicAsset(asset);
   return safe;
 }
 
@@ -637,13 +669,14 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
   });
 
   app.post("/events/:eventId/organizer/profiles/:participantId/headshot", async (context) => {
-    const body = await parseBody(context, uploadSchema);
+    const body = await parseBody(context, organizerHeadshotUploadSchema);
     if (!body) {
       return context.json(
         errorBody(context, "VALIDATION_ERROR", "The headshot upload payload is invalid."),
         400,
       );
     }
+    const idempotencyKey = context.req.header("idempotency-key");
     const result = await dependencies.service.issueOrganizerUploadGrant({
       eventId: context.req.param("eventId"),
       accountId: context.get("speakerAccountId"),
@@ -651,13 +684,19 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.submissionId === undefined ? {} : { submissionId: body.submissionId }),
       ...(body.supersedesAssetId === undefined
         ? {}
-        : { supersedesAssetId: body.supersedesAssetId }),
+        : {
+            supersedesAssetId: body.supersedesAssetId,
+            ...(body.expectedLatestVersion === undefined
+              ? {}
+              : { expectedLatestVersion: body.expectedLatestVersion }),
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          }),
       kind: "headshot",
       fileName: body.fileName,
       contentType: body.contentType,
       sizeBytes: body.sizeBytes,
     });
-    return context.json({ data: { ...result, asset: publicAsset(result.asset) } }, 201);
+    return context.json({ data: { ...result, asset: speakerAsset(result.asset) } }, 201);
   });
 
   app.post("/events/:eventId/organizer/reminders/preview", async (context) => {
@@ -1043,7 +1082,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
     );
     const safeData = {
       ...data,
-      ...(data.assets === undefined ? {} : { assets: data.assets.map(publicAsset) }),
+      ...(data.assets === undefined ? {} : { assets: data.assets.map(speakerAsset) }),
       ...(data.resources === undefined
         ? {}
         : { resources: data.resources.map(publicPublishedResource) }),
@@ -1150,6 +1189,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         400,
       );
     }
+    const idempotencyKey = context.req.header("idempotency-key");
     const result = await dependencies.service.issueUploadGrant({
       eventId: context.req.param("eventId"),
       accountId: context.get("speakerAccountId"),
@@ -1158,13 +1198,19 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.submissionId === undefined ? {} : { submissionId: body.submissionId }),
       ...(body.supersedesAssetId === undefined
         ? {}
-        : { supersedesAssetId: body.supersedesAssetId }),
+        : {
+            supersedesAssetId: body.supersedesAssetId,
+            ...(body.expectedLatestVersion === undefined
+              ? {}
+              : { expectedLatestVersion: body.expectedLatestVersion }),
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          }),
       kind: "headshot",
       fileName: body.fileName,
       contentType: body.contentType,
       sizeBytes: body.sizeBytes,
     });
-    return context.json({ data: { ...result, asset: publicAsset(result.asset) } }, 201);
+    return context.json({ data: { ...result, asset: speakerAsset(result.asset) } }, 201);
   });
   app.patch("/events/:eventId/profiles/:participantId", async (context) => {
     const body = await parseBody(context, organizerProfileSchema);
@@ -1262,6 +1308,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         400,
       );
     }
+    const idempotencyKey = context.req.header("idempotency-key");
     const data = await dependencies.service.issueUploadGrant({
       eventId: context.req.param("eventId"),
       accountId: context.get("speakerAccountId"),
@@ -1274,9 +1321,15 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       sizeBytes: body.sizeBytes,
       ...(body.supersedesAssetId === undefined
         ? {}
-        : { supersedesAssetId: body.supersedesAssetId }),
+        : {
+            supersedesAssetId: body.supersedesAssetId,
+            ...(body.expectedLatestVersion === undefined
+              ? {}
+              : { expectedLatestVersion: body.expectedLatestVersion }),
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          }),
     });
-    return context.json({ data: { ...data, asset: publicAsset(data.asset) } }, 201);
+    return context.json({ data: { ...data, asset: speakerAsset(data.asset) } }, 201);
   });
 
   app.get("/events/:eventId/assets", async (context) => {
@@ -1290,7 +1343,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         ? undefined
         : versionFamilyId,
     );
-    return context.json({ data: assets.map(publicAsset) });
+    return context.json({ data: assets.map(speakerAsset) });
   });
   app.get("/events/:eventId/assets/:assetId/history", async (context) => {
     const assets = await dependencies.service.listAssetHistory(
@@ -1298,7 +1351,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       context.get("speakerAccountId"),
       context.req.param("assetId"),
     );
-    return context.json({ data: assets.map(publicAsset) });
+    return context.json({ data: assets.map(speakerAsset) });
   });
   app.get("/events/:eventId/resources", async (context) => {
     const resources = await dependencies.service.listResources(
@@ -1358,7 +1411,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       state: body.state,
       ...(body.rejectionReason === undefined ? {} : { rejectionReason: body.rejectionReason }),
     });
-    return context.json({ data: publicAsset(asset) });
+    return context.json({ data: speakerAsset(asset) });
   });
 
   app.post("/events/:eventId/assets/:assetId/upload-authorization", async (context) => {
@@ -1367,7 +1420,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       accountId: context.get("speakerAccountId"),
       assetId: context.req.param("assetId"),
     });
-    return context.json({ data: { ...data, asset: publicAsset(data.asset) } });
+    return context.json({ data: { ...data, asset: speakerAsset(data.asset) } });
   });
 
   app.post("/events/:eventId/assets/:assetId/download", async (context) => {

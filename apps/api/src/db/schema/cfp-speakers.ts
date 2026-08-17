@@ -365,6 +365,7 @@ export const speakerTasks = sqliteTable(
     allowedMimeTypesJson: j("allowed_mime_types_json"),
     maxBytes: integer("max_bytes"),
     acceptedAssetKindsJson: j("accepted_asset_kinds_json"),
+    replacementBaselineAssetId: text("replacement_baseline_asset_id"),
     version: integer().notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -389,6 +390,11 @@ export const speakerTasks = sqliteTable(
       t.dueAt,
     ),
     index("speaker_tasks_submission_idx").on(t.organizationId, t.eventId, t.submissionId),
+    index("speaker_tasks_replacement_baseline_idx").on(
+      t.organizationId,
+      t.eventId,
+      t.replacementBaselineAssetId,
+    ),
     check("speaker_tasks_type_check", sql`${t.type} in('form','upload','action')`),
     check("speaker_tasks_owner_check", sql`${t.owner} in('speaker','organizer')`),
     check(
@@ -496,6 +502,10 @@ export const speakerAssets = sqliteTable(
     fileName: text("file_name").notNull(),
     contentType: text("content_type").notNull(),
     sizeBytes: integer("size_bytes").notNull(),
+    uploaderAccountId: text("uploader_account_id"),
+    uploaderLabel: text("uploader_label"),
+    creationIdempotencyKey: text("creation_idempotency_key"),
+    creationRequestDigest: text("creation_request_digest"),
     state: text().notNull(),
     version: integer().notNull(),
     versionFamilyId: text("version_family_id").notNull(),
@@ -528,11 +538,17 @@ export const speakerAssets = sqliteTable(
       columns: [t.organizationId, t.eventId, t.taskId],
       foreignColumns: [speakerTasks.organizationId, speakerTasks.eventId, speakerTasks.id],
     }).onDelete("restrict"),
+    foreignKey({ columns: [t.uploaderAccountId], foreignColumns: [authUsers.id] }).onDelete(
+      "set null",
+    ),
     foreignKey({ columns: [t.supersedesAssetId], foreignColumns: [t.id] }).onDelete("restrict"),
     unique().on(t.objectKey),
     unique().on(t.organizationId, t.id),
     unique().on(t.organizationId, t.eventId, t.id),
     unique().on(t.organizationId, t.eventId, t.versionFamilyId, t.version),
+    uniqueIndex("speaker_assets_creation_idempotency_uidx")
+      .on(t.organizationId, t.eventId, t.creationIdempotencyKey)
+      .where(sql`${t.creationIdempotencyKey} IS NOT NULL`),
     index("speaker_assets_participant_idx").on(
       t.organizationId,
       t.eventId,
