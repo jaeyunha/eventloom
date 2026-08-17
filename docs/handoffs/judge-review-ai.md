@@ -6,7 +6,7 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact source-fix head: `8a50cd0cbe0a5356092fc520ec2c0a00db7afb17`
+- Exact source-fix head: `6f52bafc2173f175b6b44ec32460fbbce0a2cff2`
 - The final branch tip may add metadata-only handoff synchronization; review
   the source-fix head and this document together.
 - PR: https://github.com/jaeyunha/eventloom/pull/34
@@ -39,7 +39,7 @@
 - Merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63, and #66
   remains present.
 
-## Exact-head verification at 8a50cd0c
+## Exact-head verification at 6f52bafc
 
 - Focused matrix: PASS — 10 files, 305 passed, 1 skipped, plus targeted
   rationale, scoped acceptance/rejection, and submission-revision CAS
@@ -64,11 +64,11 @@
 
 These must all inspect the same final pushed head and PASS before merge:
 
-- [ ] Security — exact source-fix head `8a50cd0cbe0a5356092fc520ec2c0a00db7afb17`
-- [ ] Code quality — exact source-fix head `8a50cd0cbe0a5356092fc520ec2c0a00db7afb17`
-- [ ] Functional/visual QA — exact source-fix head `8a50cd0cbe0a5356092fc520ec2c0a00db7afb17`
-- [ ] Context/dependencies — exact source-fix head `8a50cd0cbe0a5356092fc520ec2c0a00db7afb17`
-- [ ] Goal/compliance — exact source-fix head `8a50cd0cbe0a5356092fc520ec2c0a00db7afb17`
+- [ ] Security — exact source-fix head `6f52bafc2173f175b6b44ec32460fbbce0a2cff2`
+- [ ] Code quality — exact source-fix head `6f52bafc2173f175b6b44ec32460fbbce0a2cff2`
+- [ ] Functional/visual QA — exact source-fix head `6f52bafc2173f175b6b44ec32460fbbce0a2cff2`
+- [ ] Context/dependencies — exact source-fix head `6f52bafc2173f175b6b44ec32460fbbce0a2cff2`
+- [ ] Goal/compliance — exact source-fix head `6f52bafc2173f175b6b44ec32460fbbce0a2cff2`
 
 ## Remaining tasks
 
