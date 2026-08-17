@@ -4183,6 +4183,16 @@ describe("organizer task reminder offsets", () => {
         reminderOffsetsMinutes: [Number.MAX_SAFE_INTEGER + 1],
       }),
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    await expect(
+      service.updateOrganizerTaskReminderOffsets({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: current.id,
+        expectedVersion: current.version,
+        reminderOffsetsMinutes: [30],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
     expect(repository.tasks.find((candidate) => candidate.id === current.id)?.version).toBe(2);
 
     await expect(
@@ -4354,6 +4364,7 @@ describe("canonical speaker admin routes", () => {
       { reminderOffsetsMinutes: [60] },
       { expectedVersion: 2, reminderOffsetsMinutes: [60, 60] },
       { expectedVersion: 2, reminderOffsetsMinutes: [-1] },
+      { expectedVersion: 2, reminderOffsetsMinutes: [30] },
       { expectedVersion: 2, reminderOffsetsMinutes: [60], title: "Not allowed" },
     ]) {
       const invalid = await app.request(endpoint, {

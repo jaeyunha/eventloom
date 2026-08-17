@@ -115,7 +115,8 @@ const reminderOffsetSchema = z
   .number()
   .int()
   .nonnegative()
-  .refine(Number.isSafeInteger, "Expected a safe integer.");
+  .refine(Number.isSafeInteger, "Expected a safe integer.")
+  .refine((value) => value % 60 === 0, "Expected a whole-hour increment in minutes.");
 
 const organizerTaskReminderOffsetsSchema = z
   .object({

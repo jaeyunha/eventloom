@@ -469,13 +469,13 @@ function unique(values: readonly string[]): string[] {
 
 function normalizeReminderOffsets(values: readonly number[]): number[] {
   if (
-    values.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    values.some((value) => !Number.isSafeInteger(value) || value < 0 || value % 60 !== 0) ||
     new Set(values).size !== values.length
   ) {
     throw new SpeakerServiceError(
       "VALIDATION_ERROR",
       400,
-      "Reminder offsets must be unique non-negative safe integers.",
+      "Reminder offsets must be unique non-negative safe integers in whole-hour increments (multiples of 60 minutes).",
     );
   }
   return [...values].sort((left, right) => left - right);

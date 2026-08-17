@@ -834,7 +834,7 @@ const recoveryIdempotencyKey =
   "reminder:tenant-1:event-1:automatic:task:task-1:application-1:2026-08-09T12:00:00.000Z";
 const recoveryRunId = "reminder-run:tenant-1:event-1:automatic:2026-08-09T12:00:00.000Z";
 
-function recoveryRun(): ReminderRun {
+function recoveryRun(state: "pending" | "running" = "running"): ReminderRun {
   return {
     id: recoveryRunId,
     organizationId: tenantId,
@@ -847,7 +847,7 @@ function recoveryRun(): ReminderRun {
     queuedCount: 0,
     skippedCount: 0,
     failedCount: 0,
-    state: "running",
+    state,
     configurationFailure: null,
     actorId: automation.userId,
     startedAt: now,
@@ -890,11 +890,35 @@ function recoveryDispatch(status: "candidate" | "eligible" | "failed"): Reminder
 
 class FakeReminderOutbox implements ReminderOutboxDelivery {
   readonly requests: Parameters<ReminderOutboxDelivery["enqueue"]>[0][] = [];
+  readonly queuedRequests: Parameters<ReminderOutboxDelivery["enqueue"]>[0][] = [];
+  readonly requeueRequests: Parameters<ReminderOutboxDelivery["requeuePending"]>[0][] = [];
+  readonly pending = new Map<string, Parameters<ReminderOutboxDelivery["enqueue"]>[0]>();
   fail = false;
+
+  async requeuePending(input: Parameters<ReminderOutboxDelivery["requeuePending"]>[0]) {
+    this.requeueRequests.push(input);
+    let requeued = 0;
+    for (const [dispatchId, request] of this.pending) {
+      if (
+        request.organizationId === input.organizationId &&
+        (input.eventId === undefined || request.eventId === input.eventId)
+      ) {
+        this.queuedRequests.push(request);
+        this.pending.delete(dispatchId);
+        requeued += 1;
+      }
+    }
+    return { requeued };
+  }
 
   async enqueue(request: Parameters<ReminderOutboxDelivery["enqueue"]>[0]) {
     this.requests.push(request);
-    if (this.fail) throw new Error("outbox unavailable");
+    if (this.fail) {
+      this.pending.set(request.dispatchId, request);
+      throw new Error("outbox unavailable");
+    }
+    this.pending.delete(request.dispatchId);
+    this.queuedRequests.push(request);
     return { outboxJobId: `job-${this.requests.length}` };
   }
 }
@@ -936,6 +960,47 @@ function reminderFixture(
 }
 
 describe("reminder domain", () => {
+  it.each(["pending", "running"] as const)(
+    "resumes a stuck %s run with no dispatches",
+    async (state) => {
+      const repository = new InMemoryReminderRepository({ runs: [recoveryRun(state)] });
+      const outbox = new FakeReminderOutbox();
+      const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+        clock: () => new Date("2026-08-09T12:30:00.000Z"),
+        reminders: {
+          repository,
+          source: {
+            async listCandidates() {
+              return {
+                audienceType: "task",
+                audienceRevision: "revision-1",
+                candidates: [reminderCandidate()],
+              };
+            },
+          },
+          outbox,
+        },
+      });
+
+      const resumed = await service.runAutomaticReminders(automation, {
+        eventId,
+        scheduledAt: "2026-08-09T12:30:00.000Z",
+      });
+
+      expect(resumed).toMatchObject({
+        id: recoveryRunId,
+        state: "completed",
+        candidateCount: 1,
+        eligibleCount: 1,
+        queuedCount: 1,
+      });
+      expect(outbox.requests).toHaveLength(1);
+      expect(await repository.listDispatches(tenantId, eventId, recoveryRunId)).toEqual([
+        expect.objectContaining({ runId: recoveryRunId, status: "queued" }),
+      ]);
+    },
+  );
+
   it.each(["candidate", "eligible", "failed"] as const)(
     "recovers an existing %s dispatch in its original run during a later hourly run",
     async (status) => {
@@ -1049,6 +1114,79 @@ describe("reminder domain", () => {
     });
   });
 
+  it("sweeps a pending prior-day outbox row while allowing the new cadence dispatch", async () => {
+    let candidates = [reminderCandidate()];
+    const repository = new InMemoryReminderRepository();
+    const outbox = new FakeReminderOutbox();
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      clock: () => new Date("2026-08-10T00:05:00.000Z"),
+      reminders: {
+        repository,
+        source: {
+          async listCandidates() {
+            return {
+              audienceType: "task",
+              audienceRevision: "revision-midnight",
+              candidates,
+            };
+          },
+        },
+        outbox,
+      },
+    });
+    outbox.fail = true;
+    const originalRun = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-09T23:05:00.000Z",
+    });
+    const [originalDispatch] = await repository.listDispatches(tenantId, eventId, originalRun.id);
+    if (originalDispatch === undefined) throw new Error("Expected the original dispatch.");
+    expect(originalDispatch).toMatchObject({
+      runId: originalRun.id,
+      status: "failed",
+      failureMetadata: { stage: "enqueue" },
+    });
+
+    outbox.fail = false;
+    candidates = [
+      reminderCandidate({
+        cadenceWindow: "2026-08-10T00:00:00.000Z",
+        nextEligibleAt: "2026-08-11T00:00:00.000Z",
+      }),
+    ];
+    const newDayRun = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-10T00:05:00.000Z",
+    });
+    const [newDayDispatch] = await repository.listDispatches(tenantId, eventId, newDayRun.id);
+    if (newDayDispatch === undefined) throw new Error("Expected the new-day dispatch.");
+
+    expect(originalDispatch.runId).toBe(originalRun.id);
+    expect(newDayDispatch).toMatchObject({ runId: newDayRun.id, status: "queued" });
+    expect(
+      outbox.queuedRequests.filter((request) => request.dispatchId === originalDispatch.id),
+    ).toHaveLength(1);
+    expect(
+      outbox.queuedRequests.filter((request) => request.dispatchId === newDayDispatch.id),
+    ).toHaveLength(1);
+    expect(outbox.requeueRequests).toEqual(
+      expect.arrayContaining([{ organizationId: tenantId, eventId }]),
+    );
+
+    const recovered = await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      runId: originalRun.id,
+      dispatchId: originalDispatch.id,
+      status: "provider_accepted",
+      providerMessageId: "provider-original",
+    });
+    expect(recovered).toMatchObject({
+      runId: originalRun.id,
+      status: "provider_accepted",
+      providerMessageId: "provider-original",
+    });
+  });
+
   it("uses one hourly automatic run and one cadence dispatch across later Cron runs", async () => {
     const candidate = reminderCandidate();
     const { service, repository, outbox } = reminderFixture([candidate]);
@@ -1064,7 +1202,7 @@ describe("reminder domain", () => {
       eventId,
       scheduledAt: "2026-08-09T13:05:00.000Z",
     });
-    expect(replay.id).toBe(first.id);
+    expect(replay).toEqual(first);
     expect(later.id).not.toBe(first.id);
     expect(first).toMatchObject({
       candidateCount: 1,
@@ -1174,8 +1312,19 @@ describe("reminder domain", () => {
       }),
       "COMMUNICATION_CONFLICT",
     );
+    await expectCode(
+      service.recordReminderDispatchStatus(automation, {
+        eventId,
+        runId: "wrong-run",
+        dispatchId: first.id,
+        status: "provider_accepted",
+        providerMessageId: "provider-1",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
     await service.recordReminderDispatchStatus(automation, {
       eventId,
+      runId: first.runId,
       dispatchId: first.id,
       status: "provider_accepted",
       providerMessageId: "provider-1",

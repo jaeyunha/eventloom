@@ -1721,11 +1721,14 @@ export function parseReminderOffsetDraft(
   if (value.trim().length === 0) return { ok: true, offsets: [] };
   const parts = value.split(",").map((part) => part.trim());
   if (parts.some((part) => !/^\d+$/u.test(part))) {
-    return { ok: false, message: "Enter whole minutes separated by commas." };
+    return { ok: false, message: "Enter minute values separated by commas." };
   }
   const offsets = parts.map(Number);
-  if (offsets.some((offset) => !Number.isSafeInteger(offset) || offset < 0)) {
-    return { ok: false, message: "Each reminder offset must be a non-negative whole minute." };
+  if (offsets.some((offset) => !Number.isSafeInteger(offset) || offset < 0 || offset % 60 !== 0)) {
+    return {
+      ok: false,
+      message: "Each reminder offset must be a non-negative whole-hour increment in minutes.",
+    };
   }
   if (new Set(offsets).size !== offsets.length) {
     return { ok: false, message: "Remove duplicate reminder offsets before saving." };
@@ -1815,7 +1818,9 @@ export function SpeakerReminderOffsetEditor({
           }}
           placeholder="10080, 1440"
         />
-        <p className={styles.muted}>Clear the field to disable scheduled reminders.</p>
+        <p className={styles.muted}>
+          Use whole-hour increments in minutes. Clear the field to disable scheduled reminders.
+        </p>
       </Field>
       <div className={styles.actions}>
         <Button type="submit" size="sm" disabled={status === "pending"}>

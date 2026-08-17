@@ -2195,37 +2195,108 @@ export class D1SpeakerRepository
       statements.push(
         this.#db
           .prepare(
-            "DELETE FROM speaker_task_dependencies WHERE organization_id = ? AND event_id = ? AND task_id = ?",
+            `DELETE FROM speaker_task_dependencies
+              WHERE organization_id = ? AND event_id = ? AND task_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM speaker_tasks
+                   WHERE organization_id = ? AND event_id = ? AND id = ?
+                     AND version = ? AND updated_at = ?
+                )`,
           )
-          .bind(scope.organizationId, task.eventId, task.id),
+          .bind(
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            task.version,
+            task.updatedAt,
+          ),
         this.#db
           .prepare(
-            "DELETE FROM speaker_task_reminder_offsets WHERE organization_id = ? AND event_id = ? AND task_id = ?",
+            `DELETE FROM speaker_task_reminder_offsets
+              WHERE organization_id = ? AND event_id = ? AND task_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM speaker_tasks
+                   WHERE organization_id = ? AND event_id = ? AND id = ?
+                     AND version = ? AND updated_at = ?
+                )`,
           )
-          .bind(scope.organizationId, task.eventId, task.id),
+          .bind(
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            task.version,
+            task.updatedAt,
+          ),
       );
     }
     for (const dependencyId of task.dependencyIds)
       statements.push(
         this.#db
           .prepare(
-            "INSERT INTO speaker_task_dependencies (organization_id, event_id, task_id, dependency_task_id) VALUES (?, ?, ?, ?)",
+            `INSERT INTO speaker_task_dependencies
+              (organization_id, event_id, task_id, dependency_task_id)
+             SELECT ?, ?, ?, ?
+              WHERE EXISTS (
+                SELECT 1 FROM speaker_tasks
+                 WHERE organization_id = ? AND event_id = ? AND id = ?
+                   AND version = ? AND updated_at = ?
+              )`,
           )
-          .bind(scope.organizationId, task.eventId, task.id, dependencyId),
+          .bind(
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            dependencyId,
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            task.version,
+            task.updatedAt,
+          ),
       );
     for (const offset of task.reminderOffsetsMinutes)
       statements.push(
         this.#db
           .prepare(
-            "INSERT INTO speaker_task_reminder_offsets (organization_id, event_id, task_id, offset_minutes) VALUES (?, ?, ?, ?)",
+            `INSERT INTO speaker_task_reminder_offsets
+              (organization_id, event_id, task_id, offset_minutes)
+             SELECT ?, ?, ?, ?
+              WHERE EXISTS (
+                SELECT 1 FROM speaker_tasks
+                 WHERE organization_id = ? AND event_id = ? AND id = ?
+                   AND version = ? AND updated_at = ?
+              )`,
           )
-          .bind(scope.organizationId, task.eventId, task.id, offset),
+          .bind(
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            offset,
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            task.version,
+            task.updatedAt,
+          ),
       );
     if (command.audit !== undefined) {
       statements.push(
         this.#db
           .prepare(
-            "INSERT INTO audit_events (id,tenant_id,actor_type,actor_id,action,resource_type,resource_id,details_json,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            `INSERT INTO audit_events
+              (id,tenant_id,actor_type,actor_id,action,resource_type,resource_id,details_json,occurred_at)
+             SELECT ?,?,?,?,?,?,?,?,?
+              WHERE EXISTS (
+                SELECT 1 FROM speaker_tasks
+                 WHERE organization_id = ? AND event_id = ? AND id = ?
+                   AND version = ? AND updated_at = ?
+              )`,
           )
           .bind(
             command.audit.id,
@@ -2242,6 +2313,11 @@ export class D1SpeakerRepository
               previousReminderOffsetsMinutes: command.audit.previousReminderOffsetsMinutes,
               reminderOffsetsMinutes: task.reminderOffsetsMinutes,
             }),
+            task.updatedAt,
+            scope.organizationId,
+            task.eventId,
+            task.id,
+            task.version,
             task.updatedAt,
           ),
       );

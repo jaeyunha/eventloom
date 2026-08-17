@@ -123,7 +123,7 @@ describe("organizer reminder offset controls", () => {
     });
   });
 
-  it.each(["60, 60", "-1", "1.5", "not-a-number", "9007199254740992"])(
+  it.each(["60, 60", "-1", "1", "30", "1.5", "not-a-number", "9007199254740992"])(
     "rejects an invalid reminder offset draft: %s",
     (draft) => {
       expect(parseReminderOffsetDraft(draft)).toEqual({
@@ -159,7 +159,9 @@ describe("organizer reminder offset controls", () => {
 
     expect(markup).toContain(`aria-label="Reminder offsets in minutes for ${task.title}"`);
     expect(markup).toContain("Save reminder schedule");
-    expect(markup).toContain("Clear the field to disable scheduled reminders.");
+    expect(markup).toContain(
+      "Use whole-hour increments in minutes. Clear the field to disable scheduled reminders.",
+    );
     expect(markup).not.toContain("outside_window");
   });
 });

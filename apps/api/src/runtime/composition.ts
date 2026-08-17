@@ -575,19 +575,22 @@ export async function runScheduledReminders(
       .map((event) => event.id)
       .sort((left, right) => left.localeCompare(right));
     for (const eventId of eventIds) {
-      await communications.runAutomaticReminders(
-        {
-          tenantId: organizationId,
-          userId: "scheduled-reminder-dispatcher",
-          kind: "automation",
-          grants: [{ eventId, role: "delivery" }],
-        },
-        {
-          organizationId,
-          eventId,
-          scheduledAt: scheduledAt.toISOString(),
-        },
-      );
+      const actor = {
+        tenantId: organizationId,
+        userId: "scheduled-reminder-dispatcher",
+        kind: "automation" as const,
+        grants: [{ eventId, role: "delivery" as const }],
+      };
+      try {
+        await communications.requeuePendingReminders(actor, { organizationId, eventId });
+      } catch {
+        // The run performs candidate-level recovery even when a pending wakeup still fails.
+      }
+      await communications.runAutomaticReminders(actor, {
+        organizationId,
+        eventId,
+        scheduledAt: scheduledAt.toISOString(),
+      });
     }
   }
 }
@@ -652,6 +655,7 @@ function createOutboxDeliveryStatusRecorder(
           {
             organizationId: input.tenantId,
             eventId: input.target.eventId,
+            runId: input.target.runId,
             dispatchId: input.target.dispatchId,
             status: input.status,
             ...(input.providerMessageId === undefined
