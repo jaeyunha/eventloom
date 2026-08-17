@@ -5,6 +5,7 @@ import { DecisionEditor } from "./organizer-decision-editor";
 import type { DecisionStatus } from "./organizer-decision-status";
 import type { OrganizerWorkspaceViewController } from "./organizer-view-controller";
 import { OrganizerDecisionTable } from "./organizer-view-decision-table";
+import { OrganizerSubmittedReviews } from "./organizer-view-submitted-reviews";
 export function OrganizerDecisionsPanel({
   controller,
 }: Readonly<{ controller: OrganizerWorkspaceViewController }>) {
@@ -32,6 +33,7 @@ export function OrganizerDecisionsPanel({
     decisionEditorRef,
     exportResults,
     setView,
+    reviewerMembers,
   } = controller;
   if (seed.status === "draft") {
     return (
@@ -168,6 +170,13 @@ export function OrganizerDecisionsPanel({
           className={styles.selectedDecisionEditor}
           tabIndex={-1}
         >
+          <OrganizerSubmittedReviews
+            reviews={seed.submittedReviews.filter(
+              (review) =>
+                review.submissionId === selectedAggregate.id && review.roundId === selectedRoundId,
+            )}
+            reviewerMembers={reviewerMembers}
+          />
           <DecisionEditor
             key={selectedAggregate.id}
             aggregate={selectedAggregate}

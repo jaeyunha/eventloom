@@ -72,8 +72,10 @@ class StaleAssignmentRepository extends InMemoryEvaluationRepository {
 }
 class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   planGate: Promise<void> | null = null;
+  planListStarted: (() => void) | null = null;
   planListCalls = 0;
   organizerWorkspaceCalls = 0;
+  organizerWorkspaceStarted: (() => void) | null = null;
   decisionCalls = 0;
   workspaceCalls = 0;
   assignmentListCalls = 0;
@@ -83,6 +85,7 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
 
   override async listPlans(tenantId: string, requestedEventId?: string) {
     this.planListCalls += 1;
+    this.planListStarted?.();
     const gate = this.planGate;
     if (gate !== null) await gate;
     return super.listPlans(tenantId, requestedEventId);
@@ -103,6 +106,7 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
     requestedEventId: string,
   ): Promise<OrganizerWorkspaceRecords> {
     this.organizerWorkspaceCalls += 1;
+    this.organizerWorkspaceStarted?.();
     const gate = this.batchGate;
     if (gate !== null) await gate;
     if (this.organizerWorkspaceFailure !== null) throw this.organizerWorkspaceFailure;
@@ -125,11 +129,13 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
 
   resetCounts(): void {
     this.planGate = null;
+    this.planListStarted = null;
     this.planListCalls = 0;
     this.workspaceCalls = 0;
     this.assignmentListCalls = 0;
     this.reviewListCalls = 0;
     this.organizerWorkspaceCalls = 0;
+    this.organizerWorkspaceStarted = null;
     this.decisionCalls = 0;
   }
 }
@@ -157,6 +163,7 @@ class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
   omitMaterials = false;
   failure: Error | null = null;
   organizerListCalls = 0;
+  organizerListStarted: (() => void) | null = null;
   organizerBatchGate: Promise<void> | null = null;
 
   override async getSubmissionForReview(
@@ -180,6 +187,7 @@ class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
   }
   override async listSubmissionsForOrganizer(requestedTenantId: string, requestedEventId: string) {
     this.organizerListCalls += 1;
+    this.organizerListStarted?.();
     const gate = this.organizerBatchGate;
     if (gate !== null) await gate;
     return super.listSubmissionsForOrganizer(requestedTenantId, requestedEventId);
@@ -190,6 +198,7 @@ class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
     this.batchCalls = 0;
     this.lastLookups = [];
     this.organizerListCalls = 0;
+    this.organizerListStarted = null;
     this.organizerBatchGate = null;
   }
 }
@@ -331,6 +340,120 @@ async function expectEvaluationError(
 }
 
 describe("evaluation plans and assignments", () => {
+  it("returns submitted organizer comments while withholding reviewer drafts", async () => {
+    const { service, repository } = await fixture({
+      reviewsPerSubmission: 2,
+      maxAssignmentsPerReviewer: 2,
+    });
+    const assignments = await service.assignReviewers(organizer, {
+      planId: "plan-1",
+      roundId: round.id,
+      submissionId: submission.id,
+      reviewerIds: ["reviewer-submitted", "reviewer-draft"],
+    });
+    const submittedAssignment = assignments.find(
+      (assignment) => assignment.reviewerId === "reviewer-submitted",
+    );
+    const draftAssignment = assignments.find(
+      (assignment) => assignment.reviewerId === "reviewer-draft",
+    );
+    if (submittedAssignment === undefined || draftAssignment === undefined) {
+      throw new Error("Expected submitted and draft assignment fixtures.");
+    }
+
+    const submittedReview = await service.saveReview(
+      reviewer(submittedAssignment.reviewerId),
+      submittedAssignment.id,
+      {
+        scores: [
+          { criterionId: "quality", value: 4, origin: "human" },
+          { criterionId: "relevance", value: 8, origin: "human" },
+        ],
+        comment: "Submitted committee evidence.",
+      },
+    );
+    await service.submitReview(
+      reviewer(submittedAssignment.reviewerId),
+      submittedAssignment.id,
+      submittedReview.version,
+    );
+    await service.saveReview(reviewer(draftAssignment.reviewerId), draftAssignment.id, {
+      scores: [
+        { criterionId: "quality", value: 3, origin: "human" },
+        { criterionId: "relevance", value: 6, origin: "human" },
+      ],
+      comment: "Private draft evidence.",
+    });
+
+    const workspace = await service.getOrganizerWorkspace(organizer, eventId);
+
+    expect(workspace.submittedReviews).toEqual([
+      expect.objectContaining({
+        submissionId: submission.id,
+        reviewerId: submittedAssignment.reviewerId,
+        roundId: round.id,
+        comment: "Submitted committee evidence.",
+      }),
+    ]);
+    expect(JSON.stringify(workspace.submittedReviews)).not.toContain("Private draft evidence.");
+    await expectEvaluationError(
+      service.getOrganizerWorkspace(reviewer(submittedAssignment.reviewerId), eventId),
+      "EVALUATION_FORBIDDEN",
+    );
+
+    const persistedAssignment = await repository.getAssignment(tenantId, submittedAssignment.id);
+    if (persistedAssignment === null) {
+      throw new Error("Expected the submitted assignment to remain persisted.");
+    }
+    await service.replaceAssignment(organizer, submittedAssignment.id, {
+      replacementReviewerId: "reviewer-replacement",
+      expectedVersion: persistedAssignment.version,
+      reason: "The original reviewer became unavailable.",
+    });
+    await expect(service.getOrganizerWorkspace(organizer, eventId)).resolves.toMatchObject({
+      submittedReviews: [],
+    });
+  });
+
+  it("removes submitted comments and counted scores after a reviewer declares conflict", async () => {
+    const { service } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const actor = reviewer(assignment.reviewerId);
+    const draft = await service.saveReview(actor, assignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+      comment: "Submitted before conflict declaration.",
+    });
+    const submitted = await service.submitReview(actor, assignment.id, draft.version);
+    expect(submitted.submittedAt).not.toBeNull();
+
+    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
+
+    const workspace = await service.getOrganizerWorkspace(organizer, eventId);
+    const aggregate = workspace.aggregates.find(
+      (candidate) => candidate.roundId === round.id && candidate.submissionId === submission.id,
+    );
+
+    expect(aggregate).toMatchObject({
+      roundId: round.id,
+      submissionId: submission.id,
+      submittedReviewCount: 0,
+      averageWeightedTotal: null,
+    });
+    expect(workspace.submittedReviews).toEqual([]);
+    await expect(
+      service.listSubmittedReviews(organizer, "plan-1", round.id, submission.id),
+    ).resolves.toEqual([]);
+    await expect(
+      service.getAggregate(organizer, "plan-1", round.id, submission.id),
+    ).resolves.toMatchObject({
+      submittedReviewCount: 0,
+      averageWeightedTotal: null,
+    });
+  });
+
   it("loads reviewer work across every granted organization scope", async () => {
     const repository = new MultiTenantWorkspaceRepository();
     const service = new EvaluationService(
@@ -1223,8 +1346,17 @@ describe("evaluation plans and assignments", () => {
     repository.planGate = gate;
     repository.batchGate = gate;
     submissions.organizerBatchGate = gate;
+    const planListStarted = new Promise<void>((resolve) => {
+      repository.planListStarted = resolve;
+    });
+    const organizerWorkspaceStarted = new Promise<void>((resolve) => {
+      repository.organizerWorkspaceStarted = resolve;
+    });
+    const organizerListStarted = new Promise<void>((resolve) => {
+      submissions.organizerListStarted = resolve;
+    });
     const pending = service.getOrganizerWorkspace(organizer, eventId);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.all([planListStarted, organizerWorkspaceStarted, organizerListStarted]);
 
     expect(repository.planListCalls).toBe(1);
     expect(repository.organizerWorkspaceCalls).toBe(1);
