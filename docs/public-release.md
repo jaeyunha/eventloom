@@ -102,9 +102,11 @@ bun audit
       covered by the owner decision above)
 - [x] Run `git status --short` from a clean candidate and inspect the complete
       diff. (clean at `f5b1406d`)
-- [ ] Record authenticated and unauthenticated GitHub/Forge visibility immediately
-      before and after the external visibility change. (before state recorded
-      2026-08-18T02:39:45Z: both PRIVATE, anonymous `ls-remote` fails on both)
+- [x] Record authenticated and unauthenticated GitHub/Forge visibility immediately
+      before and after the external visibility change. (before 2026-08-18T02:39:45Z:
+      both PRIVATE, anonymous access fails; after 2026-08-18T02:44:59Z: GitHub
+      `jaeyunha/eventloom` and Forge `jaeyunha/open-sessionboard` both PUBLIC,
+      anonymous `ls-remote` returns `eb05786d` on both)
 - [x] Rotate any credential if the full-history scan finds it anywhere.
       (2026-08-18 scans found no credentials — nothing to rotate)
 
