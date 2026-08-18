@@ -63,6 +63,15 @@ export function scoreableRubricCriteria(round: ReviewRound): readonly RubricCrit
  * source text, and at least one explanatory token beyond a copy of the source.
  * Quality judgment beyond this belongs to the human reviewer; no word lists.
  */
+export function isEnglishSuggestionRationale(value: string): boolean {
+  const letters = [...value.normalize("NFC")].filter((character) => /\p{L}/u.test(character));
+  return (
+    letters.length > 0 &&
+    letters.every((character) => /\p{Script=Latin}/u.test(character)) &&
+    letters.some((character) => /[A-Za-z]/u.test(character))
+  );
+}
+
 export function isMeaningfulSuggestionRationale(value: string, groundingText: string): boolean {
   const normalized = normalizeGroundingText(value);
   const tokens = lexicalTokens(normalized);

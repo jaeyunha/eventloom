@@ -5,6 +5,7 @@ import {
   advisoryUnsupported,
   closed,
   conflict,
+  EvaluationError,
   forbidden,
   invalidInput,
   notFound,
@@ -16,6 +17,7 @@ import type {
 } from "./repository";
 import { MAX_REVISION_DEPTH, revisionScheduleSnapshot } from "./revision-schedule-sync";
 import {
+  isEnglishSuggestionRationale,
   isMeaningfulSuggestionRationale,
   parseSubmissionExcerptReference,
   scoreableRubricCriteria,
@@ -2756,6 +2758,7 @@ export class EvaluationService {
     if (reusable !== undefined && input.regenerate !== true) {
       return reusable;
     }
+    const visibleSubmission = this.#visibleSubmission(plan, round, material);
     const providerInput: EvaluationSuggestionProviderInput = {
       tenantId: actor.tenantId,
       eventId: plan.eventId,
@@ -2768,7 +2771,9 @@ export class EvaluationService {
       rubricId: round.rubric.id,
       submissionVersion: submissionRevision,
       round,
-      submission: this.#visibleSubmission(plan, round, material),
+      submission: visibleSubmission.identityRedacted
+        ? { ...visibleSubmission, answers: {} }
+        : visibleSubmission,
     };
     let result: EvaluationSuggestionProviderResult;
     try {
@@ -2830,8 +2835,23 @@ export class EvaluationService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.#repository.putSuggestion(suggestion, null, submissionRevision);
-    return suggestion;
+    try {
+      await this.#repository.putSuggestion(suggestion, null, submissionRevision);
+      return suggestion;
+    } catch (error) {
+      if (!(error instanceof EvaluationError) || error.code !== "EVALUATION_CONFLICT") throw error;
+      const concurrent = (await this.#repository.listSuggestions(actor.tenantId, plan.id)).find(
+        (candidate) =>
+          candidate.roundId === round.id &&
+          candidate.submissionId === material.id &&
+          candidate.assignmentId === null &&
+          candidate.status !== "stale" &&
+          candidate.rubricRevision === rubricRevision &&
+          candidate.submissionRevision === submissionRevision,
+      );
+      if (concurrent === undefined) throw error;
+      return concurrent;
+    }
   }
 
   /** Organizer-only: list shared round suggestions (one per submission per generation). */
@@ -2904,7 +2924,7 @@ export class EvaluationService {
     const scoreable = new Map(
       scoreableRubricCriteria(round).map((criterion) => [criterion.id, criterion]),
     );
-    const numericAuditValues: Record<string, number> = {};
+    const auditValues: Record<string, number | string> = {};
     for (const [criterionId, value] of Object.entries(input.valueByCriterion)) {
       const criterion = scoreable.get(criterionId);
       if (criterion === undefined) {
@@ -2917,7 +2937,7 @@ export class EvaluationService {
             (typeof value === "number" && criterion.minimum + index === value),
         );
         if (!valid) throw invalidInput("The override value is outside the configured options.");
-        if (typeof value === "number") numericAuditValues[criterionId] = value;
+        auditValues[criterionId] = value;
       } else if (
         typeof value !== "number" ||
         !Number.isFinite(value) ||
@@ -2926,7 +2946,7 @@ export class EvaluationService {
       ) {
         throw invalidInput("The override value is outside the current rubric.");
       } else {
-        numericAuditValues[criterionId] = value;
+        auditValues[criterionId] = value;
       }
     }
     if (Object.keys(input.valueByCriterion).length === 0) {
@@ -2949,9 +2969,7 @@ export class EvaluationService {
       ...(input.reason !== undefined && input.reason.trim().length > 0
         ? { reason: input.reason.trim() }
         : {}),
-      ...(Object.keys(numericAuditValues).length > 0
-        ? { valueByCriterion: numericAuditValues }
-        : {}),
+      valueByCriterion: auditValues,
     };
     const updated: EvaluationSuggestion = {
       ...suggestion,
@@ -3747,6 +3765,9 @@ export class EvaluationService {
           throw invalidInput("Every AI candidate must include a submission-specific rationale.");
         }
         const rationale = requireText(citation, "AI evidence", 2_000);
+        if (!isEnglishSuggestionRationale(rationale)) {
+          throw invalidInput("Every AI candidate rationale must be written in English.");
+        }
         if (!isMeaningfulSuggestionRationale(rationale, exactReferences[index]?.excerpt ?? "")) {
           throw invalidInput("Every AI candidate must include a submission-specific rationale.");
         }

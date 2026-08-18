@@ -1268,6 +1268,23 @@ describe("D1EvaluationRepository migrated lifecycle CAS", () => {
     }
   });
 
+  it("rejects a second active shared suggestion for the same triage scope", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      await repository.putSuggestion(migratedSuggestion, null, 1);
+      const duplicate = { ...migratedSuggestion, id: "suggestion-migrated-2" };
+
+      await expect(repository.putSuggestion(duplicate, null, 1)).rejects.toThrow();
+      await expect(
+        repository.getSuggestion(migratedSuggestion.tenantId, duplicate.id),
+      ).resolves.toBeNull();
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it("persists no suggestion when withdrawal commits immediately before the D1 batch", async () => {
     const fixture = createSpeakerLifecycleFixture();
     try {

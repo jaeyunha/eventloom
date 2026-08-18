@@ -473,7 +473,7 @@ export interface EvaluationSuggestionAuditEntry {
   readonly actorId: string | null;
   readonly at: string;
   readonly reason?: string;
-  readonly valueByCriterion?: Readonly<Record<string, number>>;
+  readonly valueByCriterion?: Readonly<Record<string, number | string>>;
 }
 
 export interface EvaluationSuggestionOverride {

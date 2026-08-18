@@ -96,8 +96,11 @@ describe("OrganizerReviewOverview", () => {
   });
 
   it("shows shared round AI triage with its rationale and override action", () => {
-    const [row] = overviewRows(1);
-    if (row === undefined) throw new Error("Expected a review overview row.");
+    const [baseRow, scoredRow] = overviewRows(2);
+    if (baseRow === undefined || scoredRow === undefined) {
+      throw new Error("Expected two review overview rows.");
+    }
+    const row = { ...scoredRow, id: baseRow.id, reference: baseRow.reference };
     const markup = renderToStaticMarkup(
       createElement(OrganizerReviewOverview, {
         planName: "Program review",
@@ -153,5 +156,76 @@ describe("OrganizerReviewOverview", () => {
     expect(markup).toContain("Overall quality");
     expect(markup).toContain("The practical material gives the audience a concrete outcome.");
     expect(markup).toContain("Save override");
+
+    const reviewHeader = markup.indexOf(">Reviews</th>");
+    const scoreHeader = markup.indexOf(">Score</th>");
+    const triageHeader = markup.indexOf(">AI triage</th>");
+    const decisionHeader = markup.indexOf(">Decision</th>");
+    expect(reviewHeader).toBeGreaterThan(-1);
+    expect(scoreHeader).toBeGreaterThan(reviewHeader);
+    expect(triageHeader).toBeGreaterThan(scoreHeader);
+    expect(decisionHeader).toBeGreaterThan(triageHeader);
+    const scoreCell = markup.indexOf("4.2 / 5");
+    const triageCell = markup.indexOf("data-ai-triage-status");
+    expect(scoreCell).toBeGreaterThan(-1);
+    expect(triageCell).toBeGreaterThan(scoreCell);
+  });
+
+  it("shows loading and error states before a suggestion exists", () => {
+    const [row] = overviewRows(1);
+    if (row === undefined) throw new Error("Expected a review overview row.");
+    const base = {
+      planName: "Program review",
+      planStatusLabel: "Open for review",
+      description: "Committee review has one submission in view.",
+      metrics: [{ label: "Reviewer coverage", value: "2/2", detail: "reviewer slots assigned" }],
+      completionPercent: 0,
+      attentionSummary: {
+        count: 1,
+        label: "submission needs attention",
+        description: "Use row actions to continue review operations.",
+      },
+      rows: [row],
+      onManageReviewers: vi.fn(),
+      onOpenPlan: vi.fn(),
+      onOpenReviewers: vi.fn(),
+      onOpenDecisions: vi.fn(),
+    };
+    const loadingMarkup = renderToStaticMarkup(
+      createElement(OrganizerReviewOverview, {
+        ...base,
+        aiTriage: {
+          enabled: true,
+          criterionLabels: {},
+          suggestions: {},
+          loading: true,
+          busySubmissionId: null,
+          error: null,
+          onGenerate: vi.fn(),
+          onOverride: vi.fn(),
+        },
+      }),
+    );
+    expect(loadingMarkup).toContain("Loading…");
+    expect(loadingMarkup).not.toContain(">Generate</button>");
+
+    const errorMarkup = renderToStaticMarkup(
+      createElement(OrganizerReviewOverview, {
+        ...base,
+        aiTriage: {
+          enabled: true,
+          criterionLabels: {},
+          suggestions: {},
+          loading: false,
+          busySubmissionId: null,
+          error: "AI triage could not be generated.",
+          onGenerate: vi.fn(),
+          onOverride: vi.fn(),
+        },
+      }),
+    );
+    expect(errorMarkup).toContain("Not generated");
+    expect(errorMarkup).toContain('role="alert"');
+    expect(errorMarkup).toContain("AI triage could not be generated.");
   });
 });

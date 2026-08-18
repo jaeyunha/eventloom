@@ -1030,6 +1030,23 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     await this.#assertSharedSuggestionWritable(suggestion, expectedSubmissionRevision);
     const key = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(this.#suggestions.get(key)?.version ?? null, expectedVersion, "Suggestion");
+    if (
+      suggestion.assignmentId === null &&
+      suggestion.status !== "stale" &&
+      [...this.#suggestions.values()].some(
+        (current) =>
+          current.id !== suggestion.id &&
+          current.tenantId === suggestion.tenantId &&
+          current.eventId === suggestion.eventId &&
+          current.planId === suggestion.planId &&
+          current.roundId === suggestion.roundId &&
+          current.submissionId === suggestion.submissionId &&
+          current.assignmentId === null &&
+          current.status !== "stale",
+      )
+    ) {
+      throw conflict("An active AI triage scorecard already exists for this submission.");
+    }
     this.#suggestions.set(key, clone(suggestion));
   }
 

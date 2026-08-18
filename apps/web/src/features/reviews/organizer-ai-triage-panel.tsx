@@ -54,27 +54,38 @@ export function OrganizerAiTriagePanel({
 
   if (suggestion === undefined) {
     return (
-      <div className={styles.aiTriage}>
+      <section className={styles.aiTriage} aria-label="AI triage">
         <div>
           <strong>AI triage</strong>
-          <span>Not generated</span>
+          <span>{aiTriage.loading ? "Loading…" : busy ? "Generating…" : "Not generated"}</span>
         </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          onClick={() => void aiTriage.onGenerate(submissionId, false)}
-        >
-          <Bot data-icon="inline-start" aria-hidden="true" />
-          Generate
-        </Button>
-      </div>
+        {!aiTriage.loading ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void aiTriage.onGenerate(submissionId, false)}
+          >
+            <Bot data-icon="inline-start" aria-hidden="true" />
+            Generate
+          </Button>
+        ) : null}
+        {aiTriage.error === null ? null : (
+          <p className={styles.aiTriageError} role="alert">
+            {aiTriage.error}
+          </p>
+        )}
+      </section>
     );
   }
 
   return (
-    <section className={styles.aiTriage} data-ai-triage-status={suggestion.status}>
+    <section
+      className={styles.aiTriage}
+      data-ai-triage-status={suggestion.status}
+      aria-label="AI triage"
+    >
       <div className={styles.aiTriageHeading}>
         <div>
           <strong>AI triage</strong>
@@ -126,6 +137,7 @@ export function OrganizerAiTriagePanel({
             <Input
               id={`${suggestion.id}-${criterionId}-override`}
               type="number"
+              min={0}
               required
               value={values[criterionId] ?? String(candidate.value)}
               onChange={(event) =>
@@ -147,7 +159,11 @@ export function OrganizerAiTriagePanel({
           Save override
         </Button>
       </form>
-      {aiTriage.error === null ? null : <p className={styles.aiTriageError}>{aiTriage.error}</p>}
+      {aiTriage.error === null ? null : (
+        <p className={styles.aiTriageError} role="alert">
+          {aiTriage.error}
+        </p>
+      )}
       <Badge variant="outline">
         {suggestion.override === null || suggestion.override === undefined
           ? "AI proposal"

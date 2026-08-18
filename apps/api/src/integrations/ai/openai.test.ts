@@ -20,7 +20,7 @@ function responseBody(text: string): Record<string, unknown> {
 }
 
 describe("OpenAI Responses advisory binding", () => {
-  it("sends backend-authenticated JSON-mode requests and extracts REST output text", async () => {
+  it("sends backend-authenticated, non-stored JSON-mode requests and extracts REST output text", async () => {
     const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
     const binding = createOpenAiResponsesBinding({
       apiKey: "test-secret-never-print",
@@ -45,6 +45,7 @@ describe("OpenAI Responses advisory binding", () => {
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
       model: "gpt-test",
       input: SYNTHETIC_PROMPT,
+      store: false,
       text: { format: { type: "json_object" } },
       reasoning: { effort: "medium" },
       temperature: 0,

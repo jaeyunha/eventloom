@@ -57,15 +57,6 @@ export function OrganizerReviewDesktopTable({
                 <span className={styles.roundName}>{row.roundName}</span>
                 <ReviewerSummary row={row} />
               </TableCell>
-              {aiTriage?.enabled === true ? (
-                <TableCell>
-                  <OrganizerAiTriagePanel
-                    key={`${row.id}:${aiTriage.suggestions[row.id]?.version ?? "new"}`}
-                    submissionId={row.id}
-                    aiTriage={aiTriage}
-                  />
-                </TableCell>
-              ) : null}
               <TableCell>
                 <strong>
                   {row.completedReviewCount}/{row.expectedReviewCount}
@@ -80,6 +71,15 @@ export function OrganizerReviewDesktopTable({
                   </span>
                 ) : null}
               </TableCell>
+              {aiTriage?.enabled === true ? (
+                <TableCell>
+                  <OrganizerAiTriagePanel
+                    key={`${row.id}:${aiTriage.suggestions[row.id]?.version ?? "new"}`}
+                    submissionId={row.id}
+                    aiTriage={aiTriage}
+                  />
+                </TableCell>
+              ) : null}
               <TableCell>{row.decisionLabel}</TableCell>
               <TableCell>
                 <Attention row={row} />

@@ -3535,18 +3535,19 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         },
       ],
     },
-  ])("accepts meaningful $language rationales", async ({ submissionMaterial, candidates }) => {
-    const { service } = await fixture({
-      reviewsPerSubmission: 1,
-      reviewRound: triageRound,
-      submissionMaterial,
-      aiSuggestionProducer: async () => ({ candidates }),
-    });
+  ])(
+    "rejects meaningful $language rationales because output must be English",
+    async ({ submissionMaterial, candidates }) => {
+      const { service } = await fixture({
+        reviewsPerSubmission: 1,
+        reviewRound: triageRound,
+        submissionMaterial,
+        aiSuggestionProducer: async () => ({ candidates }),
+      });
 
-    await expect(generateTriage(service)).resolves.toMatchObject({
-      criterionCandidates: [{ criterionId: "quality" }, { criterionId: "relevance" }],
-    });
-  });
+      await expectEvaluationError(generateTriage(service), "EVALUATION_INVALID_INPUT");
+    },
+  );
 
   it("accepts nontrivial source-grounded rationales", async () => {
     const { service } = await fixture({
@@ -4711,25 +4712,60 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(after).not.toHaveProperty("suggestions");
   });
 
-  it("redacts blind-review identity fields before sending shared triage context to AI", async () => {
-    let capturedSubmission: EvaluationSuggestionProviderInput["submission"] | undefined;
+  it("omits all answers and participant identity from blind-review AI triage", async () => {
+    let capturedInput: EvaluationSuggestionProviderInput | undefined;
+    const identifyingAnswers = {
+      experience: "Advanced",
+      speakerEmail: "speaker@example.com",
+      phone: "+1 415 555 0134",
+      website: "https://speaker.example.com",
+      portfolio: "https://portfolio.example.com/speaker",
+    };
     const { service, plan } = await fixture({
       blindReview: true,
       reviewRound: triageRound,
-      reviewerProjection: { fieldIds: ["experience", "speakerEmail"] },
+      reviewerProjection: { fieldIds: Object.keys(identifyingAnswers) },
+      submissionMaterial: {
+        ...submission,
+        answers: identifyingAnswers,
+        identityFieldIds: ["speakerEmail"],
+      },
+      aiSuggestionProducer: async (input) => {
+        capturedInput = input;
+        return { candidates: validAiCandidates() };
+      },
+    });
+
+    await service.generateRoundAiSuggestions(organizer, {
+      planId: plan.id,
+      roundId: triageRound.id,
+      submissionId: submission.id,
+    });
+
+    expect(capturedInput?.submission).toMatchObject({
+      answers: {},
+      participants: [],
+      identityRedacted: true,
+    });
+    const providerPayload = JSON.stringify(capturedInput);
+    for (const identity of [
+      ...Object.values(identifyingAnswers),
+      "Speaker Name",
+      "Identifying biography",
+    ]) {
+      expect(providerPayload).not.toContain(identity);
+    }
+  });
+
+  it("preserves explicitly projected answers for non-blind AI triage", async () => {
+    let capturedSubmission: EvaluationSuggestionProviderInput["submission"] | undefined;
+    const { service, plan } = await fixture({
+      blindReview: false,
+      reviewRound: triageRound,
+      reviewerProjection: { fieldIds: ["experience"] },
       aiSuggestionProducer: async (input) => {
         capturedSubmission = input.submission;
-        return {
-          candidates: [
-            {
-              criterionId: "quality",
-              value: 4,
-              evidence: ["The Advanced experience demonstrates relevant depth."],
-              provenance: { sourceReferences: ["answer:Advanced"] },
-            },
-            validAiCandidates()[1],
-          ],
-        };
+        return { candidates: validAiCandidates() };
       },
     });
 
@@ -4740,9 +4776,41 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     });
 
     expect(capturedSubmission?.answers).toEqual({ experience: "Advanced" });
-    expect(capturedSubmission?.answers).not.toHaveProperty("speakerEmail");
-    expect(capturedSubmission?.participants).toEqual([]);
-    expect(capturedSubmission?.identityRedacted).toBe(true);
+    expect(capturedSubmission?.identityRedacted).toBe(false);
+  });
+
+  it("persists exactly one shared scorecard when two organizers generate concurrently", async () => {
+    const providerEntries: number[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRound: triageRound,
+      aiSuggestionProducer: async () => {
+        providerEntries.push(providerEntries.length);
+        if (providerEntries.length === 1) {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        } else {
+          releaseFirst?.();
+        }
+        return { candidates: validAiCandidates() };
+      },
+    });
+
+    const input = {
+      planId: plan.id,
+      roundId: triageRound.id,
+      submissionId: submission.id,
+    };
+    const [first, second] = await Promise.all([
+      service.generateRoundAiSuggestions(organizer, input),
+      service.generateRoundAiSuggestions(organizer, input),
+    ]);
+
+    expect(first.id).toBe(second.id);
+    const listed = await service.listRoundAiSuggestions(organizer, plan.id, triageRound.id);
+    expect(listed.filter((item) => item.status !== "stale")).toHaveLength(1);
   });
 
   it("marks suggestions stale when the submission revision changes", async () => {

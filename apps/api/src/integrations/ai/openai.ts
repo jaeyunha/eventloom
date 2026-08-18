@@ -53,6 +53,7 @@ export function createOpenAiResponsesBinding(
           body: JSON.stringify({
             model,
             input: prompt,
+            store: false,
             text: { format: responseFormat },
             ...(reasoning === undefined ? {} : { reasoning }),
             ...(temperature === undefined ? {} : { temperature }),

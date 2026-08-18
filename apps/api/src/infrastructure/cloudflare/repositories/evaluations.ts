@@ -2772,10 +2772,10 @@ export class D1EvaluationRepository implements EvaluationRepository {
         item.values_json == null
           ? null
           : parseJson<Record<string, unknown>>(text(item.values_json), {});
-      const valueByCriterion: Record<string, number> = {};
+      const valueByCriterion: Record<string, number | string> = {};
       if (values !== null) {
         for (const [key, value] of Object.entries(values)) {
-          if (typeof value === "number") {
+          if (typeof value === "number" || typeof value === "string") {
             valueByCriterion[key] = value;
           }
         }

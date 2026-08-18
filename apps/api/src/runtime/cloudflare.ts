@@ -2529,7 +2529,7 @@ function selectedAiProvider(bindings: RuntimeBindings): SelectedAiProvider | nul
     );
     const evaluationReasoningEffort = aiReasoningEffort(
       bindings.OPENAI_EVALUATION_REASONING_EFFORT,
-      "medium",
+      "high",
     );
     const remixReasoningEffort = aiReasoningEffort(bindings.OPENAI_REMIX_REASONING_EFFORT, "low");
     return {

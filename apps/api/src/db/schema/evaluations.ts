@@ -689,6 +689,9 @@ export const evaluationSuggestions = sqliteTable(
       table.eventId,
       table.id,
     ),
+    uniqueIndex("evaluation_suggestions_shared_active_scope_unique")
+      .on(table.organizationId, table.eventId, table.planId, table.roundId, table.submissionId)
+      .where(sql`${table.assignmentId} IS NULL AND ${table.status} IN ('pending', 'overridden')`),
     index("evaluation_suggestions_plan_idx").on(
       table.organizationId,
       table.eventId,
@@ -773,7 +776,7 @@ export const evaluationSuggestionHistory = sqliteTable(
     eventId: text("event_id").notNull(),
     suggestionId: text("suggestion_id").notNull(),
     ordinal: integer("ordinal").notNull(),
-    action: text("action", { enum: ["generate", "stale", "accept", "edit", "reject"] }).notNull(),
+    action: text("action", { enum: ["generate", "stale", "override"] }).notNull(),
     actorId: text("actor_id"),
     at: text("at").notNull(),
     reason: text("reason"),

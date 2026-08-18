@@ -6,6 +6,7 @@ import type {
 } from "../../features/agenda/types";
 import {
   canonicalSubmissionExcerpt,
+  isEnglishSuggestionRationale,
   isMeaningfulSuggestionRationale,
   scoreableRubricCriteria,
 } from "../../features/evaluations/suggestion-validation";
@@ -1045,7 +1046,10 @@ function parseEvaluationOutput(
         );
         const rationale = boundedString(entry.rationale, 2_000);
         if (excerpt === null || rationale === null) throw invalidOutput();
-        if (!isMeaningfulSuggestionRationale(rationale, excerpt)) {
+        if (
+          !isEnglishSuggestionRationale(rationale) ||
+          !isMeaningfulSuggestionRationale(rationale, excerpt)
+        ) {
           throw invalidOutput();
         }
         return {
