@@ -36,6 +36,17 @@ source identifiers, or import paths; their exact fingerprints are recorded in
 `.gitleaksignore`. Repeat scans reported no leaks. This is preparation evidence
 only: rerun both scanners against the final public candidate, and re-review every
 finding if history is rewritten because commit fingerprints will change.
+A 2026-08-18 scan ran Gitleaks 8.30.1 against candidate `3fcef362`: full
+reachable history (869 commits), `--all` refs, and the tracked tree (filtered
+via `git ls-files`, excluding ignored local state), plus `bun audit` (no
+vulnerabilities). Eleven new findings were individually reviewed — test
+idempotency keys, a `BETTER_AUTH_SECRET` test fixture, and an Airtable
+import-type line — and their fingerprints were added to `.gitleaksignore`.
+Both the history and tracked-tree scans now report no leaks for the candidate.
+The reachable history still contains the competition-brief PDF, host
+transcript, and QA screenshots removed from the current tree; the
+publication-history decision below is still required before any visibility
+change.
 
 ## Source that can remain public after review
 
