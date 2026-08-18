@@ -1,110 +1,71 @@
 # Judge Review AI Lane Handoff
 
-## Exact state
+## Checkpoint
 
-- Repository: `jaeyunha/eventloom`
-- Branch: `judge-review-ai`
-- Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
-- Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact pushed head: `feaddd9f2eb46a8b34eb04762d3a424e3ff1e091`
-- Latest integrated `github/main`: `613cd022e47f24aafd5b023ceac52843d976cfdf`
-- Integrated latest `github/main`: `3e236387223e8e95fa9b2ee78d5e5dee1117882f`
-- PR: https://github.com/jaeyunha/eventloom/pull/34
-- Issue: https://github.com/jaeyunha/eventloom/issues/47
-- PR is open, not merged, and no production deployment was performed.
-- Eventloom only; no external evaluator repository was inspected or invoked.
+- Implementation checkpoint pushed: `1b27e21595415c4f3fcd9303956e83fc07c9f44d`
+  (`feat(evaluations): share organizer AI triage`).
+- Latest merged `github/main` remains in the lane ancestry.
+- PR #34 must remain open, unmerged, and undeployed.
 
-## Completed implementation
+## Delivered behavior
 
-- Exactly one provider candidate per scoreable criterion.
-- Partial, duplicate, unexpected, non-scoreable, and all-free-text output
-  rejection at the required boundaries.
-- Deterministic meaningful rationale validation with exact, case-sensitive
-  title/abstract excerpts aligned one-to-one with rationales.
-- Persisted suggestion provenance derived only from validated candidate
-  excerpts; untrusted top-level provider references are ignored.
-- Explicit separation of untrusted rubric/submission data from instructions.
-- Submitted-only lifecycle, conflict/withdrawal/decision/abstention authority,
-  assignment/review CAS, schedule-only plan-version CAS, and D1/in-memory parity.
-- Accepted AI score attribution survives unrelated human comment/free-text
-  autosaves.
-- Partial multi-criterion edits keep unresolved candidates actionable until all
-  candidates are resolved.
-- Naturally worded grounded rationales are accepted while arbitrary filler is
-  rejected.
-- Airtable evaluation access is projection-only at the exported boundary.
-- Pending AI numeric suggestions are excluded from unrelated autosaves.
-- Dropdown labels, advisory pending/uncounted state, and explicit human
-  confirmation remain intact.
-- Merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63, and #66
-  remains present.
+- Organizers can opt a review round into AI triage in the existing round editor.
+- An opted-in round has one cached advisory scorecard per `(plan, round,
+  submission)`, not one per reviewer assignment.
+- Only organizers may generate, regenerate, list, or persist overrides. The
+  organizer results view shows candidate values, rationale/provenance, and
+  inline override values plus an optional reason.
+- Reviewers have human-only score controls. The prior reviewer suggestion API,
+  toolbar, acceptance/resolution controls, state, compatibility types, and
+  remaining advisory banner are removed.
+- Provider generation uses the selected review projection only: title,
+  abstract, allowed answers, and attachment metadata (`name`, MIME type, byte
+  size) but never attachment contents or URLs. Blind-review identity fields and
+  participant data are redacted before the provider call.
+- Evaluation AI uses GPT-5.6 Sol by default, high reasoning effort by default,
+  and `temperature: 0`. Prompts require English rationales and admit only
+  exact title, abstract, or allowed-answer excerpts as evidence.
+- `apps/api/migrations/0051_shared_ai_triage.sql` is in the production
+  migration path. It preserves existing suggestion data while safely rebuilding
+  nullable shared suggestion scope and its child-table foreign keys.
 
-## Exact-head verification at feaddd9f
+## Verified evidence
 
-- Focused matrix: PASS — 11 files, 314 passed, 1 skipped, including
-  structural rationale natural-prose/gibberish regressions and lifecycle
-  authority coverage.
-  rationale, scoped acceptance/rejection, and submission-revision CAS
-  regressions.
-- Authority-focused service/D1/composition suites: PASS — merged-head
-  authority regressions passed.
-- API typecheck: PASS.
-- Web typecheck: FAIL in latest-main speaker/portal/file-upload paths
-  (8 errors across 7 unchanged files); no lane-owned web source is implicated.
-- `make check`: FAIL only on four formatting findings in unchanged latest-main
-  web files; typechecks and lint complete without errors.
-  failures; lane-owned formatting and `git diff --check` pass.
-- `make build`: PASS, including contracts, CLI, API Wrangler dry-run, and the
-  Next production build.
-- Chromium advisory QA: PASS — pending/uncounted state, dropdown mapping,
-  explicit confirmation, provenance, keyboard focus, CJK wrapping, and no
-  horizontal overflow.
-- Review context performs a final writable-assignment authority recheck before
-  returning protected data; in-memory/D1 abstention admission binds current
-  assignment lifecycle and declaration identity.
-- `make test`: FAIL in the unit phase after 2,439 passed and 3 skipped because
-  of one unchanged latest-main workspace CSS contract assertion.
-  contract failure in `apps/web/src/components/workspace/workspace-surface-tokens.test.ts`;
-  the lane-owned focused matrix passed. The merged-head unit phase reached
-  2,403 passed and 3 skipped.
+- API typecheck passed after the compatibility removal.
+- Focused API service, routes, rationale, Cloudflare provider, and OpenAI
+  binding tests passed; live-provider tests remain intentionally skipped.
+- D1 repository suite passed: `24 passed`, including all three migrated
+  lifecycle CAS tests.
+- Reviewer/organizer web suite passed: `21 files`, `107 tests`.
+- API and web application builds passed independently.
+- Focused Chromium fixture QA passed at desktop and mobile widths:
+  reviewers open a scorecard with a human Recommendation control and see no AI
+  triage, suggestion, generation, regeneration, or override controls.
+- `git diff --check` was clean.
 
-## Five independent final reviews
+## Broad-gate limitations outside this lane
 
-These must all inspect the same final pushed head and PASS before merge:
+- Repository-wide typecheck currently fails in the unmodified integrations
+  layout generated-route contract (`apps/web/.../integrations/layout` receives
+  `Promise<unknown>` where route params are required).
+- `make test` has one unrelated failure in
+  `apps/web/src/components/workspace/workspace-surface-tokens.test.ts` caused
+  by a workspace CSS token expectation; the run otherwise reached `2,434`
+  passing tests and `3` skips.
+- `make check` still reports formatter drift in clean files outside this lane,
+  including `tests/e2e/file-upload-dropzone-qa.spec.ts`.
+- The broad isolated Playwright runner has a pre-existing
+  `content-collection-detail` failure and later fixture-start timeout. It was
+  stopped after source changed so its result is stale; the focused reviewer
+  Chromium scenario above is current evidence.
+- A direct local `make dev` stack cannot become healthy with this worktree's
+  intentionally credential-free `.env`; fixture-backed Chromium QA was used.
+  No staging or production deployment evidence is claimed.
 
-- [ ] Security — exact pushed head `feaddd9f2eb46a8b34eb04762d3a424e3ff1e091`
-- [ ] Code quality — exact pushed head `feaddd9f2eb46a8b34eb04762d3a424e3ff1e091`
-- [ ] Functional/visual QA — exact pushed head `feaddd9f2eb46a8b34eb04762d3a424e3ff1e091`
-- [ ] Context/dependencies — exact pushed head `feaddd9f2eb46a8b34eb04762d3a424e3ff1e091`
-- [ ] Goal/compliance — exact pushed head `feaddd9f2eb46a8b34eb04762d3a424e3ff1e091`
+## Final-review requirement
 
-## Remaining tasks
-
-- [ ] Run all five final reviews against the final exact head.
-- [ ] Record five PASS verdicts in this handoff and PR body.
-- [ ] Resolve or explicitly accept the latest-main full-gate blockers listed above.
-- [ ] Verify the PR remains open and mergeable at the final head.
-- [ ] Merge PR #34 only after all five reviews PASS and strict gates are
-  acceptable.
-- [ ] Do not deploy production.
-
-## Generated/untracked disposition
-
-Generated `.next`, `dist`, Wrangler, Playwright, test-results, temporary Vite,
-and `apps/web/tmp` outputs were removed and remain unstaged if regenerated.
-Only lane-owned source/tests and this handoff are intended for commits.
-
-## Resume commands
-
-```sh
-cd /Users/jaeyunha/wt/open-sessionboard/judge-review-ai
-git fetch github main
-git status --short --branch
-make check
-make test
-make build
-gh pr view 34 --repo jaeyunha/eventloom
-```
-
-The lane is active. Do not pause, merge, or deploy before the exact-head
-five-review gate and final strict-gate decision.
+Five independent reviews must inspect the final pushed documentation head, not
+the implementation checkpoint above. Their exact SHA and verdicts belong in
+the PR #34 and issue #47 evidence comments. Do not merge or deploy until all
+five verdicts pass and the broad-gate limitations have an explicit release
+decision.
