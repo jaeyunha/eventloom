@@ -2,17 +2,23 @@
 
 ## Checkpoint
 
-- Final code checkpoint pushed:
-  `c9d320adb04d42261d8f7a3bf96952a4cdd498e7`
+- Final PR branch head:
+  `f145201ec9caf435b24fb4f41cc6a26ff0bd8a68`
+  (`fix(evaluations): align decision outbox fixture`).
+- It follows the integrated-main merge `61c85aa6` and the final implementation
+  checkpoint `c9d320adb04d42261d8f7a3bf96952a4cdd498e7`
   (`fix(evaluations): align shared triage index name`).
-- It follows `65a53dee5cede039108fcf022d38859e407ff1a2`
+- Earlier lane checkpoints include
+  `65a53dee5cede039108fcf022d38859e407ff1a2`
   (`fix(evaluations): close round-two triage review findings`) and
   `fb115a8cb9477a421708139f3187853f979ab5ba`
   (round-two handoff evidence).
 - Earlier lane checkpoints: `0167ec28` (round-one fixes + evidence),
   `46365bc3` (first integrated head), `1b27e215` (initial implementation).
-- Latest merged `github/main` (`d7fb71bb` ancestry) is integrated.
-- PR #34 must remain open, unmerged, and undeployed.
+- Exact PR #34 base: `d7fb71bbb5ef0f3f6311e657ba44cb8d385e404f`.
+- Exact PR #34 head: `f145201ec9caf435b24fb4f41cc6a26ff0bd8a68`.
+- PR #34 merged as `7cfa1b378293601b798ba74d36eb2b3e6112f12a` on
+  2026-08-18; no deployment was performed.
 
 ## Delivered behavior
 
@@ -110,11 +116,23 @@ blocker or high findings:
   parity. The exact-head Chromium reviewer scenario passed (1 test, desktop
   and mobile human-only controls with no AI surfaces).
 
-`make check` reaches format verification after typecheck and lint, then
-reports only the four inherited formatter-drift files named above; they are
-outside this lane and remain untouched. PR #34 evidence must record the
-final documentation-only head created from this update and its
-`github/main` merge-base.
+`make check` reached format verification after typecheck and lint, then
+reported only the four inherited formatter-drift files named above; they were
+outside this lane and remained untouched at that historical checkpoint.
+
+## Post-merge closure
+
+- The final `f145201e` correction updates only the decision-outbox D1 test
+  fixture so its seeded submission satisfies the repository's submitted-only
+  guard; no product behavior changed.
+- On the final branch head, the focused decision-outbox suite passed 3/3,
+  `make test` exited 0, and `make check` exited 0 (six lint warnings, zero
+  errors).
+- Reviewer human-only Chromium QA had already passed at desktop and mobile
+  widths on the reviewed product code; the subsequent integrated-main and
+  test-fixture-only commits did not change that UI surface.
+- GitHub confirms `f145201e` is contained by the PR #34 merge commit
+  `7cfa1b37`; `github/main` is the source of this closure record.
 
 Round one (at `46365bc3`) and round two (at `0167ec28`) produced FAIL
 verdicts; every finding from both rounds is addressed in `65a53dee`:
@@ -125,5 +143,6 @@ Drizzle enum drift, dropdown audit values, `.env.example` default, override
 input bounds, and reviewer contract residue. An independent integration
 review found and the lane fixed one additional non-behavioral drift:
 migration `0051` created the same shared active-scope unique index under a
-different name than its Drizzle declaration. Do not merge or deploy until
-the inherited main failures have an explicit release decision.
+different name than its Drizzle declaration. The historical instruction not
+to merge was superseded by the direct request to merge PR #34 after the final
+source gates passed. PR #34 is merged; no deployment was performed.
