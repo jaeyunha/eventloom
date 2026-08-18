@@ -188,7 +188,7 @@ Custom domains are recommended for stable production URLs. Sender and calendar i
 Forge and GitHub are intentional dual mirrors:
 
 - Forge: `https://forge.smol.ai/jaeyunha/open-sessionboard`
-- GitHub: `https://github.com/jaeyunha/eventloom`
+- GitHub: `https://github.com/namuh-eng/eventloom`
 
 Visibility is an operator-controlled publication action governed by
 [`docs/public-release.md`](docs/public-release.md) and is independent from

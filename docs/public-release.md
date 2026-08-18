@@ -130,8 +130,8 @@ part of this preparation change. After every item above is complete and the
 chosen public history has been pushed, the repository owner can run:
 
 ```bash
-gh repo edit jaeyunha/eventloom --visibility public --accept-visibility-change-consequences
-gh repo view jaeyunha/eventloom --json visibility,isPrivate,url,licenseInfo
+gh repo edit namuh-eng/eventloom --visibility public --accept-visibility-change-consequences
+gh repo view namuh-eng/eventloom --json visibility,isPrivate,url,licenseInfo
 ```
 
 After changing visibility, verify both mirrors without stored credentials:
@@ -139,7 +139,7 @@ After changing visibility, verify both mirrors without stored credentials:
 ```bash
 env -u GH_TOKEN -u GITHUB_TOKEN GIT_TERMINAL_PROMPT=0 \
   git -c credential.helper= ls-remote \
-  https://github.com/jaeyunha/eventloom.git HEAD
+    https://github.com/namuh-eng/eventloom.git HEAD
 
 env -u GH_TOKEN -u GITHUB_TOKEN GIT_TERMINAL_PROMPT=0 \
   git -c credential.helper= ls-remote \

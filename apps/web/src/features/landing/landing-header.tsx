@@ -63,7 +63,7 @@ export function LandingHeader() {
             Workspaces
           </Link>
           <Link href="#open-source" onClick={closeMenu}>
-            Open source
+            Source available
           </Link>
           <Link href="#publishing" onClick={closeMenu}>
             Publishing model
