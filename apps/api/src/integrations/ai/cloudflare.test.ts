@@ -76,7 +76,6 @@ const evaluationInput: EvaluationSuggestionProviderInput = {
   eventId: "event-1",
   planId: "plan-1",
   roundId: "round-1",
-  assignmentId: "assignment-1",
   submissionId: "submission-1",
   rubricRevision: 11,
   submissionRevision: 23,
@@ -115,6 +114,15 @@ const evaluationInput: EvaluationSuggestionProviderInput = {
         displayName: "Private Person",
         email: "private@example.test",
         biography: "Private biography",
+      },
+    ],
+    files: [
+      {
+        id: "file-1",
+        name: "session-outline.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 24_000,
+        url: "https://private-files.example.test/session-outline.pdf",
       },
     ],
     identityRedacted: false,
@@ -177,7 +185,7 @@ function json(value: unknown): { response: string } {
 function groundedEvaluationEvidence(
   rationale: string,
   options: {
-    readonly source?: "title" | "abstract";
+    readonly source?: "title" | "abstract" | "answer";
     readonly excerpt?: string;
   } = {},
 ) {
@@ -391,17 +399,20 @@ describe("Cloudflare Workers AI advisory providers", () => {
     await expect(providers.agenda.suggest?.(request)).resolves.toEqual({ placements: [] });
   });
 
-  it("returns stable, abstract-grounded evaluation candidates with explicit AI attribution", async () => {
+  it("returns stable, answer-grounded evaluation candidates with explicit AI attribution", async () => {
     const ai = new FakeAi();
     const writtenEvidence =
-      "The concrete audience outcome identifies a measurable benefit for attendees.";
+      "The Accessible design topic provides a clear practical focus for attendees.";
     ai.enqueue(
       json({
         candidates: [
           {
             criterionId: "quality",
             value: 4,
-            evidence: groundedEvaluationEvidence(writtenEvidence),
+            evidence: groundedEvaluationEvidence(writtenEvidence, {
+              source: "answer",
+              excerpt: "Accessible design",
+            }),
           },
         ],
       }),
@@ -414,14 +425,14 @@ describe("Cloudflare Workers AI advisory providers", () => {
       provider: "cloudflare-workers-ai",
       model: "evaluation-model",
       generatedAt: "2026-08-09T12:00:00.000Z",
-      sourceReferences: ["abstract:A concrete audience outcome."],
+      sourceReferences: ["answer:Accessible design"],
       promptVersion: "cloudflare-workers-ai-v1",
     };
 
     await expect(providers.evaluations.generate(evaluationInput)).resolves.toEqual({
       candidates: [
         {
-          id: "ai:assignment-1:quality:11:23",
+          id: "ai:submission-1:quality:11:23",
           criterionId: "quality",
           value: 4,
           evidence: [writtenEvidence],
@@ -451,7 +462,7 @@ describe("Cloudflare Workers AI advisory providers", () => {
                       items: {
                         type: "object",
                         properties: {
-                          source: { type: "string", enum: ["title", "abstract"] },
+                          source: { type: "string", enum: ["title", "abstract", "answer"] },
                           excerpt: { type: "string", minLength: 1, maxLength: 500 },
                           rationale: { type: "string", minLength: 1, maxLength: 2_000 },
                         },
@@ -467,15 +478,19 @@ describe("Cloudflare Workers AI advisory providers", () => {
       },
     });
     const prompt = promptOf(ai);
-    expect(prompt).toContain('"tenantId":"tenant-1"');
     expect(prompt).toContain('"rubricRevision":11');
     expect(prompt).toContain('"submissionRevision":23');
     expect(prompt).toContain('"trustBoundary":"untrusted_evaluation_data"');
     expect(prompt).toContain('"title":"Submission title"');
     expect(prompt).toContain('"abstract":"A concrete audience outcome."');
-    expect(prompt).not.toContain("Accessible design");
+    expect(prompt).toContain('"answers":{"topic":"Accessible design"}');
+    expect(prompt).toContain(
+      '"attachments":[{"name":"session-outline.pdf","mimeType":"application/pdf","sizeBytes":24000}]',
+    );
+    expect(prompt).not.toContain("private-files.example.test");
     expect(prompt).not.toContain("private@example.test");
     expect(prompt).not.toContain("Private biography");
+    expect(prompt).toContain("Write every rationale in English");
   });
 
   it("rejects dropdown candidates outside the configured options", async () => {
@@ -928,6 +943,7 @@ describe("Cloudflare Workers AI advisory providers", () => {
       { effort: "medium" },
       { effort: "low" },
     ]);
+    expect(ai.calls.map(({ inputs }) => inputs.temperature)).toEqual([undefined, 0, undefined]);
   });
 
   it("surfaces unavailable and retryable failures as safe typed errors", async () => {

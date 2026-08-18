@@ -1,7 +1,6 @@
 "use client";
 
 import type { ApiPlan } from "./api-api-plan";
-import type { ApiSuggestion } from "./api-api-suggestion";
 import type { ReviewPlanAssignment } from "./assignment-review-plan-assignment";
 
 export interface ApiReviewContext {
@@ -52,5 +51,4 @@ export interface ApiReviewContext {
   } | null;
   rubricRevision?: number;
   submissionRevision?: number;
-  suggestions?: readonly ApiSuggestion[];
 }

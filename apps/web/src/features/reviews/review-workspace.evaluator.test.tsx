@@ -48,8 +48,6 @@ function assignment(id = "assignment-1"): EvaluatorAssignment {
       rubric: { name: "Program rubric", criteria },
     },
     assignmentStatus: "assigned",
-    aiSuggestions: {},
-    suggestions: [],
   };
 }
 

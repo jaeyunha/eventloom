@@ -306,15 +306,6 @@ function testAssignment(eventId: string): EvaluatorAssignment {
     track: "Public services",
     abstract: "A practical session for resilient public services.",
     round,
-    aiSuggestions: Object.fromEntries(
-      testCriteria
-        .filter((criterion) => criterion.inputType !== "free_text")
-        .map((criterion, index) => [
-          criterion.id,
-          { value: 3 + (index % 3), evidence: ["Cited proposal evidence."] },
-        ]),
-    ),
-    suggestions: [],
   };
 }
 
@@ -889,6 +880,7 @@ describe("review workspace", () => {
           sequence: 1,
           opensAt: null,
           closesAt: null,
+          aiTriageEnabled: false,
           blindReview: false,
           anonymization: "none",
           rubric: {
@@ -1208,14 +1200,12 @@ describe("review workspace", () => {
     );
 
     expect(organizerMarkup).toContain("Results");
-    expect(organizerMarkup).not.toContain("AI suggestions remain advisory");
     expect(organizerMarkup).not.toContain("Confirm human decision");
     expect(organizerMarkup).not.toContain("Written reason");
     expect(organizerMarkup).not.toContain("Review decision");
     expect(evaluatorMarkup).not.toContain('type="number"');
     expect(evaluatorMarkup).toContain('role="radiogroup"');
     expect(evaluatorMarkup).toContain('type="radio"');
-    expect(evaluatorMarkup).toContain("AI suggestions remain advisory");
   });
 
   it("keeps evaluator content blind and limited to one assignment", () => {
@@ -1348,7 +1338,7 @@ describe("review workspace", () => {
     }
   });
 
-  it("marks AI evidence uncounted and requires a written abstention reason", () => {
+  it("renders only human review controls and requires a written abstention reason", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         eventId: "summit-2026",
@@ -1357,65 +1347,13 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("AI suggestion · uncounted");
-    expect(markup).toContain("Cited evidence");
-    expect(markup).toContain("Confirm or edit this suggestion");
+    expect(markup).not.toContain("Cited evidence");
+    expect(markup).not.toContain("Confirm or edit this suggestion");
     expect(markup).toContain("Submission waits for autosave");
     expect(markup).toContain("Submit review");
     expect(markup).not.toContain("Confirm review submission");
     expect(markup).toContain("Declare conflict");
     expect(markup).not.toContain('id="abstention-reason"');
-  });
-
-  it("renders pending dropdown AI values as advisory option labels", () => {
-    const assignment = testAssignment("summit-2026");
-    const provenance = {
-      provider: "openai-responses",
-      model: "gpt-test",
-      generatedAt: "2026-08-16T20:00:00.000Z",
-      sourceReferences: ["abstract"],
-      promptVersion: "openai-responses-v1",
-    };
-    const markup = renderToStaticMarkup(
-      createElement(ReviewWorkspace, {
-        eventId: "summit-2026",
-        mode: "evaluator",
-        initialState: {
-          assignment: {
-            ...assignment,
-            aiSuggestions: {},
-            suggestions: [
-              {
-                id: "suggestion-dropdown",
-                status: "pending",
-                version: 1,
-                rubricRevision: 3,
-                submissionRevision: 7,
-                candidates: {
-                  recommendation: [
-                    {
-                      id: "candidate-recommendation",
-                      criterionId: "recommendation",
-                      value: 3,
-                      evidence: [
-                        "The submission gives a concrete delivery plan and audience outcome.",
-                      ],
-                      provenance,
-                    },
-                  ],
-                },
-                provenance,
-              },
-            ],
-          },
-        },
-      }),
-    );
-
-    expect(markup).toContain("AI suggestion · pending");
-    expect(markup).toContain("<strong>Reject</strong>");
-    expect(markup).toContain("The submission gives a concrete delivery plan");
-    expect(markup).toContain("AI suggestions never count until you confirm or edit them.");
   });
 
   it("exposes explicit draft state text and per-criterion validation hooks", () => {

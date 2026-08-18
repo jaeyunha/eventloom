@@ -12,7 +12,6 @@ import type {
   EvaluationReview,
   EvaluationReviewHistory,
   EvaluationSuggestion,
-  EvaluationSuggestionResolution,
   SubmissionReviewMaterial,
 } from "./types";
 
@@ -107,7 +106,6 @@ export interface EvaluationProjectionReader {
   getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
   listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
   getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
-  getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null>;
   listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
   getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null>;
   listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]>;
@@ -191,17 +189,9 @@ export interface EvaluationRepository extends EvaluationProjectionReader {
   putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
-    admission?: EvaluationReviewWriteAdmission | number,
+    expectedSubmissionRevision?: number,
+    allowClosedPlan?: boolean,
   ): Promise<void>;
-  resolveSuggestion(
-    suggestion: EvaluationSuggestion,
-    expectedSuggestionVersion: number,
-    assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number | null,
-    review: EvaluationReview | null,
-    expectedReviewVersion: number | null,
-    admission?: EvaluationReviewWriteAdmission,
-  ): Promise<EvaluationSuggestionResolution>;
   writeReview(input: WriteEvaluationReview): Promise<void>;
   listOrganizerExportRecords(
     tenantId: string,
@@ -1014,10 +1004,6 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     const suggestion = this.#suggestions.get(storageKey(tenantId, suggestionId));
     return suggestion === undefined ? null : clone(suggestion);
   }
-  async getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null> {
-    return this.#suggestions.get(storageKey(tenantId, suggestionId))?.assignmentId ?? null;
-  }
-
   async listSuggestions(
     tenantId: string,
     planId: string,
@@ -1031,117 +1017,26 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
   async putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
-    admission?: EvaluationReviewWriteAdmission | number,
+    expectedSubmissionRevision = suggestion.submissionRevision,
+    allowClosedPlan = false,
   ): Promise<void> {
-    if (typeof admission === "object") this.#assertReviewWriteAdmission(admission);
-    const expectedAssignmentVersion =
-      typeof admission === "number"
-        ? admission
-        : (admission?.expectedAssignmentVersion ??
-          this.#assignments.get(storageKey(suggestion.tenantId, suggestion.assignmentId))
-            ?.version ??
-          0);
-    await this.#assertSuggestionAssignmentWritable(
-      suggestion,
-      expectedAssignmentVersion,
-      typeof admission === "object"
-        ? (admission.expectedSubmissionRevision ?? suggestion.submissionRevision)
-        : suggestion.submissionRevision,
-    );
+    if (!allowClosedPlan) {
+      this.#assertAuthoritativePlanWritable({
+        tenantId: suggestion.tenantId,
+        planId: suggestion.planId,
+        eventId: suggestion.eventId,
+      });
+    }
+    await this.#assertSharedSuggestionWritable(suggestion, expectedSubmissionRevision);
     const key = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(this.#suggestions.get(key)?.version ?? null, expectedVersion, "Suggestion");
     this.#suggestions.set(key, clone(suggestion));
   }
 
-  async resolveSuggestion(
+  async #assertSharedSuggestionWritable(
     suggestion: EvaluationSuggestion,
-    expectedSuggestionVersion: number,
-    assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number,
-    review: EvaluationReview | null,
-    expectedReviewVersion: number | null,
-    admission: EvaluationReviewWriteAdmission,
-  ): Promise<EvaluationSuggestionResolution> {
-    this.#assertReviewWriteAdmission(admission);
-    const writableScope = review ?? assignment;
-    if (writableScope !== null) this.#assertAuthoritativePlanWritable(writableScope);
-    await this.#assertSuggestionAssignmentWritable(
-      suggestion,
-      expectedAssignmentVersion ?? assignment?.version ?? 0,
-      admission.expectedSubmissionRevision ?? suggestion.submissionRevision,
-    );
-    const suggestionKey = storageKey(suggestion.tenantId, suggestion.id);
-    assertVersion(
-      this.#suggestions.get(suggestionKey)?.version ?? null,
-      expectedSuggestionVersion,
-      "Suggestion",
-    );
-
-    const assignmentKey =
-      assignment === null ? null : storageKey(assignment.tenantId, assignment.id);
-    if (assignment !== null) {
-      if (
-        assignment.tenantId !== suggestion.tenantId ||
-        assignment.id !== suggestion.assignmentId
-      ) {
-        throw conflict("Suggestion resolution targeted another assignment.");
-      }
-      assertVersion(
-        this.#assignments.get(assignmentKey ?? "")?.version ?? null,
-        expectedAssignmentVersion,
-        "Assignment",
-      );
-    }
-
-    const reviewKey = review === null ? null : storageKey(review.tenantId, review.assignmentId);
-    if (review !== null) {
-      if (
-        review.tenantId !== suggestion.tenantId ||
-        review.assignmentId !== suggestion.assignmentId
-      ) {
-        throw conflict("Suggestion resolution targeted another review.");
-      }
-      assertVersion(
-        this.#reviews.get(reviewKey ?? "")?.version ?? null,
-        expectedReviewVersion,
-        "Review",
-      );
-    }
-
-    // Validate every CAS before mutating any entity.
-    this.#suggestions.set(suggestionKey, clone(suggestion));
-    if (assignment !== null && assignmentKey !== null) {
-      this.#assignments.set(assignmentKey, clone(assignment));
-    }
-    if (review !== null && reviewKey !== null) {
-      this.#reviews.set(reviewKey, clone(review));
-    }
-    return {
-      suggestion: clone(suggestion),
-      review: review === null ? null : clone(review),
-    };
-  }
-
-  async #assertSuggestionAssignmentWritable(
-    suggestion: EvaluationSuggestion,
-    expectedAssignmentVersion: number,
     expectedSubmissionRevision: number,
   ): Promise<void> {
-    const assignmentKey = storageKey(suggestion.tenantId, suggestion.assignmentId);
-    const assignment = this.#assignments.get(assignmentKey);
-    assertVersion(assignment?.version ?? null, expectedAssignmentVersion, "Assignment");
-    if (
-      assignment === undefined ||
-      assignment.eventId !== suggestion.eventId ||
-      assignment.planId !== suggestion.planId ||
-      assignment.roundId !== suggestion.roundId ||
-      assignment.submissionId !== suggestion.submissionId ||
-      assignment.reviewerId !== suggestion.reviewerId ||
-      (assignment.status !== "assigned" && assignment.status !== "in_progress") ||
-      this.#conflicts.has(storageKey(suggestion.tenantId, suggestion.assignmentId))
-    ) {
-      throw conflict("A conflict declaration removes access to this submission.");
-    }
     if (
       this.#decisions.has(
         decisionKey(suggestion.tenantId, suggestion.planId, suggestion.submissionId),

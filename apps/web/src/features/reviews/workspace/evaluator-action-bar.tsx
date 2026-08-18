@@ -12,6 +12,7 @@ export function EvaluatorActionBar({ controller }: Readonly<{ controller: Evalua
     submitBusy,
     reviewLocked,
     submitReview,
+    openConflictDisclosure,
   } = controller;
   const summary =
     assignment.round.status === "scheduled"
@@ -47,14 +48,19 @@ export function EvaluatorActionBar({ controller }: Readonly<{ controller: Evalua
             ) : null}
           </div>
         ) : (
-          <button
-            className={styles.primaryButton}
-            type="button"
-            onClick={() => void submitReview()}
-            disabled={primaryAction.disabled || reviewLocked}
-          >
-            {submitBusy ? "Submitting…" : primaryAction.label}
-          </button>
+          <div className={styles.confirmationActions}>
+            <button type="button" onClick={openConflictDisclosure} disabled={reviewLocked}>
+              Declare conflict
+            </button>
+            <button
+              className={styles.primaryButton}
+              type="button"
+              onClick={() => void submitReview()}
+              disabled={primaryAction.disabled || reviewLocked}
+            >
+              {submitBusy ? "Submitting…" : primaryAction.label}
+            </button>
+          </div>
         )
       }
     />

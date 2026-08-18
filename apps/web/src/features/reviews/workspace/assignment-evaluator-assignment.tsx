@@ -1,7 +1,6 @@
 "use client";
 
 import type { ApiAssignment } from "./api-api-assignment";
-import type { ApiSuggestion } from "./api-api-suggestion";
 import type { ReviewPlanAssignment } from "./assignment-review-plan-assignment";
 import type { AggregateParticipant } from "./organizer-aggregate-participant";
 import type { ReviewRound } from "./organizer-review-round";
@@ -25,7 +24,6 @@ export interface EvaluatorAssignment {
   title: string;
   abstract: string;
   round: ReviewRound;
-  aiSuggestions: Readonly<Record<string, { value: number; evidence: readonly string[] }>>;
   readonly assignmentStatus?: ApiAssignment["status"] | undefined;
   readonly predecessorAssignmentId?: string | null | undefined;
   readonly successorAssignmentId?: string | null | undefined;
@@ -44,5 +42,4 @@ export interface EvaluatorAssignment {
         readonly value: string;
       }[]
     | undefined;
-  suggestions: readonly ApiSuggestion[];
 }

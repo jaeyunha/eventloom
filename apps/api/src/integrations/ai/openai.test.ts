@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createOpenAiResponsesBinding, DEFAULT_OPENAI_RESPONSES_MODEL } from "./openai";
+import {
+  createOpenAiResponsesBinding,
+  DEFAULT_OPENAI_EVALUATION_MODEL,
+  DEFAULT_OPENAI_RESPONSES_MODEL,
+} from "./openai";
 
 const SYNTHETIC_PROMPT = 'Return only {"ok":true} JSON.';
 
@@ -31,6 +35,7 @@ describe("OpenAI Responses advisory binding", () => {
         prompt: SYNTHETIC_PROMPT,
         response_format: { type: "json_object" },
         reasoning: { effort: "medium" },
+        temperature: 0,
       }),
     ).resolves.toEqual({ response: '{"ok":true}' });
 
@@ -42,7 +47,12 @@ describe("OpenAI Responses advisory binding", () => {
       input: SYNTHETIC_PROMPT,
       text: { format: { type: "json_object" } },
       reasoning: { effort: "medium" },
+      temperature: 0,
     });
+  });
+
+  it("uses GPT-5.6 Sol as the default evaluation model", () => {
+    expect(DEFAULT_OPENAI_EVALUATION_MODEL).toBe("gpt-5.6-sol");
   });
 
   it("maps strict JSON schemas to the Responses text format", async () => {

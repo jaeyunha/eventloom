@@ -16,11 +16,12 @@ import {
   ReviewerSummary,
   SubmissionIdentity,
 } from "./organizer-review-row-parts";
+import { OrganizerAiTriagePanel } from "./organizer-ai-triage-panel";
 import { reviewStatus } from "./organizer-review-status";
 export function OrganizerReviewDesktopTable({
   controller,
 }: Readonly<{ controller: OrganizerReviewOverviewController }>) {
-  const { visibleRows, onManageReviewers, onOpenDecisions } = controller;
+  const { visibleRows, onManageReviewers, onOpenDecisions, aiTriage } = controller;
   return (
     <div className={styles.desktopTable}>
       <Table>
@@ -33,6 +34,7 @@ export function OrganizerReviewDesktopTable({
             <TableHead>Round & reviewers</TableHead>
             <TableHead>Reviews</TableHead>
             <TableHead>Score</TableHead>
+            {aiTriage?.enabled === true ? <TableHead>AI triage</TableHead> : null}
             <TableHead>Decision</TableHead>
             <TableHead>Attention</TableHead>
             <TableHead>
@@ -55,6 +57,15 @@ export function OrganizerReviewDesktopTable({
                 <span className={styles.roundName}>{row.roundName}</span>
                 <ReviewerSummary row={row} />
               </TableCell>
+              {aiTriage?.enabled === true ? (
+                <TableCell>
+                  <OrganizerAiTriagePanel
+                    key={`${row.id}:${aiTriage.suggestions[row.id]?.version ?? "new"}`}
+                    submissionId={row.id}
+                    aiTriage={aiTriage}
+                  />
+                </TableCell>
+              ) : null}
               <TableCell>
                 <strong>
                   {row.completedReviewCount}/{row.expectedReviewCount}

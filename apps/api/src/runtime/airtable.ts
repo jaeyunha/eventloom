@@ -111,7 +111,6 @@ import type {
   EvaluationReview,
   EvaluationReviewHistory,
   EvaluationSuggestion,
-  EvaluationSuggestionResolution,
   SubmissionReviewMaterial,
 } from "../features/evaluations/types";
 import { EventService, ProgramPublicationService } from "../features/events/service";
@@ -351,7 +350,7 @@ function isEvaluationSuggestionRecord(value: object): value is EvaluationSuggest
     typeof value.eventId === "string" &&
     typeof value.planId === "string" &&
     typeof value.roundId === "string" &&
-    typeof value.assignmentId === "string" &&
+    value.assignmentId === null &&
     typeof value.submissionId === "string" &&
     typeof value.reviewerId === "string" &&
     typeof value.version === "number"
@@ -2212,15 +2211,6 @@ class AirtableEvaluationDataStore implements EvaluationRepository {
       ? untagged(suggestion)
       : null;
   }
-  async getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null> {
-    const suggestion = await this.#suggestions.find(suggestionId);
-    return suggestion !== undefined &&
-      isEvaluationSuggestionRecord(suggestion) &&
-      suggestion.tenantId === tenantId
-      ? suggestion.assignmentId
-      : null;
-  }
-
   async listSuggestions(
     tenantId: string,
     planId: string,
@@ -2257,22 +2247,12 @@ class AirtableEvaluationDataStore implements EvaluationRepository {
   async putSuggestion(
     _suggestion: EvaluationSuggestion,
     _expectedVersion: number | null,
-    _admission?: EvaluationReviewWriteAdmission,
+    _expectedSubmissionRevision?: number,
+    _allowClosedPlan = false,
   ): Promise<void> {
     throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
 
-  async resolveSuggestion(
-    _suggestion: EvaluationSuggestion,
-    _expectedSuggestionVersion: number,
-    _assignment: EvaluationAssignment | null,
-    _expectedAssignmentVersion: number | null,
-    _review: EvaluationReview | null,
-    _expectedReviewVersion: number | null,
-    _admission: EvaluationReviewWriteAdmission,
-  ): Promise<EvaluationSuggestionResolution> {
-    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
-  }
   async listReviewerWorkspaceRecords(
     tenantId: string,
     reviewerId: string,
@@ -2567,9 +2547,6 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
   }
   getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null> {
     return this.#repository.getSuggestion(tenantId, suggestionId);
-  }
-  getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null> {
-    return this.#repository.getSuggestionAssignmentId(tenantId, suggestionId);
   }
   listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]> {
     return this.#repository.listSuggestions(tenantId, planId);

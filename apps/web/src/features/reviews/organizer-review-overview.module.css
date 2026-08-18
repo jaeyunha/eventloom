@@ -375,6 +375,70 @@
   text-align: right;
 }
 
+.aiTriage,
+.aiTriageHeading,
+.aiTriageOverride,
+.aiTriageDetails,
+.aiTriageDetails dl,
+.aiTriageDetails dl div,
+.aiTriageOverride label {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aiTriage {
+  min-width: 15rem;
+  color: var(--color-ink);
+}
+
+.aiTriageHeading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.aiTriage strong,
+.aiTriageHeading span,
+.aiTriageOverride label > span,
+.aiTriageDetails dt {
+  font-size: 0.75rem;
+}
+
+.aiTriageHeading span,
+.aiTriageDetails dd,
+.aiTriageDetails p,
+.aiTriageError {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.aiTriageDetails summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.aiTriageDetails dd,
+.aiTriageDetails p {
+  margin: 0;
+}
+
+.aiTriageOverride {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.aiTriageOverride label:last-of-type {
+  grid-column: 1 / -1;
+}
+
+.aiTriageOverride button {
+  justify-self: start;
+}
+
+.aiTriageError {
+  color: var(--color-destructive);
+}
+
 .mobileList {
   display: none;
 }
@@ -540,6 +604,10 @@
 
   .mobileAction > button {
     width: 100%;
+  }
+
+  .aiTriage {
+    min-width: 0;
   }
 }
 

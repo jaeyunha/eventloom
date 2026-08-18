@@ -94,4 +94,64 @@ describe("OrganizerReviewOverview", () => {
     expect(markup).toContain("<strong>No title</strong>");
     expect(markup).not.toContain(`<span>${internalId}</span>`);
   });
+
+  it("shows shared round AI triage with its rationale and override action", () => {
+    const [row] = overviewRows(1);
+    if (row === undefined) throw new Error("Expected a review overview row.");
+    const markup = renderToStaticMarkup(
+      createElement(OrganizerReviewOverview, {
+        planName: "Program review",
+        planStatusLabel: "Open for review",
+        description: "Committee review has one submission in view.",
+        metrics: [{ label: "Reviewer coverage", value: "2/2", detail: "reviewer slots assigned" }],
+        completionPercent: 0,
+        attentionSummary: {
+          count: 1,
+          label: "submission needs attention",
+          description: "Use row actions to continue review operations.",
+        },
+        rows: [row],
+        onManageReviewers: vi.fn(),
+        onOpenPlan: vi.fn(),
+        onOpenReviewers: vi.fn(),
+        onOpenDecisions: vi.fn(),
+        aiTriage: {
+          enabled: true,
+          criterionLabels: { quality: "Overall quality" },
+          suggestions: {
+            [row.id]: {
+              id: "suggestion-1",
+              submissionId: row.id,
+              status: "pending",
+              version: 1,
+              candidates: {
+                quality: [
+                  {
+                    criterionId: "quality",
+                    value: 4,
+                    evidence: ["The practical material gives the audience a concrete outcome."],
+                  },
+                ],
+              },
+              provenance: {
+                provider: "openai",
+                model: "gpt-5.6-sol",
+                generatedAt: "2026-08-08T12:00:00.000Z",
+              },
+            },
+          },
+          loading: false,
+          busySubmissionId: null,
+          error: null,
+          onGenerate: vi.fn(),
+          onOverride: vi.fn(),
+        },
+      }),
+    );
+
+    expect(markup).toContain("AI triage");
+    expect(markup).toContain("Overall quality");
+    expect(markup).toContain("The practical material gives the audience a concrete outcome.");
+    expect(markup).toContain("Save override");
+  });
 });

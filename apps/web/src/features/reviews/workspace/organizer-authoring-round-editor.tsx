@@ -126,6 +126,23 @@ export function OrganizerRoundEditor({
           <option value="double">Double-blind</option>
         </select>
       </div>
+      <div className={styles.formField}>
+        <label htmlFor={`${round.id}-ai-triage`}>
+          <input
+            id={`${round.id}-ai-triage`}
+            type="checkbox"
+            checked={round.aiTriageEnabled === true}
+            onChange={(event) => {
+              const aiTriageEnabled = event.currentTarget.checked;
+              updateRound(roundIndex, (current) => ({ ...current, aiTriageEnabled }));
+            }}
+          />
+          Enable organizer AI triage
+        </label>
+        <p>
+          Organizers generate one shared advisory scorecard per submission; reviewers never see it.
+        </p>
+      </div>
       <OrganizerRoundTargeting controller={controller} round={round} roundIndex={roundIndex} />
       <section className={styles.criteriaList} aria-label={`${round.name} criteria authoring`}>
         {round.rubric.criteria.map((criterion, criterionIndex) => (

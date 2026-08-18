@@ -25,6 +25,7 @@ export interface ApiPlan {
     rubricRevision?: number;
     opensAt?: string | null | undefined;
     closesAt: string | null;
+    aiTriageEnabled?: boolean | undefined;
     blindReview?: boolean | undefined;
     anonymization?: "none" | "single" | "double" | undefined;
     reviewerPool?:

@@ -64,6 +64,7 @@ export function useOrganizerAuthoringState({
       ...(round.rubricRevision === undefined ? {} : { rubricRevision: round.rubricRevision }),
       opensAt: null,
       closesAt: null,
+      ...(round.aiTriageEnabled === undefined ? {} : { aiTriageEnabled: round.aiTriageEnabled }),
       ...(round.blindReview === undefined ? {} : { blindReview: round.blindReview }),
       ...(round.anonymization === undefined ? {} : { anonymization: round.anonymization }),
       ...(round.reviewerPool === undefined ? {} : { reviewerPool: round.reviewerPool }),

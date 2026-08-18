@@ -1,6 +1,5 @@
 "use client";
 import type { ApiReviewContext } from "./api-api-review-context";
-import type { ApiSuggestion } from "./api-api-suggestion";
 import type { EvaluatorState } from "./evaluator-state";
 import { criterionNumericValue } from "./model-criterion-numeric-value";
 import { criterionOptionValue } from "./model-criterion-option-value";
@@ -28,40 +27,7 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
     autosaveQueue,
     setAutosaveState,
     setSubmitError,
-    suggestions,
   } = scope;
-  function suggestionForCriterion(criterionId: string): {
-    suggestion: ApiSuggestion;
-    candidate: {
-      value: number;
-      evidence: readonly string[];
-      provenance?: ApiSuggestion["candidates"][string][number]["provenance"];
-    };
-  } | null {
-    const criteria = assignment.round.rubric.criteria;
-    const criteriaById = new Map<string, (typeof criteria)[number]>();
-    for (const criterion of criteria) {
-      if (!criteriaById.has(criterion.id)) criteriaById.set(criterion.id, criterion);
-    }
-    for (const suggestion of suggestions) {
-      if (suggestion.status !== "pending") continue;
-      const resolvedCriterionIds = new Set(
-        suggestion.history?.flatMap((entry) =>
-          entry.action === "reject" && entry.criterionId !== undefined
-            ? [entry.criterionId]
-            : entry.action !== "edit" && entry.action !== "accept"
-              ? []
-              : Object.keys(entry.valueByCriterion ?? {}),
-        ),
-      );
-      if (resolvedCriterionIds.has(criterionId)) continue;
-      const criterion = criteriaById.get(criterionId);
-      if (criterion === undefined || criterionType(criterion) === "free_text") continue;
-      const candidate = suggestion.candidates[criterionId]?.[0];
-      if (candidate !== undefined) return { suggestion, candidate };
-    }
-    return null;
-  }
   function reportDraft(
     nextScores: Readonly<Record<string, string>> = scoreValues,
     nextResponses: Readonly<Record<string, string>> = responseValues,
@@ -197,7 +163,6 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
   return {
     ...scope,
     reportDraft,
-    suggestionForCriterion,
     applyAuthoritativeReview,
     persistReview,
     enqueueAutosave,

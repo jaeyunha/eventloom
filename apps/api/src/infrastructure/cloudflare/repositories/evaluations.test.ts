@@ -134,10 +134,7 @@ function workspaceDatabase(reviewCount: number, scoresPerReview: number): Record
       criterion_id: `criterion-${scoreIndex + 1}`,
       value_number: scoreIndex === 0 ? null : scoreIndex + 3,
       value_text: scoreIndex === 0 ? "strong" : null,
-      origin: scoreIndex === 0 ? "ai" : "human",
-      human_confirmed_by: scoreIndex === 0 ? `reviewer-${reviewIndex + 1}` : null,
-      suggestion_id: scoreIndex === 0 ? `suggestion-${reviewIndex + 1}` : null,
-      suggestion_status: scoreIndex === 0 ? "edited" : null,
+      origin: "human",
       rubric_revision: 4,
       submission_revision: 5,
       updated_at: timestamp,
@@ -175,7 +172,7 @@ describe("D1EvaluationRepository organizer workspace hydration", () => {
     ]);
   });
 
-  it("uses a fixed five statements while preserving complete review score hydration", async () => {
+  it("uses a fixed five statements while preserving complete human review score hydration", async () => {
     const smallDatabase = workspaceDatabase(1, 1);
     const largeDatabase = workspaceDatabase(4, 3);
 
@@ -214,11 +211,8 @@ describe("D1EvaluationRepository organizer workspace hydration", () => {
       scores: {
         "criterion-1": {
           value: "strong",
-          origin: "ai",
+          origin: "human",
           evidence: ["review-1:criterion-1:first", "review-1:criterion-1:second"],
-          humanConfirmedBy: "reviewer-1",
-          suggestionId: "suggestion-1",
-          suggestionStatus: "edited",
           rubricRevision: 4,
           submissionRevision: 5,
         },
@@ -540,7 +534,6 @@ const review: EvaluationReview = {
       value: 4,
       origin: "human",
       evidence: ["Specific evidence"],
-      humanConfirmedBy: null,
       rubricRevision: 4,
       submissionRevision: 5,
       updatedAt: timestamp,
@@ -1149,69 +1142,6 @@ describe("D1EvaluationRepository compound CAS", () => {
     expect(batchSql(db)).toContain("INSERT INTO evaluation_conflicts");
   });
 
-  it("resolves a suggestion, assignment, and review in one guarded batch", async () => {
-    const db = database();
-    const suggestion: EvaluationSuggestion = {
-      id: "suggestion-1",
-      tenantId: "org-1",
-      eventId: "event-1",
-      planId: "plan-1",
-      roundId: "round-1",
-      assignmentId: "assignment-1",
-      submissionId: "submission-1",
-      reviewerId: "reviewer-1",
-      rubricRevision: 4,
-      submissionRevision: 5,
-      criterionCandidates: [],
-      candidates: {},
-      provenance: {
-        provider: "provider",
-        model: "model",
-        generatedAt: timestamp,
-        sourceReferences: [],
-      },
-      status: "accepted",
-      version: 2,
-      history: [],
-      audit: [],
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-
-    const repository = new D1EvaluationRepository(db as unknown as D1Database);
-    await repository.putSuggestion({ ...suggestion, status: "pending", version: 1 }, null, {
-      assignment,
-      expectedAssignmentVersion: 1,
-      authorizedAt: timestamp,
-    });
-    expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(4);
-    expect(batchSql(db)).toContain("status IN ('assigned', 'in_progress')");
-    expect(batchSql(db)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
-    expect(batchSql(db)).toMatch(/EXISTS \(\s*SELECT 1 FROM submissions/u);
-    expect(batchSql(db)).toMatch(/FROM submissions\s+WHERE[\s\S]*\bid = \?/u);
-    expect(batchSql(db)).toContain("status = 'submitted'");
-    expect(batchSql(db)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_decisions/u);
-
-    await repository.resolveSuggestion(suggestion, 1, assignment, 1, review, null, {
-      assignment,
-      expectedAssignmentVersion: 1,
-      authorizedAt: timestamp,
-    });
-
-    expect(db.batches).toHaveLength(2);
-    expect(batchSql(db, 1)).toContain("evaluation_suggestions");
-    expect(batchSql(db, 1)).toContain("review_assignments");
-    expect(batchSql(db, 1)).toContain("evaluation_reviews");
-    expect(db.batches[1]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(6);
-    expect(batchSql(db, 1)).toContain("status IN ('assigned', 'in_progress')");
-    expect(batchSql(db, 1)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
-    expect(batchSql(db, 1)).toMatch(/EXISTS \(\s*SELECT 1 FROM submissions/u);
-    expect(batchSql(db, 1)).toMatch(/FROM submissions\s+WHERE[\s\S]*\bid = \?/u);
-    expect(batchSql(db, 1)).toContain("status = 'submitted'");
-    expect(batchSql(db, 1)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_decisions/u);
-    expect(batchSql(db, 1)).toContain("WITH RECURSIVE family");
-  });
-
   it("tenant-scopes plan, assignment, review, suggestion, conflict, and decision reads", async () => {
     const db = database();
     const repository = new D1EvaluationRepository(db as unknown as D1Database);
@@ -1235,9 +1165,9 @@ const migratedSuggestion: EvaluationSuggestion = {
   eventId: speakerLifecycleIds.eventId,
   planId: "plan-migrated-1",
   roundId: "round-migrated-1",
-  assignmentId: "assignment-migrated-1",
+  assignmentId: null,
   submissionId: speakerLifecycleIds.acceptedSubmissionId,
-  reviewerId: "reviewer-migrated-1",
+  reviewerId: "organizer-migrated-1",
   rubricRevision: 1,
   submissionRevision: 1,
   criterionCandidates: [],
@@ -1283,11 +1213,11 @@ function seedMigratedEvaluationAssignment(
       id, organization_id, event_id, name, status, blind_review,
       reviews_per_submission, max_assignments_per_reviewer, auto_distribute,
       reviewer_projection_field_ids_json, reviewer_projection_file_ids_json,
-      version, created_at, updated_at
+      version, revision_sync_pending, created_at, updated_at
     ) VALUES (
       '${migratedSuggestion.planId}', '${migratedSuggestion.tenantId}',
       '${migratedSuggestion.eventId}', 'Migrated review', 'open', 0,
-      1, 5, 0, '[]', '[]', 1, '${timestamp}', '${timestamp}'
+      1, 5, 0, '[]', '[]', 1, 0, '${timestamp}', '${timestamp}'
     );
     INSERT INTO review_rounds (
       id, organization_id, event_id, plan_id, name, sequence, revision,
@@ -1325,34 +1255,13 @@ describe("D1EvaluationRepository migrated lifecycle CAS", () => {
     try {
       seedMigratedEvaluationAssignment(fixture.database);
       const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
-      const scopedSuggestion = {
-        ...migratedSuggestion,
-        history: [
-          {
-            action: "reject" as const,
-            actorId: "reviewer-migrated-1",
-            at: timestamp,
-            criterionId: "__criterionId",
-          },
-        ],
-        audit: [
-          {
-            action: "reject" as const,
-            actorId: "reviewer-migrated-1",
-            at: timestamp,
-            criterionId: "__criterionId",
-          },
-        ],
-      };
-
-      await repository.putSuggestion(scopedSuggestion, null, 1);
+      await repository.putSuggestion(migratedSuggestion, null, 1);
 
       await expect(
         repository.getSuggestion(migratedSuggestion.tenantId, migratedSuggestion.id),
       ).resolves.toMatchObject({
         id: migratedSuggestion.id,
         status: "pending",
-        history: [{ criterionId: "__criterionId" }],
       });
     } finally {
       fixture.dispose();

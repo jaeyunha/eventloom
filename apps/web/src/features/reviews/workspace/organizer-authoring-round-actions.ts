@@ -81,6 +81,7 @@ export function useOrganizerRoundActions(scope: OrganizerAuthoringState) {
           sequence,
           opensAt: null,
           closesAt: null,
+          aiTriageEnabled: false,
           blindReview: false,
           anonymization: "none",
           reviewerPool: { reviewerIds: [] },

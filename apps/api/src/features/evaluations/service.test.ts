@@ -26,6 +26,7 @@ import type {
   EvaluationReviewerProjection,
   EvaluationSuggestion,
   EvaluationSuggestionProviderCandidate,
+  EvaluationSuggestionProviderInput,
   ReviewRound,
   SubmissionReviewMaterial,
 } from "./types";
@@ -87,30 +88,6 @@ class AbstainedAssignmentRepository extends InMemoryEvaluationRepository {
   ): Promise<EvaluationAssignment | null> {
     const assignment = await super.getAssignment(tenantId, assignmentId);
     return assignment === null ? null : { ...assignment, status: "abstained" };
-  }
-}
-
-class GatedSuggestionRepository extends InMemoryEvaluationRepository {
-  listGate: Promise<void> | null = null;
-  listEntered: (() => void) | null = null;
-  resolutionGate: Promise<void> | null = null;
-  resolutionEntered: (() => void) | null = null;
-
-  override async listSuggestions(
-    ...args: Parameters<InMemoryEvaluationRepository["listSuggestions"]>
-  ) {
-    const suggestions = await super.listSuggestions(...args);
-    this.listEntered?.();
-    if (this.listGate !== null) await this.listGate;
-    return suggestions;
-  }
-
-  override async resolveSuggestion(
-    ...args: Parameters<InMemoryEvaluationRepository["resolveSuggestion"]>
-  ) {
-    this.resolutionEntered?.();
-    if (this.resolutionGate !== null) await this.resolutionGate;
-    return super.resolveSuggestion(...args);
   }
 }
 
@@ -345,11 +322,12 @@ class RacingReviewAdmissionRepository extends InMemoryEvaluationRepository {
   override async putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
-    admission?: EvaluationReviewWriteAdmission,
+    expectedSubmissionRevision?: number,
+    allowClosedPlan = false,
   ): Promise<void> {
-    if (this.closeBeforeSuggestionWrite && admission !== undefined) {
+    if (this.closeBeforeSuggestionWrite) {
       this.closeBeforeSuggestionWrite = false;
-      const plan = await this.getPlan(admission.assignment.tenantId, admission.assignment.planId);
+      const plan = await this.getPlan(suggestion.tenantId, suggestion.planId);
       if (plan === null) throw new Error("Expected a plan race fixture.");
       await super.putPlanState(
         { ...plan, status: "closed", version: plan.version + 1 },
@@ -357,7 +335,12 @@ class RacingReviewAdmissionRepository extends InMemoryEvaluationRepository {
         [],
       );
     }
-    await super.putSuggestion(suggestion, expectedVersion, admission);
+    await super.putSuggestion(
+      suggestion,
+      expectedVersion,
+      expectedSubmissionRevision,
+      allowClosedPlan,
+    );
   }
 }
 
@@ -606,21 +589,31 @@ async function assignOne(service: EvaluationService, userId = "reviewer-1") {
   return assignment;
 }
 
+const triageRound: ReviewRound = { ...round, aiTriageEnabled: true };
+
+function generateTriage(
+  service: EvaluationService,
+  options: { planId?: string; roundId?: string; submissionId?: string; regenerate?: boolean } = {},
+): Promise<EvaluationSuggestion> {
+  return service.generateRoundAiSuggestions(organizer, {
+    planId: options.planId ?? "plan-1",
+    roundId: options.roundId ?? round.id,
+    submissionId: options.submissionId ?? submission.id,
+    ...(options.regenerate === true ? { regenerate: true } : {}),
+  });
+}
+
 async function expectProviderCandidatesRejected(
   candidates: readonly EvaluationSuggestionProviderCandidate[],
-  reviewRound: ReviewRound = round,
+  reviewRound: ReviewRound = triageRound,
 ): Promise<void> {
   const { repository, service, plan } = await fixture({
     reviewsPerSubmission: 1,
     reviewRound,
     aiSuggestionProducer: async () => ({ candidates }),
   });
-  const assignment = await assignOne(service);
 
-  await expectEvaluationError(
-    service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-    "EVALUATION_INVALID_INPUT",
-  );
+  await expectEvaluationError(generateTriage(service), "EVALUATION_INVALID_INPUT");
   expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
 }
 
@@ -1073,25 +1066,20 @@ describe("evaluation plans and assignments", () => {
 
   it("rejects AI suggestion persistence when plan close wins the provider race", async () => {
     const repository = new RacingReviewAdmissionRepository();
-    const { service } = await fixture({
+    const { service, plan } = await fixture({
       reviewsPerSubmission: 1,
       repository,
+      reviewRound: triageRound,
       aiSuggestionProvider: {
         suggest: async () => ({
           candidates: validAiCandidates(),
         }),
       },
     });
-    const assignment = await assignOne(service);
     repository.closeBeforeSuggestionWrite = true;
 
-    await expectEvaluationError(
-      service.generateAiSuggestions(reviewer("reviewer-1"), {
-        assignmentId: assignment.id,
-      }),
-      "EVALUATION_CLOSED",
-    );
-    await expect(repository.listSuggestions(tenantId, assignment.id)).resolves.toEqual([]);
+    await expectEvaluationError(generateTriage(service), "EVALUATION_CLOSED");
+    await expect(repository.listSuggestions(tenantId, plan.id)).resolves.toEqual([]);
   });
 
   it("blocks reviewer reads and writes while legacy lineage repair is unresolved", async () => {
@@ -1134,25 +1122,20 @@ describe("evaluation plans and assignments", () => {
 
   it("rejects AI suggestion persistence when plan close wins the provider race", async () => {
     const repository = new RacingReviewAdmissionRepository();
-    const { service } = await fixture({
+    const { service, plan } = await fixture({
       reviewsPerSubmission: 1,
       repository,
+      reviewRound: triageRound,
       aiSuggestionProvider: {
         suggest: async () => ({
           candidates: validAiCandidates(),
         }),
       },
     });
-    const assignment = await assignOne(service);
     repository.closeBeforeSuggestionWrite = true;
 
-    await expectEvaluationError(
-      service.generateAiSuggestions(reviewer("reviewer-1"), {
-        assignmentId: assignment.id,
-      }),
-      "EVALUATION_CLOSED",
-    );
-    await expect(repository.listSuggestions(tenantId, assignment.id)).resolves.toEqual([]);
+    await expectEvaluationError(generateTriage(service), "EVALUATION_CLOSED");
+    await expect(repository.listSuggestions(tenantId, plan.id)).resolves.toEqual([]);
   });
 
   it("excludes decided submissions from reviewer queues while retaining organizer facts", async () => {
@@ -2275,54 +2258,23 @@ describe("review drafts, AI assistance, and aggregates", () => {
       averageWeightedTotal: null,
     });
   });
-  it("does not count an AI suggestion until the assigned human confirms it", async () => {
+  it("never exposes shared AI suggestions to reviewers and never counts them in aggregates", async () => {
     const { service } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
     });
     const assignment = await assignOne(service);
     const actor = reviewer("reviewer-1");
-    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
+    const suggestion = await generateTriage(service);
 
-    await expectEvaluationError(
-      service.submitReview(actor, assignment.id, 0),
-      "EVALUATION_INVALID_INPUT",
-    );
+    const context = await service.getReviewContext(actor, assignment.id);
+    expect(context.suggestions ?? []).toEqual([]);
     expect(await service.getAggregate(organizer, "plan-1", round.id, submission.id)).toMatchObject({
       submittedReviewCount: 0,
       averageWeightedTotal: null,
     });
-    await service.saveReview(actor, assignment.id, {
-      scores: [],
-      comment: "Promising proposal.",
-    });
-
-    const resolved = await service.resolveAiSuggestion(actor, suggestion.id, {
-      action: "accept",
-      expectedVersion: suggestion.version,
-    });
-    if (resolved.review === null) throw new Error("Expected a resolved review.");
-    await service.submitReview(actor, assignment.id, resolved.review.version);
-    const aggregate = await service.getAggregate(organizer, "plan-1", round.id, submission.id);
-
-    expect(aggregate).toMatchObject({
-      submittedReviewCount: 1,
-      expectedReviewCount: 1,
-      averageWeightedTotal: 16,
-      possibleWeightedTotal: 20,
-    });
-    expect(aggregate.criteria).toEqual([
-      { criterionId: "quality", average: 4, count: 1, weight: 2 },
-      { criterionId: "relevance", average: 8, count: 1, weight: 1 },
-    ]);
-    const submittedReviews = await service.listSubmittedReviews(
-      organizer,
-      "plan-1",
-      round.id,
-      submission.id,
-    );
-    expect(submittedReviews).toHaveLength(1);
-    expect(submittedReviews[0]?.comment).toBe("Promising proposal.");
+    expect(suggestion.assignmentId).toBeNull();
   });
 
   it("uses submitted reviews as the authoritative queue and progress state", async () => {
@@ -2393,60 +2345,6 @@ describe("review drafts, AI assistance, and aggregates", () => {
 
     await expectEvaluationError(save, "EVALUATION_CONFLICT");
     await expect(repository.getReview(tenantId, assignment.id)).resolves.toBeNull();
-  });
-
-  it("rejects AI confirmation when a conflict commits before the guarded review write", async () => {
-    const submissions = new InMemorySubmissionReviewSource([submission]);
-    const repository = new GatedReviewWriteRepository(submissions);
-    const { service } = await fixture({
-      reviewsPerSubmission: 1,
-      repository,
-      submissions,
-    });
-    const assignment = await assignOne(service);
-    const baseDraft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
-      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
-    });
-    const quality = baseDraft.scores.quality;
-    if (quality === undefined) throw new Error("Expected a quality score.");
-    const draft = {
-      ...baseDraft,
-      scores: {
-        ...baseDraft.scores,
-        quality: {
-          ...quality,
-          origin: "ai" as const,
-          evidence: ["AI evidence."],
-          humanConfirmedBy: null,
-          suggestionId: "legacy:test",
-          suggestionStatus: "pending" as const,
-        },
-      },
-    };
-    await repository.putReviewForTesting(draft);
-    let releaseWrite!: () => void;
-    const writeEntered = new Promise<void>((resolve) => {
-      repository.writeEntered = resolve;
-      repository.writeGate = new Promise<void>((resolveGate) => {
-        releaseWrite = resolveGate;
-      });
-    });
-    const confirm = service.confirmAiScores(
-      reviewer("reviewer-1"),
-      assignment.id,
-      ["quality"],
-      draft.version,
-    );
-
-    await writeEntered;
-    await service.declareConflict(reviewer("reviewer-1"), assignment.id, "Cannot review fairly.");
-    releaseWrite();
-
-    await expectEvaluationError(confirm, "EVALUATION_CONFLICT");
-    await expect(repository.getReview(tenantId, assignment.id)).resolves.toMatchObject({
-      version: draft.version,
-      scores: { quality: { origin: "ai" } },
-    });
   });
 
   it("rejects submission when withdrawal commits before the guarded review write", async () => {
@@ -2525,7 +2423,6 @@ describe("review drafts, AI assistance, and aggregates", () => {
     expect(edited.scores.quality).toMatchObject({
       value: 5,
       origin: "human",
-      humanConfirmedBy: null,
     });
     await expectEvaluationError(
       service.saveReview(actor, assignment.id, {
@@ -2533,25 +2430,6 @@ describe("review drafts, AI assistance, and aggregates", () => {
         expectedVersion: first.version,
       }),
       "EVALUATION_CONFLICT",
-    );
-  });
-
-  it("rejects client-supplied AI scores", async () => {
-    const { service } = await fixture({ reviewsPerSubmission: 1 });
-    const assignment = await assignOne(service);
-
-    await expectEvaluationError(
-      service.saveReview(reviewer("reviewer-1"), assignment.id, {
-        scores: [
-          {
-            criterionId: "quality",
-            value: 4,
-            origin: "ai",
-            evidence: ["Fabricated provider evidence."],
-          },
-        ],
-      }),
-      "EVALUATION_INVALID_INPUT",
     );
   });
 
@@ -2582,9 +2460,6 @@ describe("conflicts, progress, and decisions", () => {
     await service.saveReview(actor, assignment.id, {
       scores: [{ criterionId: "quality", value: 4, origin: "human" }],
     });
-    const suggestion = await service.generateAiSuggestions(actor, {
-      assignmentId: assignment.id,
-    });
 
     const declaration = await service.declareConflict(
       actor,
@@ -2595,21 +2470,6 @@ describe("conflicts, progress, and decisions", () => {
     expect(declaration.reviewerId).toBe(actor.userId);
     await expectEvaluationError(
       service.getReviewContext(actor, assignment.id),
-      "EVALUATION_FORBIDDEN",
-    );
-    await expectEvaluationError(
-      service.generateAiSuggestions(actor, { assignmentId: assignment.id }),
-      "EVALUATION_FORBIDDEN",
-    );
-    await expectEvaluationError(
-      service.listAiSuggestions(actor, assignment.id),
-      "EVALUATION_FORBIDDEN",
-    );
-    await expectEvaluationError(
-      service.resolveAiSuggestion(actor, suggestion.id, {
-        action: "accept",
-        expectedVersion: suggestion.version,
-      }),
       "EVALUATION_FORBIDDEN",
     );
     const progress = await service.getProgress(organizer, "plan-1");
@@ -2636,7 +2496,7 @@ describe("conflicts, progress, and decisions", () => {
     ]);
   });
 
-  it("rejects an in-flight suggestion generation after conflict declaration", async () => {
+  it("rejects an in-flight suggestion generation after a decision is recorded", async () => {
     let announceProviderStarted: () => void = () => {
       throw new Error("Provider start signal was not initialized.");
     };
@@ -2651,125 +2511,27 @@ describe("conflicts, progress, and decisions", () => {
     });
     const { repository, service, plan } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       aiSuggestionProducer: async () => {
         announceProviderStarted();
         await providerGate;
         return { candidates: validAiCandidates() };
       },
     });
-    const assignment = await assignOne(service);
-    const actor = reviewer("reviewer-1");
-    const generation = service.generateAiSuggestions(actor, {
-      assignmentId: assignment.id,
-    });
+    await assignOne(service);
+    const generation = generateTriage(service);
     await providerStarted;
-    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
+    await service.recordDecision(organizer, {
+      planId: plan.id,
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Committee consensus reached.",
+      idempotencyKey: crypto.randomUUID(),
+    });
     releaseProvider();
 
     await expectEvaluationError(generation, "EVALUATION_CONFLICT");
     expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
-  });
-
-  it("rejects an in-flight suggestion list after conflict declaration", async () => {
-    const repository = new GatedSuggestionRepository();
-    const { service } = await fixture({
-      repository,
-      reviewsPerSubmission: 1,
-      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
-    });
-    const assignment = await assignOne(service);
-    const actor = reviewer("reviewer-1");
-    await service.generateAiSuggestions(actor, assignment.id);
-    let releaseList: () => void = () => {
-      throw new Error("List release signal was not initialized.");
-    };
-    const listEntered = new Promise<void>((resolve) => {
-      repository.listEntered = resolve;
-    });
-    repository.listGate = new Promise<void>((resolve) => {
-      releaseList = resolve;
-    });
-
-    const listing = service.listAiSuggestions(actor, assignment.id);
-    await listEntered;
-    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
-    releaseList();
-
-    await expectEvaluationError(listing, "EVALUATION_FORBIDDEN");
-  });
-
-  it("allows an in-flight suggestion list after a benign autosave version change", async () => {
-    const repository = new GatedSuggestionRepository();
-    const { service } = await fixture({
-      repository,
-      reviewsPerSubmission: 1,
-      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
-    });
-    const assignment = await assignOne(service);
-    const actor = reviewer("reviewer-1");
-    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
-    let releaseList: () => void = () => {
-      throw new Error("List release signal was not initialized.");
-    };
-    const listEntered = new Promise<void>((resolve) => {
-      repository.listEntered = resolve;
-    });
-    repository.listGate = new Promise<void>((resolve) => {
-      releaseList = resolve;
-    });
-
-    const listing = service.listAiSuggestions(actor, assignment.id);
-    await listEntered;
-    await service.saveReview(actor, assignment.id, {
-      scores: [{ criterionId: "quality", value: 3, origin: "human" }],
-    });
-    releaseList();
-
-    await expect(listing).resolves.toEqual([suggestion]);
-  });
-
-  it("rejects an in-flight suggestion resolution after conflict declaration", async () => {
-    const repository = new GatedSuggestionRepository();
-    const { service } = await fixture({
-      repository,
-      reviewsPerSubmission: 1,
-      aiSuggestionProducer: async () => ({
-        candidates: validAiCandidates(),
-      }),
-    });
-    const assignment = await assignOne(service);
-    const actor = reviewer("reviewer-1");
-    await service.saveReview(actor, assignment.id, {
-      scores: [{ criterionId: "quality", value: 3, origin: "human" }],
-    });
-    const suggestion = await service.generateAiSuggestions(actor, {
-      assignmentId: assignment.id,
-    });
-    let releaseResolution: () => void = () => {
-      throw new Error("Resolution release signal was not initialized.");
-    };
-    const resolutionEntered = new Promise<void>((resolve) => {
-      repository.resolutionEntered = resolve;
-    });
-    repository.resolutionGate = new Promise<void>((resolve) => {
-      releaseResolution = resolve;
-    });
-    const resolution = service.resolveAiSuggestion(actor, suggestion.id, {
-      action: "accept",
-      expectedVersion: suggestion.version,
-    });
-    await resolutionEntered;
-    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
-    releaseResolution();
-
-    await expectEvaluationError(resolution, "EVALUATION_CONFLICT");
-    expect(await repository.getSuggestion(tenantId, suggestion.id)).toMatchObject({
-      status: "pending",
-      version: suggestion.version,
-    });
-    expect(await repository.getReview(tenantId, assignment.id)).toMatchObject({
-      scores: { quality: { value: 3, origin: "human" } },
-    });
   });
 
   it.each(["draft", "reopened", "withdrawn", "archived"])(
@@ -2778,18 +2540,15 @@ describe("conflicts, progress, and decisions", () => {
       let providerCalls = 0;
       const { repository, service, plan, submissions } = await fixture({
         reviewsPerSubmission: 1,
+        reviewRound: triageRound,
         aiSuggestionProducer: async () => {
           providerCalls += 1;
           return { candidates: validAiCandidates() };
         },
       });
-      const assignment = await assignOne(service);
       submissions.set({ ...submission, status });
 
-      await expectEvaluationError(
-        service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-        "EVALUATION_CONFLICT",
-      );
+      await expectEvaluationError(generateTriage(service), "EVALUATION_CONFLICT");
       expect(providerCalls).toBe(0);
       expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
     },
@@ -2799,56 +2558,33 @@ describe("conflicts, progress, and decisions", () => {
     let providerCalls = 0;
     const { repository, service, plan, submissions } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       aiSuggestionProducer: async () => {
         providerCalls += 1;
         return { candidates: validAiCandidates() };
       },
     });
-    const assignment = await assignOne(service);
     submissions.delete(tenantId, submission.id);
 
-    await expectEvaluationError(
-      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-      "EVALUATION_NOT_FOUND",
-    );
+    await expectEvaluationError(generateTriage(service), "EVALUATION_NOT_FOUND");
     expect(providerCalls).toBe(0);
     expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
   });
 
-  it("rejects suggestion listing after submission withdrawal", async () => {
-    const { service, submissions } = await fixture({
+  it("rejects AI triage when the round has not enabled it and requires an organizer", async () => {
+    const { service } = await fixture({
       reviewsPerSubmission: 1,
       aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
     });
-    const assignment = await assignOne(service);
-    const actor = reviewer("reviewer-1");
-    await service.generateAiSuggestions(actor, assignment.id);
-    submissions.set({ ...submission, status: "withdrawn" });
-
+    await expectEvaluationError(generateTriage(service), "EVALUATION_FORBIDDEN");
     await expectEvaluationError(
-      service.listAiSuggestions(actor, assignment.id),
-      "EVALUATION_CONFLICT",
-    );
-  });
-
-  it("rejects suggestion resolution after submission withdrawal", async () => {
-    const { repository, service, submissions } = await fixture({
-      reviewsPerSubmission: 1,
-      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
-    });
-    const assignment = await assignOne(service);
-    const actor = reviewer("reviewer-1");
-    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
-    submissions.set({ ...submission, status: "withdrawn" });
-
-    await expectEvaluationError(
-      service.resolveAiSuggestion(actor, suggestion.id, {
-        action: "accept",
-        expectedVersion: suggestion.version,
+      service.generateRoundAiSuggestions(reviewer("reviewer-1"), {
+        planId: "plan-1",
+        roundId: round.id,
+        submissionId: submission.id,
       }),
-      "EVALUATION_CONFLICT",
+      "EVALUATION_FORBIDDEN",
     );
-    expect(await repository.getSuggestion(tenantId, suggestion.id)).toEqual(suggestion);
   });
 
   it("rejects in-flight suggestion generation after submission withdrawal", async () => {
@@ -2866,88 +2602,20 @@ describe("conflicts, progress, and decisions", () => {
     });
     const { repository, service, plan, submissions } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       aiSuggestionProducer: async () => {
         announceProviderStarted();
         await providerGate;
         return { candidates: validAiCandidates() };
       },
     });
-    const assignment = await assignOne(service);
-    const generation = service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id);
+    const generation = generateTriage(service);
     await providerStarted;
     submissions.set({ ...submission, status: "withdrawn" });
     releaseProvider();
 
     await expectEvaluationError(generation, "EVALUATION_CONFLICT");
     expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
-  });
-
-  it("rejects an in-flight suggestion list after submission withdrawal", async () => {
-    const repository = new GatedSuggestionRepository();
-    const { service, submissions } = await fixture({
-      repository,
-      reviewsPerSubmission: 1,
-      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
-    });
-    const assignment = await assignOne(service);
-    const actor = reviewer("reviewer-1");
-    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
-    submissions.set({ ...submission, status: "submitted", version: 2 });
-    let releaseList: () => void = () => {
-      throw new Error("List release signal was not initialized.");
-    };
-    const listEntered = new Promise<void>((resolve) => {
-      repository.listEntered = resolve;
-    });
-    repository.listGate = new Promise<void>((resolve) => {
-      releaseList = resolve;
-    });
-
-    const listing = service.listAiSuggestions(actor, assignment.id);
-    await listEntered;
-    submissions.set({ ...submission, status: "withdrawn" });
-    releaseList();
-
-    await expectEvaluationError(listing, "EVALUATION_CONFLICT");
-    expect(await repository.getSuggestion(tenantId, suggestion.id)).toEqual(suggestion);
-  });
-
-  it("rejects an in-flight suggestion resolution after submission withdrawal", async () => {
-    const submissions = new GatedSubmissionSource([
-      submission,
-      { ...submission, id: "submission-2", title: "Another session" },
-    ]);
-    const { repository, service } = await fixture({
-      submissions,
-      reviewsPerSubmission: 1,
-      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
-    });
-    const assignment = await assignOne(service);
-    const actor = reviewer("reviewer-1");
-    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
-    submissions.set({ ...submission, status: "submitted", version: 2 });
-    let releaseRead: () => void = () => {
-      throw new Error("Submission read release signal was not initialized.");
-    };
-    const readEntered = new Promise<void>((resolve) => {
-      submissions.readEntered = resolve;
-    });
-    submissions.gateReadNumber = submissions.readCount + 2;
-    submissions.readGate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-
-    const resolution = service.resolveAiSuggestion(actor, suggestion.id, {
-      action: "accept",
-      expectedVersion: suggestion.version,
-    });
-    await readEntered;
-    submissions.set({ ...submission, status: "withdrawn" });
-    releaseRead();
-
-    await expectEvaluationError(resolution, "EVALUATION_CONFLICT");
-    expect(await repository.getSuggestion(tenantId, suggestion.id)).toEqual(suggestion);
-    expect(await repository.getReview(tenantId, assignment.id)).toBeNull();
   });
 
   it("rejects incomplete acceptance before persisting a decision", async () => {
@@ -3486,6 +3154,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         {
           ...round,
           name: "Edited committee review",
+          aiTriageEnabled: true,
           rubric: { ...round.rubric, name: "Edited rubric" },
         },
       ],
@@ -3531,8 +3200,10 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(context.submission.answers).toEqual({});
     expect(context.submission.files).toEqual([]);
     await expectEvaluationError(
-      service.generateAiSuggestions(reviewer("reviewer-1"), {
-        assignmentId: assignment.id,
+      service.generateRoundAiSuggestions(organizer, {
+        planId: rescheduled.id,
+        roundId: round.id,
+        submissionId: submission.id,
       }),
       "EVALUATION_ADVISORY_UNAVAILABLE",
     );
@@ -3682,6 +3353,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
   it("rejects an unknown empty provider criterion bucket without persistence", async () => {
     const { repository, service, plan } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       aiSuggestionProducer: async () => ({
         candidates: {
           quality: [validAiCandidates()[0]],
@@ -3690,12 +3362,8 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         },
       }),
     });
-    const assignment = await assignOne(service);
 
-    await expectEvaluationError(
-      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-      "EVALUATION_INVALID_INPUT",
-    );
+    await expectEvaluationError(generateTriage(service), "EVALUATION_INVALID_INPUT");
     expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
   });
 
@@ -3720,7 +3388,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         },
       ],
       {
-        ...round,
+        ...triageRound,
         rubric: {
           ...round.rubric,
           criteria: [...round.rubric.criteria, notesCriterion],
@@ -3732,11 +3400,11 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
   it("persists exactly one valid provider result for every scoreable criterion", async () => {
     const { repository, service, plan } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
     });
-    const assignment = await assignOne(service);
 
-    const suggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id);
+    const suggestion = await generateTriage(service);
 
     expect(Object.keys(suggestion.candidates).sort()).toEqual(["quality", "relevance"]);
     expect(suggestion.criterionCandidates).toHaveLength(2);
@@ -3784,14 +3452,30 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     ]);
   });
 
-  it("rejects arbitrary filler appended to source terms", async () => {
-    await expectProviderCandidatesRejected([
-      {
-        ...validAiCandidates()[0],
-        evidence: ["Practical material audience concrete outcome supports banana bicycle."],
+  it("accepts structurally grounded rationale without lexical quality filtering", async () => {
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRound: triageRound,
+      aiSuggestionProducer: async () => ({
+        candidates: [
+          {
+            ...validAiCandidates()[0],
+            evidence: ["Practical material audience concrete outcome supports banana bicycle."],
+          },
+          validAiCandidates()[1],
+        ],
+      }),
+    });
+
+    await expect(generateTriage(service)).resolves.toMatchObject({
+      candidates: {
+        quality: [
+          {
+            evidence: ["Practical material audience concrete outcome supports banana bicycle."],
+          },
+        ],
       },
-      validAiCandidates()[1],
-    ]);
+    });
   });
 
   it.each([
@@ -3854,14 +3538,12 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
   ])("accepts meaningful $language rationales", async ({ submissionMaterial, candidates }) => {
     const { service } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       submissionMaterial,
       aiSuggestionProducer: async () => ({ candidates }),
     });
-    const assignment = await assignOne(service);
 
-    await expect(
-      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-    ).resolves.toMatchObject({
+    await expect(generateTriage(service)).resolves.toMatchObject({
       criterionCandidates: [{ criterionId: "quality" }, { criterionId: "relevance" }],
     });
   });
@@ -3869,13 +3551,11 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
   it("accepts nontrivial source-grounded rationales", async () => {
     const { service } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
     });
-    const assignment = await assignOne(service);
 
-    await expect(
-      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-    ).resolves.toMatchObject({
+    await expect(generateTriage(service)).resolves.toMatchObject({
       candidates: {
         quality: [
           {
@@ -3904,13 +3584,11 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     );
     const { service } = await fixture({
       reviewsPerSubmission: 1,
+      reviewRound: triageRound,
       aiSuggestionProducer: async () => ({ candidates }),
     });
-    const assignment = await assignOne(service);
 
-    await expect(
-      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-    ).resolves.toMatchObject({
+    await expect(generateTriage(service)).resolves.toMatchObject({
       candidates: {
         quality: [
           {
@@ -3926,7 +3604,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
   it("rejects an all-free-text rubric before invoking the provider", async () => {
     let providerCalls = 0;
     const freeTextRound: ReviewRound = {
-      ...round,
+      ...triageRound,
       rubric: {
         ...round.rubric,
         criteria: round.rubric.criteria.map((criterion) => ({
@@ -3943,34 +3621,10 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         return { candidates: [] };
       },
     });
-    const assignment = await assignOne(service);
 
-    await expectEvaluationError(
-      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-      "EVALUATION_ADVISORY_UNSUPPORTED",
-    );
+    await expectEvaluationError(generateTriage(service), "EVALUATION_ADVISORY_UNSUPPORTED");
     expect(providerCalls).toBe(0);
     expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
-  });
-
-  it("rejects an abstained assignment before invoking the provider", async () => {
-    let providerCalls = 0;
-    const abstainedRepository = new AbstainedAssignmentRepository();
-    const { service } = await fixture({
-      reviewsPerSubmission: 1,
-      repository: abstainedRepository,
-      aiSuggestionProducer: async () => {
-        providerCalls += 1;
-        return { candidates: validAiCandidates() };
-      },
-    });
-    const assignment = await assignOne(service);
-
-    await expectEvaluationError(
-      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
-      "EVALUATION_FORBIDDEN",
-    );
-    expect(providerCalls).toBe(0);
   });
 
   it("applies a revised round schedule to existing reviewer assignments", async () => {
@@ -4905,7 +4559,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(await repository.getPlan(tenantId, plan.id)).toEqual(plan);
   });
 
-  it("requires an injected provider, snapshots revisions, and audits human resolutions", async () => {
+  it("requires an injected provider, snapshots revisions, and audits organizer overrides", async () => {
     const repository = new InMemoryEvaluationRepository();
     const source = new InMemorySubmissionReviewSource([{ ...submission, version: 7 }]);
     const provider = {
@@ -4960,181 +4614,135 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       blindReview: true,
       closesAt: "2026-08-12T12:00:00.000Z",
       assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 2 },
-      rounds: [round],
+      rounds: [triageRound],
     });
     const plan = await service.openPlan(organizer, draft.id, draft.version, crypto.randomUUID());
-    const assignments = await service.assignReviewers(organizer, {
+
+    const suggestion = await service.generateRoundAiSuggestions(organizer, {
       planId: plan.id,
       roundId: round.id,
       submissionId: submission.id,
-      reviewerIds: ["reviewer-1"],
-    });
-    const assignment = assignments[0];
-    if (assignment === undefined) {
-      throw new Error("Expected an assignment fixture.");
-    }
-    const suggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
-      assignmentId: assignment.id,
     });
     expect(suggestion).toMatchObject({
       status: "pending",
       rubricRevision: plan.version,
       submissionRevision: 7,
+      assignmentId: null,
       provenance: { provider: "test-provider", model: "test-model" },
     });
-    expect(suggestion.provenance.sourceReferences).toEqual([
-      "abstract:Practical material for the audience.",
-      "abstract:Practical material for the audience.",
-    ]);
     expect(suggestion.candidates.quality?.[0]).toMatchObject({
       value: 4,
       evidence: ["The practical material gives the audience a concrete outcome."],
     });
-    const rejectedSuggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
-      assignmentId: assignment.id,
+
+    const cached = await service.generateRoundAiSuggestions(organizer, {
+      planId: plan.id,
+      roundId: round.id,
+      submissionId: submission.id,
     });
-    const rejected = await service.resolveAiSuggestion(
-      reviewer("reviewer-1"),
-      rejectedSuggestion.id,
-      {
-        action: "reject",
-        reason: "Evidence was not sufficient.",
-        expectedVersion: rejectedSuggestion.version,
+    expect(cached.id).toBe(suggestion.id);
+
+    const overridden = await service.overrideAiSuggestion(organizer, suggestion.id, {
+      expectedVersion: suggestion.version,
+      valueByCriterion: { quality: 5 },
+      reason: "Committee judged the evidence stronger than the AI.",
+    });
+    expect(overridden).toMatchObject({
+      status: "overridden",
+      override: {
+        valueByCriterion: { quality: 5 },
+        overriddenBy: "organizer-1",
       },
-    );
-    expect(rejected.suggestion.status).toBe("rejected");
-    expect(rejected.suggestion.history.at(-1)).toMatchObject({
-      action: "reject",
-      actorId: "reviewer-1",
-      reason: "Evidence was not sufficient.",
     });
-    const editedSuggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
-      assignmentId: assignment.id,
-    });
-    const edited = await service.resolveAiSuggestion(reviewer("reviewer-1"), editedSuggestion.id, {
-      action: "edit",
-      scores: { quality: 5 },
-      reason: "Human evaluator adjusted the bounded score.",
-      expectedVersion: editedSuggestion.version,
-    });
-    expect(edited.suggestion).toMatchObject({ status: "pending" });
-    expect(edited.suggestion.history.at(-1)).toMatchObject({
-      action: "edit",
-      actorId: "reviewer-1",
+    expect(overridden.history.at(-1)).toMatchObject({
+      action: "override",
+      actorId: "organizer-1",
       valueByCriterion: { quality: 5 },
     });
-    expect(edited.review?.scores.quality).toMatchObject({
-      value: 5,
-      origin: "ai",
-      humanConfirmedBy: "reviewer-1",
-      suggestionStatus: "edited",
-    });
-    const acceptedAfterPartial = await service.resolveAiSuggestion(
-      reviewer("reviewer-1"),
-      edited.suggestion.id,
-      {
-        action: "accept",
-        scores: { relevance: 8 },
-        expectedVersion: edited.suggestion.version,
-      },
+
+    await expectEvaluationError(
+      service.overrideAiSuggestion(organizer, suggestion.id, {
+        expectedVersion: suggestion.version,
+        valueByCriterion: { quality: 3 },
+      }),
+      "EVALUATION_CONFLICT",
     );
-    expect(acceptedAfterPartial.suggestion.status).toBe("accepted");
-    expect(acceptedAfterPartial.review?.scores.quality?.value).toBe(5);
-    expect(acceptedAfterPartial.review?.scores.relevance?.value).toBe(8);
-    const secondSuggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
-      assignmentId: assignment.id,
-    });
-    const acceptedFirst = await service.resolveAiSuggestion(
-      reviewer("reviewer-1"),
-      secondSuggestion.id,
-      {
-        action: "accept",
-        criterionId: "quality",
-        scores: { quality: 4 },
-        expectedVersion: secondSuggestion.version,
-      },
-    );
-    expect(acceptedFirst.suggestion.status).toBe("pending");
-    const rejectedSecond = await service.resolveAiSuggestion(
-      reviewer("reviewer-1"),
-      secondSuggestion.id,
-      {
-        action: "reject",
-        criterionId: "relevance",
-        reason: "Rejected by the assigned human evaluator.",
-        expectedVersion: acceptedFirst.suggestion.version,
-      },
-    );
-    expect(rejectedSecond.suggestion.status).toBe("rejected");
-    expect(rejectedSecond.review?.scores.quality?.humanConfirmedBy).toBe("reviewer-1");
-    expect(rejectedSecond.review?.scores.quality?.suggestionStatus).toBe("accepted");
-    const thirdSuggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
-      assignmentId: assignment.id,
-    });
-    const rejectedOnce = await service.resolveAiSuggestion(
-      reviewer("reviewer-1"),
-      thirdSuggestion.id,
-      {
-        action: "reject",
-        criterionId: "quality",
-        reason: "Rejected once.",
-        expectedVersion: thirdSuggestion.version,
-      },
+
+    const listed = await service.listRoundAiSuggestions(organizer, plan.id, round.id);
+    expect(listed.map((item) => item.id)).toEqual([suggestion.id]);
+
+    await expectEvaluationError(
+      service.overrideAiSuggestion(reviewer("reviewer-1"), suggestion.id, {
+        expectedVersion: overridden.version,
+        valueByCriterion: { quality: 1 },
+      }),
+      "EVALUATION_FORBIDDEN",
     );
     await expectEvaluationError(
-      service.resolveAiSuggestion(reviewer("reviewer-1"), thirdSuggestion.id, {
-        action: "reject",
-        criterionId: "quality",
-        reason: "Repeated rejection must be rejected.",
-        expectedVersion: rejectedOnce.suggestion.version,
+      service.generateRoundAiSuggestions(reviewer("reviewer-1"), {
+        planId: plan.id,
+        roundId: round.id,
+        submissionId: submission.id,
       }),
-      "EVALUATION_INVALID_INPUT",
+      "EVALUATION_FORBIDDEN",
     );
-    const resolved = await service.resolveAiSuggestion(reviewer("reviewer-1"), suggestion.id, {
-      action: "accept",
-      expectedVersion: suggestion.version,
+  });
+
+  it("never exposes shared AI triage to a reviewer before or after submission", async () => {
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRound: triageRound,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
     });
-    expect(resolved.suggestion.status).toBe("accepted");
-    expect(resolved.suggestion.history.at(-1)).toMatchObject({
-      action: "accept",
-      actorId: "reviewer-1",
-    });
-    expect(resolved.review?.scores.quality).toMatchObject({
-      origin: "ai",
-      humanConfirmedBy: "reviewer-1",
-      suggestionStatus: "accepted",
-    });
-    const resolvedReview = resolved.review;
-    if (resolvedReview === null) {
-      throw new Error("Expected a resolved review.");
-    }
-    const autosaved = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+    const assignment = await assignOne(service);
+    await generateTriage(service);
+
+    const before = await service.getReviewContext(reviewer("reviewer-1"), assignment.id);
+    expect(before).not.toHaveProperty("suggestions");
+
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
       scores: [
-        {
-          criterionId: "quality",
-          value: resolvedReview.scores.quality?.value as number,
-          origin: "human",
-        },
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
       ],
-      comment: "A later comment edit must preserve accepted suggestion attribution.",
-      expectedVersion: resolvedReview.version,
     });
-    expect(autosaved.scores.quality).toMatchObject({
-      origin: "ai",
-      humanConfirmedBy: "reviewer-1",
-      suggestionStatus: "accepted",
-      suggestionId: suggestion.id,
+    await service.submitReview(reviewer("reviewer-1"), assignment.id, draft.version);
+    const after = await service.getReviewContext(reviewer("reviewer-1"), assignment.id);
+    expect(after).not.toHaveProperty("suggestions");
+  });
+
+  it("redacts blind-review identity fields before sending shared triage context to AI", async () => {
+    let capturedSubmission: EvaluationSuggestionProviderInput["submission"] | undefined;
+    const { service, plan } = await fixture({
+      blindReview: true,
+      reviewRound: triageRound,
+      reviewerProjection: { fieldIds: ["experience", "speakerEmail"] },
+      aiSuggestionProducer: async (input) => {
+        capturedSubmission = input.submission;
+        return {
+          candidates: [
+            {
+              criterionId: "quality",
+              value: 4,
+              evidence: ["The Advanced experience demonstrates relevant depth."],
+              provenance: { sourceReferences: ["answer:Advanced"] },
+            },
+            validAiCandidates()[1],
+          ],
+        };
+      },
     });
-    const submitted = await service.submitReview(
-      reviewer("reviewer-1"),
-      assignment.id,
-      autosaved.version,
-    );
-    expect(submitted.submittedAt).not.toBeNull();
-    expect(
-      (await service.getAggregate(organizer, plan.id, round.id, submission.id))
-        .submittedReviewCount,
-    ).toBe(1);
+
+    await service.generateRoundAiSuggestions(organizer, {
+      planId: plan.id,
+      roundId: triageRound.id,
+      submissionId: submission.id,
+    });
+
+    expect(capturedSubmission?.answers).toEqual({ experience: "Advanced" });
+    expect(capturedSubmission?.answers).not.toHaveProperty("speakerEmail");
+    expect(capturedSubmission?.participants).toEqual([]);
+    expect(capturedSubmission?.identityRedacted).toBe(true);
   });
 
   it("marks suggestions stale when the submission revision changes", async () => {
@@ -5158,29 +4766,22 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       blindReview: true,
       closesAt: "2026-08-12T12:00:00.000Z",
       assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 2 },
-      rounds: [round],
+      rounds: [triageRound],
     });
     const plan = await service.openPlan(organizer, draft.id, draft.version, crypto.randomUUID());
-    const assignments = await service.assignReviewers(organizer, {
+
+    const suggestion = await service.generateRoundAiSuggestions(organizer, {
       planId: plan.id,
       roundId: round.id,
       submissionId: submission.id,
-      reviewerIds: ["reviewer-1"],
-    });
-    const assignment = assignments[0];
-    if (assignment === undefined) {
-      throw new Error("Expected an assignment fixture.");
-    }
-    const suggestion = await service.generateAiSuggestions(reviewer("reviewer-1"), {
-      assignmentId: assignment.id,
     });
     source.set({ ...submission, version: 2 });
-    const listed = await service.listAiSuggestions(reviewer("reviewer-1"), assignment.id);
+    const listed = await service.listRoundAiSuggestions(organizer, plan.id, round.id);
     expect(listed[0]).toMatchObject({ id: suggestion.id, status: "stale" });
     await expectEvaluationError(
-      service.resolveAiSuggestion(reviewer("reviewer-1"), suggestion.id, {
-        action: "accept",
+      service.overrideAiSuggestion(organizer, suggestion.id, {
         expectedVersion: suggestion.version,
+        valueByCriterion: { quality: 3 },
       }),
       "EVALUATION_CONFLICT",
     );

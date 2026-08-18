@@ -7,8 +7,7 @@ export type AssignmentStatus =
   | "superseded";
 export type EvaluationDecisionStatus = "accepted" | "waitlisted" | "rejected";
 export type EvaluationRole = "organizer" | "reviewer";
-export type EvaluationSuggestionStatus = "pending" | "accepted" | "edited" | "rejected" | "stale";
-export type EvaluationSuggestionResolutionAction = "accept" | "edit" | "reject";
+export type EvaluationSuggestionStatus = "pending" | "stale" | "overridden";
 export type EvaluationCriterionInputType = "numeric" | "dropdown" | "free_text";
 export type EvaluationRoundAnonymization = "none" | "single" | "double";
 
@@ -71,6 +70,8 @@ export interface ReviewRound {
   predecessorRoundId?: string | null | undefined;
   name: string;
   sequence: number;
+  /** When true, organizers may run AI triage for this round's submissions. Default off. */
+  aiTriageEnabled?: boolean | undefined;
   /** Immutable round configuration revision used by assignments and aggregates. */
   revision?: number | undefined;
   /** Immutable rubric revision used by assignments and aggregates. */
@@ -247,12 +248,8 @@ export interface EvaluationAssignment {
 export interface RubricScore {
   criterionId: string;
   value: number | string;
-  origin: "human" | "ai";
+  origin: "human";
   evidence: readonly string[];
-  humanConfirmedBy: string | null;
-  /** Pending AI output is never counted by aggregate/decision consumers. */
-  suggestionId?: string;
-  suggestionStatus?: EvaluationSuggestionStatus;
   rubricRevision?: number;
   submissionRevision?: number;
   rubricVersion?: number | undefined;
@@ -472,12 +469,18 @@ export interface EvaluationSuggestionProviderCandidate {
 }
 
 export interface EvaluationSuggestionAuditEntry {
-  readonly action: EvaluationSuggestionResolutionAction | "generate" | "stale";
+  readonly action: "generate" | "stale" | "override";
   readonly actorId: string | null;
   readonly at: string;
-  readonly criterionId?: string;
   readonly reason?: string;
   readonly valueByCriterion?: Readonly<Record<string, number>>;
+}
+
+export interface EvaluationSuggestionOverride {
+  readonly valueByCriterion: Readonly<Record<string, number | string>>;
+  readonly overriddenBy: string;
+  readonly overriddenAt: string;
+  readonly reason?: string | undefined;
 }
 
 export interface EvaluationSuggestion {
@@ -486,8 +489,10 @@ export interface EvaluationSuggestion {
   readonly eventId: string;
   readonly planId: string;
   readonly roundId: string;
-  readonly assignmentId: string;
+  /** Shared organizer triage is never assigned to an individual reviewer. */
+  readonly assignmentId: null;
   readonly submissionId: string;
+  /** Generating actor (organizer for shared round suggestions). */
   readonly reviewerId: string;
   /** Exact plan/rubric revision used for generation. */
   readonly rubricRevision: number;
@@ -500,6 +505,8 @@ export interface EvaluationSuggestion {
   readonly criterionCandidates: readonly EvaluationSuggestionCandidate[];
   readonly provenance: EvaluationSuggestionProvenance;
   readonly status: EvaluationSuggestionStatus;
+  /** Organizer override applied on top of AI values; visible in organizer results. */
+  readonly override?: EvaluationSuggestionOverride | null | undefined;
   readonly version: number;
   readonly history: readonly EvaluationSuggestionAuditEntry[];
   readonly audit: readonly EvaluationSuggestionAuditEntry[];
@@ -512,7 +519,6 @@ export interface EvaluationSuggestionProviderInput {
   readonly eventId: string;
   readonly planId: string;
   readonly roundId: string;
-  readonly assignmentId: string;
   readonly submissionId: string;
   readonly rubricRevision: number;
   readonly submissionRevision: number;
@@ -541,22 +547,6 @@ export interface EvaluationAiSuggestionProvider {
   readonly generateSuggestions?: EvaluationSuggestionProducer;
 }
 
-export interface ResolveEvaluationSuggestionInput {
-  readonly action: EvaluationSuggestionResolutionAction;
-  readonly expectedVersion: number;
-  readonly criterionId?: string | undefined;
-  readonly reason?: string | undefined;
-  /** Human edits keyed by criterion id. */
-  readonly scores?: Readonly<Record<string, number>> | undefined;
-  readonly criterionScores?: Readonly<Record<string, number>> | undefined;
-}
-
-export interface EvaluationSuggestionResolution {
-  readonly suggestion: EvaluationSuggestion;
-  readonly review: EvaluationReview | null;
-}
-
 /** Compatibility aliases for integrations that use the shorter AI names. */
 export type EvaluationAiSuggestion = EvaluationSuggestion;
 export type EvaluationSuggestionProvider = EvaluationAiSuggestionProvider;
-export type EvaluationSuggestionResolutionInput = ResolveEvaluationSuggestionInput;

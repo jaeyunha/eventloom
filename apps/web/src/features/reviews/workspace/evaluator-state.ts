@@ -1,7 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
 import { scorecardPrimaryAction } from "../scorecard-action";
-import type { ApiSuggestion } from "./api-api-suggestion";
 import type { AuthoritativeReview } from "./api-authoritative-review";
 import type { EvaluatorAssignment } from "./assignment-evaluator-assignment";
 import type { EvaluatorDraftSnapshot } from "./evaluator-evaluator-draft-snapshot";
@@ -82,10 +81,6 @@ export function useEvaluatorState({
   const [abstained, setAbstained] = useState(() => assignment.assignmentStatus === "abstained");
   const [abstentionBusy, setAbstentionBusy] = useState(false);
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
-  const [suggestions, setSuggestions] = useState<readonly ApiSuggestion[]>(assignment.suggestions);
-  const [suggestionBusy, setSuggestionBusy] = useState(false);
-  const [suggestionUnavailable, setSuggestionUnavailable] = useState<string | null>(null);
-  const [suggestionConflict, setSuggestionConflict] = useState<string | null>(null);
   return {
     assignment,
     baseUrl,
@@ -136,14 +131,6 @@ export function useEvaluatorState({
     setAbstentionBusy,
     conflictDialogOpen,
     setConflictDialogOpen,
-    suggestions,
-    setSuggestions,
-    suggestionBusy,
-    setSuggestionBusy,
-    suggestionUnavailable,
-    setSuggestionUnavailable,
-    suggestionConflict,
-    setSuggestionConflict,
   };
 }
 export type EvaluatorState = ReturnType<typeof useEvaluatorState>;

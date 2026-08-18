@@ -1,7 +1,6 @@
 "use client";
 import styles from "../review-workspace.module.css";
 import type { EvaluatorController } from "./evaluator-controller";
-import { EvaluatorSuggestionCard } from "./evaluator-suggestion-card";
 import { criterionType } from "./model-criterion-type";
 import type { RubricCriterion } from "./scorecard-rubric-criterion";
 export function EvaluatorCriterionCard({
@@ -9,8 +8,6 @@ export function EvaluatorCriterionCard({
   criterion,
 }: Readonly<{ controller: EvaluatorController; criterion: RubricCriterion }>) {
   const {
-    assignment,
-    suggestions,
     scoreValues,
     responseValues,
     humanConfirmed,
@@ -19,16 +16,7 @@ export function EvaluatorCriterionCard({
     changeScore,
     changeResponse,
     criterionValidationMessage,
-    suggestionForCriterion,
   } = controller;
-  const generatedSuggestion = suggestionForCriterion(criterion.id);
-  const hasSuggestionRecord = suggestions.some(
-    (candidate) => candidate.candidates[criterion.id]?.length !== undefined,
-  );
-  const suggestion =
-    generatedSuggestion?.candidate ??
-    (hasSuggestionRecord ? undefined : assignment.aiSuggestions[criterion.id]);
-  const suggestionRecord = generatedSuggestion?.suggestion;
   const isConfirmed =
     criterionType(criterion) === "free_text"
       ? (responseValues[criterion.id] ?? "").trim().length > 0
@@ -54,9 +42,7 @@ export function EvaluatorCriterionCard({
             ? criterionType(criterion) === "free_text"
               ? "Human response · saved"
               : "Human confirmed · counted"
-            : suggestion
-              ? "AI prefill · uncounted"
-              : "Awaiting human response"}
+            : "Awaiting human response"}
         </span>
       </div>
       <div className={styles.scoreControls}>
@@ -180,14 +166,6 @@ export function EvaluatorCriterionCard({
             </p>
           ) : null}
         </div>
-        {suggestion ? (
-          <EvaluatorSuggestionCard
-            controller={controller}
-            criterion={criterion}
-            suggestion={suggestion}
-            suggestionRecord={suggestionRecord}
-          />
-        ) : null}
       </div>
     </fieldset>
   );

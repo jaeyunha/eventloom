@@ -12,6 +12,7 @@ export interface ReviewRound {
   opensAtIso?: string | undefined;
   closesAt: string;
   closesAtIso?: string | undefined;
+  aiTriageEnabled?: boolean | undefined;
   completionPercent: number;
   blindReview?: boolean | undefined;
   anonymization?: "none" | "single" | "double" | undefined;

@@ -32,6 +32,7 @@ import {
   type AdvisoryAiReasoningEffort,
   createCloudflareAiProviders,
   createOpenAiResponsesBinding,
+  DEFAULT_OPENAI_EVALUATION_MODEL,
   DEFAULT_OPENAI_RESPONSES_MODEL,
 } from "../integrations/ai";
 import {
@@ -140,12 +141,12 @@ function createLocalAiProviders(apiKey: string, bindings: RuntimeBindings) {
   return createCloudflareAiProviders(binding, {
     model,
     agendaModel: bindings.OPENAI_AGENDA_MODEL?.trim() || model,
-    evaluationModel: bindings.OPENAI_EVALUATION_MODEL?.trim() || model,
+    evaluationModel: bindings.OPENAI_EVALUATION_MODEL?.trim() || DEFAULT_OPENAI_EVALUATION_MODEL,
     remixModel: bindings.OPENAI_REMIX_MODEL?.trim() || model,
     agendaReasoningEffort: localReasoningEffort(bindings.OPENAI_AGENDA_REASONING_EFFORT, "medium"),
     evaluationReasoningEffort: localReasoningEffort(
       bindings.OPENAI_EVALUATION_REASONING_EFFORT,
-      "medium",
+      "high",
     ),
     remixReasoningEffort: localReasoningEffort(bindings.OPENAI_REMIX_REASONING_EFFORT, "low"),
     providerName: "openai-responses",
