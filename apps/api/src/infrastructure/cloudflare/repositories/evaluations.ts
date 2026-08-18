@@ -1,6 +1,13 @@
 import type { D1Database, D1PreparedStatement } from "@cloudflare/workers-types";
 
 import { conflict } from "../../../features/evaluations/errors";
+import type { CloudflareOutboxMessage } from "../bindings";
+import {
+  evaluationDecisionOutboxJobId,
+  evaluationDecisionWorkKey,
+  evaluationDecisionWorkPayload,
+  publishEvaluationDecisionJob,
+} from "../evaluation-decision-outbox";
 import type {
   EvaluationPlanRevisionPrecondition,
   EvaluationPlanScheduleState,
@@ -463,6 +470,13 @@ function reviewWriteAdmissionGuard(
           AND assignment.rubric_revision = ?
           AND assignment.round_revision = ?
           AND assignment.submission_revision = ?
+          AND NOT EXISTS (
+            SELECT 1
+              FROM evaluation_conflicts conflict
+             WHERE conflict.organization_id = assignment.organization_id
+               AND conflict.event_id = assignment.event_id
+               AND conflict.assignment_id = assignment.id
+          )
           AND plan.status = 'open'
           AND (plan.closes_at IS NULL OR plan.closes_at > ?)
           AND (round.opens_at IS NULL OR round.opens_at <= ?)
@@ -625,7 +639,10 @@ function updateAssignment(database: D1Database, assignment: EvaluationAssignment
 export class D1EvaluationRepository implements EvaluationRepository {
   readonly authority = "transactional" as const;
   readonly supportsAtomicPlanRevisionSync = true;
-  constructor(private readonly database: D1Database) {}
+  constructor(
+    private readonly database: D1Database,
+    private readonly decisionOutboxQueue?: Queue<CloudflareOutboxMessage>,
+  ) {}
 
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
     const session = this.database.withSession("first-primary");
@@ -2063,7 +2080,42 @@ export class D1EvaluationRepository implements EvaluationRepository {
         ),
       );
     });
+    const outboxJobId = evaluationDecisionOutboxJobId(decision.id, decision.version);
+    commands.push(
+      statement(
+        this.database,
+        `INSERT INTO outbox_jobs
+          (id, tenant_id, topic, deduplication_key, payload_json, state,
+           attempt_count, available_at, created_at, updated_at)
+         VALUES (?, ?, 'evaluation-decisions', ?, ?, 'pending', 0, ?, ?, ?)
+         ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
+        [
+          outboxJobId,
+          decision.tenantId,
+          evaluationDecisionWorkKey(decision.planId, decision.submissionId, decision.version),
+          json(evaluationDecisionWorkPayload(decision)),
+          decision.updatedAt,
+          decision.updatedAt,
+          decision.updatedAt,
+        ],
+      ),
+    );
     await atomic(this.database, commands, "Decision changed since it was loaded.");
+    if (this.decisionOutboxQueue !== undefined) {
+      try {
+        await publishEvaluationDecisionJob(
+          this.database,
+          this.decisionOutboxQueue,
+          outboxJobId,
+          decision.tenantId,
+        );
+      } catch (error) {
+        console.error("Evaluation decision outbox publication was deferred for recovery.", {
+          jobId: outboxJobId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private async hydratePlan(

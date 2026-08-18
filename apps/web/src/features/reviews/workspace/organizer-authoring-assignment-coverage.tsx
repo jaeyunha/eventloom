@@ -6,6 +6,7 @@ import { Checkbox } from "../../../components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../components/ui/field";
 import { Input } from "../../../components/ui/input";
 import styles from "../review-workspace.module.css";
+import { reviewerDisplayLabel } from "./model-reviewer-display-label";
 import { submissionSelectOption } from "./model-submission-select-option";
 import { OrganizerAssignmentPreview } from "./organizer-authoring-assignment-preview";
 import type { OrganizerAuthoringController } from "./organizer-authoring-controller";
@@ -28,6 +29,8 @@ export function OrganizerAssignmentCoverage({
     setAssignmentReviewerQuery,
     assignmentReviewerIds,
     setAssignmentReviewerIds,
+    assignmentReviewerSelectionMode,
+    useAutomaticAssignmentDistribution,
     assignmentReviewerSelectionDisabled,
     reviewerMembersLoading,
     reviewerMembersError,
@@ -54,9 +57,13 @@ export function OrganizerAssignmentCoverage({
   );
   const visiblePoolReviewers = matchingPoolReviewers.slice(0, 8);
   const assignmentReviewerSelectionLabel =
-    assignmentReviewerIds.length === 1
-      ? "1 assignment reviewer selected"
-      : `${assignmentReviewerIds.length} assignment reviewers selected`;
+    assignmentReviewerSelectionMode === "automatic"
+      ? "Automatic distribution"
+      : assignmentReviewerIds.length === 1
+        ? "1 assignment reviewer selected"
+        : `${assignmentReviewerIds.length} assignment reviewers selected`;
+  const explicitSelectionEmpty =
+    assignmentReviewerSelectionMode === "explicit" && assignmentReviewerIds.length === 0;
   const reviewTeamReady =
     !reviewerPool.loading && reviewerPool.error === null && reviewerPool.pool !== null;
   const invitationHref = organizationId
@@ -68,11 +75,11 @@ export function OrganizerAssignmentCoverage({
   );
 
   useEffect(() => {
-    if (!reviewTeamReady) return;
+    if (!reviewTeamReady || assignmentReviewerSelectionMode === "automatic") return;
     setAssignmentReviewerIds((current) =>
       current.filter((reviewerId) => poolReviewerIds.has(reviewerId)),
     );
-  }, [poolReviewerIds, reviewTeamReady, setAssignmentReviewerIds]);
+  }, [assignmentReviewerSelectionMode, poolReviewerIds, reviewTeamReady, setAssignmentReviewerIds]);
 
   return (
     <section className={styles.assignmentCoverageTask} aria-labelledby="assignment-task-heading">
@@ -125,7 +132,7 @@ export function OrganizerAssignmentCoverage({
         onSave={() => void reviewerPool.save()}
         onReload={reviewerPool.reload}
       />
-      <div className={styles.assignmentCoverageGrid}>
+      <div className={styles.assignmentCoverageGrid} data-assignment-controls="true">
         <fieldset className={styles.formField}>
           <label htmlFor="assignment-submission-id">Proposal</label>
           <select
@@ -173,13 +180,24 @@ export function OrganizerAssignmentCoverage({
             >
               Clear selection
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={useAutomaticAssignmentDistribution}
+              disabled={
+                assignmentReviewerSelectionDisabled ||
+                assignmentReviewerSelectionMode === "automatic"
+              }
+            >
+              Use automatic distribution
+            </Button>
           </div>
           <ul
             id="assignment-reviewer-candidates"
             className={styles.assignmentCandidateList}
             aria-label="Eligible reviewers"
           >
-            {visiblePoolReviewers.map((member) => {
+            {visiblePoolReviewers.map((member, index) => {
               const inputId = `assignment-reviewer-${member.userId}`;
               const checked = selectedAssignmentReviewerIds.has(member.userId);
               const grant = poolGrants.get(member.userId);
@@ -201,7 +219,9 @@ export function OrganizerAssignmentCoverage({
                       }
                     />
                     <FieldContent>
-                      <FieldLabel htmlFor={inputId}>{member.name ?? member.email}</FieldLabel>
+                      <FieldLabel htmlFor={inputId}>
+                        {reviewerDisplayLabel(member.userId, reviewerMembers, index + 1)}
+                      </FieldLabel>
                       <FieldDescription>
                         {member.email}
                         {grant
@@ -235,7 +255,13 @@ export function OrganizerAssignmentCoverage({
           type="button"
           variant="outline"
           onClick={previewAssignments}
-          disabled={busy || status !== "open" || !reviewerDirectoryReady || !reviewTeamReady}
+          disabled={
+            busy ||
+            status !== "open" ||
+            !reviewerDirectoryReady ||
+            !reviewTeamReady ||
+            explicitSelectionEmpty
+          }
         >
           Preview assignments
         </Button>
@@ -247,6 +273,7 @@ export function OrganizerAssignmentCoverage({
             status !== "open" ||
             !reviewerDirectoryReady ||
             !reviewTeamReady ||
+            explicitSelectionEmpty ||
             assignmentPreview === null
           }
         >

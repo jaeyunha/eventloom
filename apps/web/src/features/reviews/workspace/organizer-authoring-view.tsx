@@ -7,7 +7,7 @@ import { OrganizerAuthoringWorkbench } from "./organizer-authoring-workbench";
 export function OrganizerAuthoringView({
   controller,
 }: Readonly<{ controller: OrganizerAuthoringController }>) {
-  const { assignmentOnly, isDraft, status, planStatusLabel, version, message } = controller;
+  const { assignmentOnly, isDraft, status, planStatusLabel, message } = controller;
   if (assignmentOnly) {
     return (
       <>
@@ -34,7 +34,6 @@ export function OrganizerAuthoringView({
         </div>
         <div className={styles.authoringStatus}>
           <Badge variant={status === "open" ? "default" : "outline"}>{planStatusLabel}</Badge>
-          <span className={styles.mutedLabel}>Version {version}</span>
         </div>
       </div>
       <p className={styles.sectionIntro}>

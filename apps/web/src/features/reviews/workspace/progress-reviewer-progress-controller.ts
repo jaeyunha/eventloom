@@ -7,6 +7,7 @@ import { evaluationRequest } from "./model-evaluation-request";
 import { reminderRequestPresentation } from "./model-reminder-request-presentation";
 import { reminderReviewerIdsRequiringSend } from "./model-reminder-reviewer-ids-requiring-send";
 import { reviewerDisplayLabel } from "./model-reviewer-display-label";
+import { roundDisplayLabel } from "./model-round-display-label";
 import type { ReviewPlanSeed } from "./organizer-review-plan-seed";
 import { loadReminderDeliveryFacts } from "./progress-load-reminder-delivery-facts";
 import type { ReminderDeliveryFact } from "./progress-reminder-delivery-fact";
@@ -134,7 +135,9 @@ export function useReviewerProgressController({
       setMessage(
         [...byRound.entries()]
           .map(([roundId, reviewerIds]) => {
-            const roundName = seed.rounds.find((round) => round.id === roundId)?.name ?? roundId;
+            const roundName = roundDisplayLabel(
+              seed.rounds.find((round) => round.id === roundId)?.name,
+            );
             return `${roundName}: ${reminderDeliveryForSelection(responseFacts, roundId, reviewerIds)}`;
           })
           .join(" "),

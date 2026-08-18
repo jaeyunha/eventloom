@@ -47,7 +47,7 @@ export function useReviewerAssignmentController({
     const aggregate = submissionById.get(assignment.submissionId);
     const reviewer = reviewerDisplayLabel(assignment.reviewerId, reviewerMembers);
     const round = roundById.get(assignment.roundId);
-    return [aggregate?.title, aggregate?.reference, reviewer, round?.name]
+    return [aggregate?.title, reviewer, round?.name]
       .filter((value): value is string => value !== undefined)
       .some((value) => value.toLowerCase().includes(normalizedQuery));
   });
@@ -89,14 +89,12 @@ export function useReviewerAssignmentController({
     setBusyAssignmentId(assignment.id);
     setMessage(null);
     try {
-      const result = await replaceSingleReviewAssignment(baseUrl, seed.planId, assignment.id, {
+      await replaceSingleReviewAssignment(baseUrl, seed.planId, assignment.id, {
         replacementReviewerId,
         expectedVersion: assignment.version,
         reason,
       });
-      setMessage(
-        `Assignment ${result.replacedAssignment.id} superseded by ${result.successorAssignment.id}. Lineage predecessor: ${result.successorAssignment.predecessorAssignmentId ?? result.replacedAssignment.id}; successor: ${result.replacedAssignment.successorAssignmentId ?? result.successorAssignment.id}. History preserved: ${result.history.length}.`,
-      );
+      setMessage("Reviewer replaced. Protected assignment history was preserved.");
       setSelectedAssignmentId(null);
       await onAssignmentsPersisted?.();
     } catch (reasonError: unknown) {

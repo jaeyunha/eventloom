@@ -6,6 +6,7 @@ import type { EvaluatorAssignment } from "./assignment-evaluator-assignment";
 import { criterionOptionValue } from "./model-criterion-option-value";
 import { criterionType } from "./model-criterion-type";
 import { dateLabel } from "./model-date-label";
+import { submissionDisplayTitle } from "./model-submission-display-title";
 import { submissionFields } from "./model-submission-fields";
 import { submissionTrack } from "./model-submission-track";
 import type { ReviewRound } from "./organizer-review-round";
@@ -106,7 +107,7 @@ export function mapEvaluatorAssignment(
       (context.assignment.status === "submitted" ? (context.assignment.updatedAt ?? null) : null),
     id: context.assignment.id,
     reference: context.assignment.submissionId,
-    title: context.submission.title,
+    title: submissionDisplayTitle(context.submission),
     abstract: context.submission.abstract,
     assignmentStatus: context.assignment.status,
     predecessorAssignmentId: context.assignment.predecessorAssignmentId,

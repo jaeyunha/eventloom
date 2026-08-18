@@ -19,7 +19,7 @@ describe("LandingHero repository badge", () => {
 
     // Then
     expect(fetcher).toHaveBeenCalledWith(
-      "https://api.github.com/repos/jaeyunha/open-sessionboard",
+      "https://api.github.com/repos/namuh-eng/eventloom",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(markup).toContain(">27<");

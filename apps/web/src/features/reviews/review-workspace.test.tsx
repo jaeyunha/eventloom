@@ -412,7 +412,7 @@ describe("review workspace", () => {
     ).toBe("Sam Whitfield");
   });
   it("does not expose a raw reviewer ID when directory identity is unavailable", () => {
-    expect(reviewerDisplayLabel("reviewer_01JRAWIDENTIFIER", [])).toBe("Reviewer unavailable");
+    expect(reviewerDisplayLabel("reviewer_01JRAWIDENTIFIER", [])).toBe("Reviewer 1");
   });
   it("keeps reviewer navigation disabled until the autosave queue is idle", async () => {
     const pendingStates: boolean[] = [];
@@ -439,7 +439,7 @@ describe("review workspace", () => {
     expect(reviewerSelectionBlocked(null, "assignment-a", "assignment-b")).toBe(false);
     expect(pendingStates).toEqual([true, false]);
   });
-  it("wraps long authoritative submission references without widening the page", () => {
+  it("does not render long authoritative submission references in ordinary reviewer UI", () => {
     const longReference = `submission-${"authoritative-id-".repeat(20)}`;
     const assignment = {
       ...testAssignment("summit-2026"),
@@ -453,11 +453,9 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain(longReference);
+    const visibleText = markup.replace(/<[^>]+>/gu, " ").replace(/\s+/gu, " ");
+    expect(visibleText).not.toContain(longReference);
     expect(workspaceStyles).toMatch(/\.decisionSummary\s*>\s*\*\s*\{[^}]*min-inline-size:\s*0/u);
-    expect(workspaceStyles).toMatch(
-      /\.referenceBadge\s*\{[^}]*max-inline-size:[^;}]+;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/u,
-    );
   });
   it("keeps the reviewer drawer full-page control on one aligned baseline", () => {
     expect(reviewerQueueStyles).toMatch(
@@ -1096,7 +1094,7 @@ describe("review workspace", () => {
 
     expect(markup).toContain("Configure the plan");
     expect(markup).toContain("Add round");
-    expect(markup).toContain("Reviews per submission");
+    expect(markup).toContain("Reviews per proposal");
     expect(markup).not.toContain("Plan overview");
   });
 

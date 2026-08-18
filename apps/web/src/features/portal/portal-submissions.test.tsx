@@ -29,11 +29,11 @@ const draft: PortalSubmission = {
 
 describe("participant submission regressions", () => {
   it("never exposes missing or opaque proposal titles", () => {
-    expect(portalSubmissionDisplayTitle(draft)).toBe("Untitled proposal");
-    expect(portalSubmissionDisplayTitle({ ...draft, title: " " })).toBe("Untitled proposal");
+    expect(portalSubmissionDisplayTitle(draft)).toBe("No title");
+    expect(portalSubmissionDisplayTitle({ ...draft, title: " " })).toBe("No title");
     expect(
       portalSubmissionDisplayTitle({ ...draft, title: `speaker-submission:${draft.id}` }),
-    ).toBe("Untitled proposal");
+    ).toBe("No title");
   });
 
   it("renders an editable draft with a primary continuation into its authoritative CFP draft", () => {
@@ -52,7 +52,7 @@ describe("participant submission regressions", () => {
       />,
     );
 
-    expect(markup).toContain("Untitled proposal");
+    expect(markup).toContain("No title");
     expect(markup).toContain("Continue proposal");
     expect(markup).toContain(
       'href="/cfp/organizations/organization-1/events/event-one/submission"',

@@ -23,11 +23,7 @@ export function EvaluatorWorkspaceView({
     <>
       <EvaluatorPrivacyNotice controller={controller} />
       <EvaluatorRoundAvailabilityNotice round={assignment.round} />
-      <EvaluatorSubmissionPanel
-        controller={controller}
-        pageHeading={fullPage}
-        showReference={!embedded}
-      />
+      <EvaluatorSubmissionPanel controller={controller} pageHeading={fullPage} />
       <EvaluatorScorecardView controller={controller} />
     </>
   );

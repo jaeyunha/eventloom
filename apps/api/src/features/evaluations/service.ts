@@ -138,6 +138,38 @@ export interface EvaluationAcceptanceHandoffInput {
   readonly decidedAt: string;
   readonly reason: string;
   readonly idempotencyKey: string;
+  readonly decisionVersion?: number;
+  readonly isCurrentDecision?: () => Promise<boolean>;
+  readonly decisionFence?: {
+    readonly tenantId: string;
+    readonly eventId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly version: number;
+    readonly status: "accepted";
+  };
+}
+export interface EvaluationSessionDecisionReconciliationInput {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly submissionId: string;
+  readonly decisionId: string;
+  readonly status: Exclude<EvaluationDecisionStatus, "accepted">;
+  readonly decisionVersion: number;
+  readonly decidedBy: string;
+  readonly decidedAt: string;
+  readonly reason: string;
+  readonly idempotencyKey: string;
+  readonly isCurrentDecision?: () => Promise<boolean>;
+  readonly decisionFence: {
+    readonly tenantId: string;
+    readonly eventId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly version: number;
+    readonly status: "waitlisted" | "rejected";
+  };
 }
 export interface EvaluationDecisionProjectionInput extends EvaluationDecisionProjectionData {
   readonly tenantId: string;
@@ -154,6 +186,7 @@ export interface EvaluationDecisionProjectionInput extends EvaluationDecisionPro
   readonly idempotencyKey: string;
   readonly participantProjection: EvaluationParticipantOutcomeProjection;
   readonly communication: EvaluationDecisionCommunicationProjection;
+  readonly isCurrentDecision?: () => Promise<boolean>;
 }
 
 export interface EvaluationDecisionProjection {
@@ -162,6 +195,7 @@ export interface EvaluationDecisionProjection {
 
 export interface EvaluationAcceptanceHandoff {
   accept(input: EvaluationAcceptanceHandoffInput): Promise<void>;
+  reconcileSessionDecision?(input: EvaluationSessionDecisionReconciliationInput): Promise<void>;
 }
 
 export interface EvaluationSubmissionRecord {
@@ -1031,8 +1065,10 @@ export class EvaluationService {
   readonly #decisionProjection: EvaluationDecisionProjection | undefined;
   readonly #projectedDecisionKeys = new Set<string>();
   readonly #acceptedHandoffKeys = new Set<string>();
+  readonly #reconciledSessionDecisionKeys = new Set<string>();
   readonly #decisionProjectionInFlight = new Map<string, Promise<void>>();
   readonly #acceptanceHandoffInFlight = new Map<string, Promise<void>>();
+  readonly #sessionDecisionReconciliationInFlight = new Map<string, Promise<void>>();
   readonly #repository: EvaluationRepository;
   readonly #submissions: SubmissionReviewSource;
   readonly #eventMetadataSource: EvaluationEventMetadataSource;
@@ -1100,6 +1136,39 @@ export class EvaluationService {
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
     return plan;
+  }
+
+  async replayPersistedDecisionWork(input: {
+    readonly tenantId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly decisionVersion: number;
+    readonly status: EvaluationDecisionStatus;
+    readonly transitionIdempotencyKey: string;
+  }): Promise<void> {
+    const decision = await this.#repository.getDecision(
+      input.tenantId,
+      input.planId,
+      input.submissionId,
+    );
+    if (
+      decision === null ||
+      decision.version !== input.decisionVersion ||
+      decision.status !== input.status
+    ) {
+      return;
+    }
+    const transition = decision.history.find(
+      (candidate) =>
+        candidate.idempotencyKey === input.transitionIdempotencyKey &&
+        candidate.to === input.status,
+    );
+    if (transition === undefined) return;
+    await this.#runDecisionWork({
+      decision,
+      transition,
+      decisionVersion: input.decisionVersion,
+    });
   }
 
   async getDecision(
@@ -2790,7 +2859,22 @@ export class EvaluationService {
     } catch {
       throw advisoryUnavailable();
     }
-    await this.#requireActiveSubmission(plan, material.id);
+    const latestMaterial = await this.#submissions.getSubmissionForReview(
+      actor.tenantId,
+      plan.eventId,
+      material.id,
+    );
+    if (latestMaterial === null) throw notFound("The submission was not found.");
+    await this.#requireActiveSubmission(plan, latestMaterial);
+    const latestRevision = await this.#submissionRevision(
+      actor.tenantId,
+      plan.eventId,
+      material.id,
+      latestMaterial.version ?? latestMaterial.revision,
+    );
+    if (latestRevision !== submissionRevision) {
+      throw conflict("The submission changed while AI triage was generated.");
+    }
     const candidates = this.#normalizeProviderCandidates(result, round, providerInput);
     const provenance: EvaluationSuggestionProvenance = {
       provider: result.provenance?.provider ?? "injected",
@@ -3277,7 +3361,8 @@ export class EvaluationService {
   ): Promise<void> {
     const projection = this.#runDecisionProjection(input);
     if (input.transition.to !== "accepted") {
-      await projection;
+      const reconciliation = this.#runSessionDecisionReconciliation(input);
+      await Promise.all([projection, reconciliation]);
       return;
     }
     const acceptance = this.#runAcceptanceHandoff(input);
@@ -4089,7 +4174,25 @@ export class EvaluationService {
       input.decision.submissionId,
       input.decisionVersion,
     );
+    const isCurrentDecision = async (): Promise<boolean> => {
+      const current = await this.#repository.getDecision(
+        input.decision.tenantId,
+        input.decision.planId,
+        input.decision.submissionId,
+      );
+      return (
+        current !== null &&
+        current.version === input.decisionVersion &&
+        current.status === input.transition.to &&
+        current.history.some(
+          (transition) =>
+            transition.idempotencyKey === input.transition.idempotencyKey &&
+            transition.to === input.transition.to,
+        )
+      );
+    };
     const handoff = (async () => {
+      if (!(await isCurrentDecision())) return;
       await projection.projectDecision({
         tenantId: input.decision.tenantId,
         eventId: input.decision.eventId,
@@ -4112,6 +4215,7 @@ export class EvaluationService {
         communication: {
           templatePurpose: decisionTemplatePurpose(input.transition.to),
         },
+        isCurrentDecision,
       });
       this.#projectedDecisionKeys.add(deliveryKey);
     })();
@@ -4121,6 +4225,79 @@ export class EvaluationService {
     } finally {
       if (this.#decisionProjectionInFlight.get(deliveryKey) === handoff) {
         this.#decisionProjectionInFlight.delete(deliveryKey);
+      }
+    }
+  }
+
+  async #runSessionDecisionReconciliation(input: {
+    readonly decision: EvaluationDecision;
+    readonly transition: EvaluationDecisionTransition;
+    readonly decisionVersion: number;
+  }): Promise<void> {
+    const status = input.transition.to;
+    if (status === "accepted") return;
+    const reconciliation = this.#acceptanceHandoff?.reconcileSessionDecision;
+    if (reconciliation === undefined) return;
+    const deliveryKey = [
+      input.decision.tenantId,
+      input.decision.planId,
+      input.decision.submissionId,
+      input.decisionVersion,
+    ].join("\u0000");
+    if (this.#reconciledSessionDecisionKeys.has(deliveryKey)) return;
+    const pending = this.#sessionDecisionReconciliationInFlight.get(deliveryKey);
+    if (pending !== undefined) {
+      await pending;
+      return;
+    }
+    const handoff = (async () => {
+      const isCurrentDecision = async (): Promise<boolean> => {
+        const current = await this.#repository.getDecision(
+          input.decision.tenantId,
+          input.decision.planId,
+          input.decision.submissionId,
+        );
+        return (
+          current !== null &&
+          current.version === input.decisionVersion &&
+          current.status === status &&
+          current.history.some(
+            (transition) =>
+              transition.idempotencyKey === input.transition.idempotencyKey &&
+              transition.to === status,
+          )
+        );
+      };
+      await reconciliation({
+        tenantId: input.decision.tenantId,
+        eventId: input.decision.eventId,
+        planId: input.decision.planId,
+        submissionId: input.decision.submissionId,
+        decisionId: input.decision.id,
+        status,
+        decisionVersion: input.decisionVersion,
+        decidedBy: input.transition.decidedBy,
+        decidedAt: input.transition.decidedAt,
+        reason: input.transition.reason,
+        idempotencyKey: input.transition.idempotencyKey,
+        isCurrentDecision,
+        decisionFence: {
+          tenantId: input.decision.tenantId,
+          eventId: input.decision.eventId,
+          planId: input.decision.planId,
+          submissionId: input.decision.submissionId,
+          version: input.decisionVersion,
+          status,
+        },
+      });
+      this.#reconciledSessionDecisionKeys.add(deliveryKey);
+    })();
+    this.#sessionDecisionReconciliationInFlight.set(deliveryKey, handoff);
+    try {
+      await handoff;
+    } finally {
+      if (this.#sessionDecisionReconciliationInFlight.get(deliveryKey) === handoff) {
+        this.#sessionDecisionReconciliationInFlight.delete(deliveryKey);
       }
     }
   }
@@ -4145,6 +4322,23 @@ export class EvaluationService {
       return;
     }
     const handoff = (async () => {
+      const isCurrentDecision = async (): Promise<boolean> => {
+        const current = await this.#repository.getDecision(
+          input.decision.tenantId,
+          input.decision.planId,
+          input.decision.submissionId,
+        );
+        return (
+          current !== null &&
+          current.version === input.decisionVersion &&
+          current.status === "accepted" &&
+          current.history.some(
+            (transition) =>
+              transition.idempotencyKey === input.transition.idempotencyKey &&
+              transition.to === "accepted",
+          )
+        );
+      };
       await acceptanceHandoff.accept({
         tenantId: input.decision.tenantId,
         eventId: input.decision.eventId,
@@ -4155,6 +4349,16 @@ export class EvaluationService {
         decidedAt: input.transition.decidedAt,
         reason: input.transition.reason,
         idempotencyKey: input.transition.idempotencyKey,
+        decisionVersion: input.decisionVersion,
+        isCurrentDecision,
+        decisionFence: {
+          tenantId: input.decision.tenantId,
+          eventId: input.decision.eventId,
+          planId: input.decision.planId,
+          submissionId: input.decision.submissionId,
+          version: input.decisionVersion,
+          status: "accepted",
+        },
       });
       this.#acceptedHandoffKeys.add(deliveryKey);
     })();

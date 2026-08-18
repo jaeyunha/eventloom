@@ -38,7 +38,7 @@ export function ReviewerAssignmentView({
             type="search"
             value={assignmentQuery}
             onChange={(event) => setAssignmentQuery(event.currentTarget.value)}
-            placeholder="Search submission, reviewer, reference, or round"
+            placeholder="Search proposal, reviewer, or round"
           />
         </div>
         <div className={styles.formField}>

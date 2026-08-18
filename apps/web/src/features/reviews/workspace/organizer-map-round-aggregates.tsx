@@ -1,6 +1,7 @@
 import type { ApiAggregate } from "./api-api-aggregate";
 import type { ApiSubmission } from "./api-api-submission";
 import type { ReviewPlanAssignment } from "./assignment-review-plan-assignment";
+import { submissionDisplayTitle } from "./model-submission-display-title";
 import type { AggregateRow } from "./organizer-aggregate-row";
 
 export function mapRoundAggregates(
@@ -26,7 +27,7 @@ export function mapRoundAggregates(
     return {
       id: submission.id,
       reference: "",
-      title: submission.title,
+      title: submissionDisplayTitle(submission),
       countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
       possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",
       countedReviews: aggregate?.submittedReviewCount ?? 0,

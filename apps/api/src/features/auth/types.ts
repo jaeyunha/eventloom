@@ -33,6 +33,7 @@ export interface ReviewerGrant {
 export interface AuthSession {
   sessionId: string;
   userId: string;
+  displayName?: string;
   email: string;
   emailVerified: boolean;
   expiresAt: Date;
@@ -54,6 +55,7 @@ export interface UserPrincipal {
   kind: "user";
   sessionId: string;
   userId: string;
+  displayName?: string;
   email: string;
   memberships: readonly OrganizationMembership[];
   reviewerGrants: readonly ReviewerGrant[];

@@ -98,7 +98,7 @@ export function OrganizerDraftPlan({
             />
           </div>
           <div className={styles.formField}>
-            <label htmlFor="evaluation-plan-reviews-per-submission">Reviews per submission</label>
+            <label htmlFor="evaluation-plan-reviews-per-submission">Reviews per proposal</label>
             <input
               id="evaluation-plan-reviews-per-submission"
               type="number"

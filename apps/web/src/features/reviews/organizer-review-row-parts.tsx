@@ -13,11 +13,6 @@ function submissionTitle(row: OrganizerReviewRow): string {
   return title === "" || title === row.id ? "No title" : title;
 }
 
-function submissionReference(row: OrganizerReviewRow): string | null {
-  const reference = row.reference.trim();
-  return reference === "" || reference === row.id ? null : reference;
-}
-
 function AttentionIcon({ kind }: Readonly<{ kind: OrganizerReviewAttentionKind }>) {
   if (kind === "none") return <CheckCircle2 aria-hidden="true" />;
   if (kind === "conflict") return <AlertTriangle aria-hidden="true" />;
@@ -35,7 +30,6 @@ export function ReviewAction({
 }>) {
   const action = row.attentionAction;
   const label = action?.label ?? "Manage reviewers";
-  const reference = submissionReference(row);
   const title = submissionTitle(row);
   return (
     <Button
@@ -46,7 +40,7 @@ export function ReviewAction({
         action?.target === "decisions" ? onOpenDecisions(row.id) : onManageReviewers(row.id)
       }
       data-action={action?.target === "decisions" ? "open-decisions" : "manage-reviewers"}
-      aria-label={`${label} for ${reference ? `${reference}: ` : ""}${title}`}
+      aria-label={`${label} for ${title}`}
     >
       {label}
       <ArrowUpRight data-icon="inline-end" aria-hidden="true" />
@@ -54,14 +48,12 @@ export function ReviewAction({
   );
 }
 export function SubmissionIdentity({ row }: Readonly<{ row: OrganizerReviewRow }>) {
-  const reference = submissionReference(row);
   const title = submissionTitle(row);
   return (
     <div
       className={styles.identity}
       data-title-status={title === "No title" ? "missing" : "present"}
     >
-      {reference ? <span>{reference}</span> : null}
       <strong>{title}</strong>
     </div>
   );

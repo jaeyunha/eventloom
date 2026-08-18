@@ -35,4 +35,23 @@ describe("submissionSelectOption", () => {
     });
     expect(`${option.label} ${option.description}`).not.toContain(row.id);
   });
+
+  it("uses exact No title when the stored title is the canonical submission id", () => {
+    const row: AggregateRow = {
+      id: "submission_opaque_identifier",
+      reference: "",
+      title: "submission_opaque_identifier",
+      countedScore: "—",
+      possibleScore: "—",
+      countedReviews: 0,
+      expectedReviews: 2,
+      conflicts: 0,
+      abstentions: 0,
+    };
+
+    const option = submissionSelectOption(row);
+
+    expect(option.label).toBe("No title");
+    expect(option.label).not.toContain(row.id);
+  });
 });

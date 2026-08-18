@@ -9,7 +9,13 @@ import { InMemorySessionRepository, SessionService } from "./service";
 const now = new Date("2026-08-09T12:00:00.000Z");
 
 function actor(tenantId = "tenant-a") {
-  return { tenantId, userId: "organizer-1", role: "organizer" as const, kind: "user" as const };
+  return {
+    tenantId,
+    userId: "organizer-1",
+    displayName: "Olivia Organizer",
+    role: "organizer" as const,
+    kind: "user" as const,
+  };
 }
 
 function principal(organizationId = "tenant-a"): AuthPrincipal {
@@ -17,6 +23,7 @@ function principal(organizationId = "tenant-a"): AuthPrincipal {
     kind: "user",
     sessionId: "auth-session",
     userId: "organizer-1",
+    displayName: "Olivia Organizer",
     email: "organizer@example.com",
     memberships: [{ organizationId, role: "admin" }],
     speakerGrants: [],
@@ -556,7 +563,7 @@ describe("organizer session settings domain", () => {
           version: 2,
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "organizer-1",
+          actorLabel: "Authorized organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract",
@@ -566,7 +573,7 @@ describe("organizer session settings domain", () => {
           version: 3,
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "organizer-1",
+          actorLabel: "Authorized organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract with appended detail",
@@ -597,7 +604,7 @@ describe("organizer session settings domain", () => {
         expect.objectContaining({
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "organizer-1",
+          actorLabel: "Authorized organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract",
@@ -608,7 +615,7 @@ describe("organizer session settings domain", () => {
         expect.objectContaining({
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "organizer-1",
+          actorLabel: "Authorized organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract with appended detail",
@@ -657,7 +664,7 @@ describe("organizer session settings domain", () => {
       action: "restored",
       version: 4,
       actorId: "organizer-1",
-      actorLabel: "organizer-1",
+      actorLabel: "Authorized organizer",
       occurredAt: now.toISOString(),
     });
     expect((await readPublishedContent()).sessions).toEqual([]);
@@ -692,7 +699,7 @@ describe("organizer session settings domain", () => {
       action: "approved",
       version: 5,
       actorId: "organizer-1",
-      actorLabel: "organizer-1",
+      actorLabel: "Authorized organizer",
       occurredAt: now.toISOString(),
     });
     expect(await readPublishedContent()).toEqual({
@@ -1292,5 +1299,361 @@ describe("organizer session settings domain", () => {
     expect(await (await app.request(base)).json()).toMatchObject({
       data: [{ id: "room-retry" }],
     });
+  });
+
+  it("preserves canonical actor correlation across colliding and mutable display names", async () => {
+    const { service } = setup();
+    const firstActor = { ...actor(), userId: "organizer-first", displayName: "Shared Name" };
+    const secondActor = { ...actor(), userId: "organizer-second", displayName: "Shared Name" };
+    const renamedFirstActor = { ...firstActor, displayName: "Updated Name" };
+    const created = await service.createSession(firstActor, {
+      eventId: "event-a",
+      id: "identity-session",
+      title: "Identity-safe history",
+      durationMinutes: 45,
+      status: "Accepted",
+      speakerIds: ["speaker-1"],
+    });
+    const second = await service.updateSession(secondActor, {
+      eventId: "event-a",
+      sessionId: created.id,
+      expectedVersion: created.version,
+      description: "Updated by the second organizer.",
+    });
+    await service.updateSession(renamedFirstActor, {
+      eventId: "event-a",
+      sessionId: created.id,
+      expectedVersion: second.version,
+      description: "Updated after a display-name change.",
+    });
+
+    const history = await service.listSessionHistory(firstActor, {
+      eventId: "event-a",
+      sessionId: created.id,
+    });
+
+    expect(history.map(({ actorId, actorLabel }) => ({ actorId, actorLabel }))).toEqual([
+      { actorId: "organizer-first", actorLabel: "Authorized organizer" },
+      { actorId: "organizer-second", actorLabel: "Authorized organizer" },
+      { actorId: "organizer-first", actorLabel: "Authorized organizer" },
+    ]);
+  });
+
+  it("sanitizes legacy and accepted-sync actor labels without losing canonical actor IDs", async () => {
+    const { service } = setup();
+    const organizer = actor();
+    const created = await service.createSession(organizer, {
+      eventId: "event-a",
+      id: "legacy-source",
+      title: "Legacy audit source",
+      durationMinutes: 45,
+      status: "Accepted",
+      speakerIds: ["speaker-1"],
+    });
+    const synced = await service.upsertAcceptedSession({
+      session: {
+        ...created,
+        id: "accepted-sync-session",
+        title: "Accepted submission projection",
+        history: [],
+      },
+      actorId: "accepted-sync-organizer-id",
+    });
+    expect(synced.history.at(-1)).toMatchObject({
+      actorId: "accepted-sync-organizer-id",
+      actorLabel: "Authorized organizer",
+    });
+
+    const legacySession = {
+      ...created,
+      id: "legacy-read-session",
+      history: created.history.map((entry) => ({
+        ...entry,
+        actorId: "legacy-organizer-id",
+        actorLabel: "legacy-organizer-id",
+      })),
+    };
+    const legacyService = new SessionService(
+      new InMemorySessionRepository({ sessions: [legacySession] }),
+      { clock: () => now },
+    );
+    await expect(
+      legacyService.listSessionHistory(organizer, {
+        eventId: "event-a",
+        sessionId: legacySession.id,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        actorId: "legacy-organizer-id",
+        actorLabel: "Authorized organizer",
+      }),
+    ]);
+  });
+
+  it("sanitizes legacy actor labels nested inside session audit snapshots", async () => {
+    const organizer = actor();
+    const legacyEmail = "legacy-organizer@example.com";
+    const service = new SessionService(
+      new InMemorySessionRepository({
+        audit: [
+          {
+            id: "legacy-audit-entry",
+            tenantId: "tenant-a",
+            eventId: "event-a",
+            entityType: "session",
+            entityId: "legacy-session",
+            action: "updated",
+            version: 2,
+            actorId: "legacy-organizer-id",
+            occurredAt: now.toISOString(),
+            before: {
+              history: [
+                {
+                  actorId: "legacy-organizer-id",
+                  actorLabel: legacyEmail,
+                },
+              ],
+            },
+            after: {
+              history: [
+                {
+                  actorId: "legacy-organizer-id",
+                  actorLabel: "legacy-organizer-id",
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { clock: () => now },
+    );
+
+    const entries = await service.listAudit(organizer, { eventId: "event-a" });
+
+    expect(JSON.stringify(entries)).not.toContain(legacyEmail);
+    expect(entries).toMatchObject([
+      {
+        actorId: "legacy-organizer-id",
+        before: {
+          history: [
+            {
+              actorId: "legacy-organizer-id",
+              actorLabel: "Authorized organizer",
+            },
+          ],
+        },
+        after: {
+          history: [
+            {
+              actorId: "legacy-organizer-id",
+              actorLabel: "Authorized organizer",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("does not persist an email when an authenticated organizer has no display name", async () => {
+    const { service } = setup();
+    const routes = createSessionAdminRoutes({ service });
+    const app = new Hono<SessionRouteEnvironment>();
+    const namedPrincipal = principal();
+    if (namedPrincipal.kind !== "user") throw new Error("Expected a user principal.");
+    const { displayName: _displayName, ...unnamedPrincipal } = namedPrincipal;
+    app.use("*", async (context, next) => {
+      context.set("authPrincipal", {
+        ...unnamedPrincipal,
+        email: "private-organizer@example.com",
+      });
+      context.set("traceId", "trace-null-name");
+      await next();
+    });
+    app.route("/api/admin/organizations/:organizationId/events/:eventId/sessions", routes);
+    const base =
+      "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/null-name-session";
+    const created = await app.request(
+      "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: "null-name-session",
+          title: "Private audit identity",
+          durationMinutes: 45,
+          status: "Accepted",
+          speakerIds: ["speaker-1"],
+        }),
+      },
+    );
+    expect(created.status).toBe(201);
+
+    const history = await app.request(`${base}/history`);
+    const payload = await history.json();
+    expect(payload).toMatchObject({
+      data: [
+        {
+          actorId: "organizer-1",
+          actorLabel: "Authorized organizer",
+        },
+      ],
+    });
+    expect(JSON.stringify(payload)).not.toContain("private-organizer@example.com");
+  });
+  it("demotes an accepted canonical session without changing its identity", async () => {
+    const { service } = setup();
+    const accepted = await service.createSession(actor(), {
+      eventId: "event-a",
+      id: "session-submission-1",
+      title: "Reliable systems",
+      description: "A practical session.",
+      status: "Accepted",
+      durationMinutes: 30,
+      speakerIds: ["speaker-1"],
+    });
+
+    const stale = await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: accepted.id,
+      status: "rejected",
+      actorId: "organizer-1",
+      isCurrentDecision: async () => false,
+    });
+    expect(stale).toMatchObject({ id: accepted.id, status: "Accepted", version: 1 });
+
+    const rejected = await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: accepted.id,
+      status: "rejected",
+      actorId: "organizer-1",
+    });
+    expect(rejected).toMatchObject({
+      id: accepted.id,
+      status: "Rejected",
+      version: 2,
+    });
+    expect(rejected?.history.at(-1)).toMatchObject({
+      priorStatus: "Accepted",
+      newStatus: "Rejected",
+    });
+
+    const replay = await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: accepted.id,
+      status: "rejected",
+      actorId: "organizer-1",
+    });
+    expect(replay).toMatchObject({ id: accepted.id, status: "Rejected", version: 2 });
+  });
+
+  it("retries agenda synchronization after a persisted demotion", async () => {
+    let synchronizeCalls = 0;
+    const repository = new InMemorySessionRepository();
+    const initialService = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+    });
+    const accepted = await initialService.createSession(actor(), {
+      eventId: "event-a",
+      id: "session-submission-2",
+      title: "Retryable agenda",
+      description: "A retryable session.",
+      status: "Accepted",
+      durationMinutes: 30,
+      speakerIds: ["speaker-1"],
+    });
+    await repository.putSession(
+      {
+        ...accepted,
+        status: "Rejected",
+        version: 2,
+        updatedAt: accepted.updatedAt,
+      },
+      accepted.version,
+    );
+
+    let failNextSynchronization = true;
+    const service = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+      agendaCatalogSynchronizer: {
+        ensureInitialized: async () => undefined,
+        synchronize: async () => {
+          synchronizeCalls += 1;
+          if (failNextSynchronization) {
+            failNextSynchronization = false;
+            throw new Error("agenda unavailable");
+          }
+          return undefined;
+        },
+      },
+    });
+
+    await expect(
+      service.reconcileDecisionSessionStatus({
+        tenantId: "tenant-a",
+        eventId: "event-a",
+        sessionId: accepted.id,
+        status: "rejected",
+        actorId: "organizer-1",
+      }),
+    ).rejects.toThrow();
+    expect(await repository.getSession("tenant-a", "event-a", accepted.id)).toMatchObject({
+      status: "Rejected",
+      version: 2,
+    });
+
+    await expect(
+      service.reconcileDecisionSessionStatus({
+        tenantId: "tenant-a",
+        eventId: "event-a",
+        sessionId: accepted.id,
+        status: "rejected",
+        actorId: "organizer-1",
+      }),
+    ).resolves.toMatchObject({ status: "Rejected", version: 2 });
+    expect(synchronizeCalls).toBe(2);
+  });
+
+  it("does not synchronize an already-demoted session for stale decision work", async () => {
+    let synchronizeCalls = 0;
+    const repository = new InMemorySessionRepository();
+    const initialService = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+    });
+    await initialService.createSession(actor(), {
+      eventId: "event-a",
+      id: "session-submission-3",
+      title: "Already rejected",
+      description: "An already rejected session.",
+      status: "Rejected",
+      durationMinutes: 30,
+      speakerIds: ["speaker-1"],
+    });
+    const service = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+      agendaCatalogSynchronizer: {
+        ensureInitialized: async () => undefined,
+        synchronize: async () => {
+          synchronizeCalls += 1;
+          return undefined;
+        },
+      },
+    });
+
+    await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: "session-submission-3",
+      status: "rejected",
+      actorId: "organizer-1",
+      isCurrentDecision: async () => false,
+    });
+    expect(synchronizeCalls).toBe(0);
   });
 });

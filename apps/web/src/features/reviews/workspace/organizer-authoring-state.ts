@@ -5,6 +5,7 @@ import type { OrganizationMember } from "../../members/api";
 import type { ApiPlan } from "./api-api-plan";
 import type { DistributionPreview } from "./assignment-distribution-preview";
 import { reviewerIdsForAssignmentTarget } from "./assignment-reviewer-ids-for-assignment-target";
+import type { AssignmentReviewerSelectionMode } from "./model-assignment-reviewer-selection";
 import type { ReviewPlanSeed } from "./organizer-review-plan-seed";
 
 export interface OrganizerAuthoringProps {
@@ -26,6 +27,7 @@ interface AssignmentFieldOverride {
 }
 interface AssignmentReviewerOverride {
   readonly ownerKey: string;
+  readonly mode: AssignmentReviewerSelectionMode;
   readonly value: readonly string[];
 }
 
@@ -162,28 +164,43 @@ export function useOrganizerAuthoringState({
     if (!reviewerDirectoryReady) return authoritativeAssignmentReviewerIds;
     return authoritativeAssignmentReviewerIds.filter((reviewerId) => reviewerIdSet.has(reviewerId));
   }, [authoritativeAssignmentReviewerIds, reviewerDirectoryReady, reviewerIdSet]);
+  const ownedAssignmentReviewerOverride =
+    assignmentReviewerOverride?.ownerKey === assignmentOwnerKey ? assignmentReviewerOverride : null;
+  const assignmentReviewerSelectionMode: AssignmentReviewerSelectionMode =
+    ownedAssignmentReviewerOverride?.mode ??
+    (defaultAssignmentReviewerIds.length > 0 ? "explicit" : "automatic");
   const assignmentReviewerIds =
-    assignmentReviewerOverride?.ownerKey === assignmentOwnerKey
-      ? assignmentReviewerOverride.value
-      : defaultAssignmentReviewerIds;
+    assignmentReviewerSelectionMode === "automatic"
+      ? []
+      : (ownedAssignmentReviewerOverride?.value ?? defaultAssignmentReviewerIds);
   const setAssignmentReviewerIds = useCallback(
     (next: AssignmentReviewerIdsUpdate): void => {
       setAssignmentReviewerOverride((current) => {
         const currentValue =
-          current?.ownerKey === assignmentOwnerKey ? current.value : defaultAssignmentReviewerIds;
+          current?.ownerKey === assignmentOwnerKey && current.mode === "explicit"
+            ? current.value
+            : defaultAssignmentReviewerIds;
         const value = typeof next === "function" ? next(currentValue) : next;
         if (
           current?.ownerKey === assignmentOwnerKey &&
+          current.mode === "explicit" &&
           current.value.length === value.length &&
           current.value.every((reviewerId, index) => reviewerId === value[index])
         ) {
           return current;
         }
-        return { ownerKey: assignmentOwnerKey, value };
+        return { ownerKey: assignmentOwnerKey, mode: "explicit", value };
       });
     },
     [assignmentOwnerKey, defaultAssignmentReviewerIds],
   );
+  const useAutomaticAssignmentDistribution = useCallback((): void => {
+    setAssignmentReviewerOverride({
+      ownerKey: assignmentOwnerKey,
+      mode: "automatic",
+      value: [],
+    });
+  }, [assignmentOwnerKey]);
 
   function setTemporalFieldValidity(field: string, isValid: boolean): void {
     setUnresolvedTemporalFields((current) => {
@@ -196,7 +213,7 @@ export function useOrganizerAuthoringState({
     });
   }
 
-  const assignmentSelectionKey = `${assignmentRoundId}:${assignmentSubmissionId}:${assignmentReviewerIds.join(",")}:${version}`;
+  const assignmentSelectionKey = `${assignmentRoundId}:${assignmentSubmissionId}:${assignmentReviewerSelectionMode}:${assignmentReviewerIds.join(",")}:${version}`;
   const ownedAssignmentPreview =
     assignmentPreviewOverride?.ownerKey === assignmentOwnerKey &&
     assignmentPreviewOverride.selectionKey === assignmentSelectionKey
@@ -276,6 +293,8 @@ export function useOrganizerAuthoringState({
     setAssignmentSubmissionId,
     assignmentReviewerIds,
     setAssignmentReviewerIds,
+    assignmentReviewerSelectionMode,
+    useAutomaticAssignmentDistribution,
     assignmentReviewerQuery,
     setAssignmentReviewerQuery,
     version,

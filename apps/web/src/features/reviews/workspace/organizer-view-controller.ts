@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { OrganizationMember } from "../../members/api";
 import type { ApiPlan } from "./api-api-plan";
+
 import type { AggregateRow } from "./organizer-aggregate-row";
 import type { DecisionStatus } from "./organizer-decision-status";
 import { loadRoundAggregates } from "./organizer-load-round-aggregates";
@@ -23,6 +24,24 @@ export interface OrganizerWorkspaceViewProps {
   reviewerMembersError: string | null;
   onAuthoritativePlan?: ((plan: ApiPlan) => void) | undefined;
   onAssignmentsPersisted?: (() => Promise<void>) | undefined;
+}
+
+export interface OrganizerDecisionOverrideState {
+  readonly planId: string;
+  readonly decisions: ReviewPlanSeed["decisionBySubmission"];
+}
+
+export function mergeOrganizerDecisionOverrides(
+  seed: ReviewPlanSeed,
+  overrides: OrganizerDecisionOverrideState,
+): ReviewPlanSeed["decisionBySubmission"] {
+  if (overrides.planId !== seed.planId) return {};
+  return Object.fromEntries(
+    Object.entries(overrides.decisions).filter(
+      ([submissionId, decision]) =>
+        decision.version > (seed.decisionBySubmission[submissionId]?.version ?? 0),
+    ),
+  );
 }
 
 export function useOrganizerWorkspaceViewController({
@@ -73,21 +92,13 @@ export function useOrganizerWorkspaceViewController({
     "undecided",
   );
   const [decisionRowLimit, setDecisionRowLimit] = useState(5);
-  const [decisionOverrides, setDecisionOverrides] = useState<{
-    readonly planId: string;
-    readonly decisions: ReviewPlanSeed["decisionBySubmission"];
-  }>({ planId: seed.planId, decisions: {} });
+  const [decisionOverrides, setDecisionOverrides] = useState<OrganizerDecisionOverrideState>({
+    planId: seed.planId,
+    decisions: {},
+  });
   const currentDecisionOverrides = useMemo(
-    () =>
-      decisionOverrides.planId === seed.planId
-        ? Object.fromEntries(
-            Object.entries(decisionOverrides.decisions).filter(
-              ([submissionId, decision]) =>
-                decision.version > (seed.decisionBySubmission[submissionId]?.version ?? 0),
-            ),
-          )
-        : {},
-    [decisionOverrides, seed.decisionBySubmission, seed.planId],
+    () => mergeOrganizerDecisionOverrides(seed, decisionOverrides),
+    [decisionOverrides, seed],
   );
   const effectiveDecisionBySubmission = useMemo(
     () => ({

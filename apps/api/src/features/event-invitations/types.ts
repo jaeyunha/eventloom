@@ -66,6 +66,16 @@ export interface CreateEventRoleInvitationInput {
   readonly invitedByActorType: EventRoleInvitationActorType;
   readonly invitedByActorId?: string | null;
   readonly invitedAt: string;
+  readonly decisionFence?: EventInvitationDecisionFence;
+}
+
+export interface EventInvitationDecisionFence {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly submissionId: string;
+  readonly version: number;
+  readonly status: "accepted";
 }
 
 export interface EventRoleInvitationTransitionInput {

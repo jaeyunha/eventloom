@@ -4,8 +4,8 @@ import { CloudUpload, Trash2, X } from "lucide-react";
 import {
   type ChangeEvent,
   type DragEvent,
-  type ReactNode,
   type Ref,
+  type ReactNode,
   useId,
   useRef,
   useState,
@@ -40,7 +40,7 @@ export interface FileUploadProps {
   readonly describedBy?: string | undefined;
   readonly ariaLabel?: string;
   readonly invalid?: boolean;
-  readonly inputRef?: Ref<HTMLInputElement>;
+  readonly inputRef?: Ref<HTMLInputElement> | undefined;
   readonly files?: readonly FileUploadItem[];
   readonly emptyState?: ReactNode;
   readonly onFilesSelected: (files: readonly File[]) => void;
@@ -183,10 +183,16 @@ export function FileUpload({
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    aria-label={item.status === "uploading" ? `Cancel ${item.name}` : `Remove ${item.name}`}
+                    aria-label={
+                      item.status === "uploading" ? `Cancel ${item.name}` : `Remove ${item.name}`
+                    }
                     onClick={() => onRemove(item.id)}
                   >
-                    {item.status === "uploading" ? <X aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
+                    {item.status === "uploading" ? (
+                      <X aria-hidden="true" />
+                    ) : (
+                      <Trash2 aria-hidden="true" />
+                    )}
                   </Button>
                 ) : (
                   <span />

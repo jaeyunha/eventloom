@@ -112,4 +112,21 @@ describe("seedWithAuthoritativePlan", () => {
   it("preserves submitted evidence when the authoritative closing date changes", () => {
     expectSubmittedEvidencePreserved(authoritativePlan("open", "2026-08-25T23:59:59.000Z", 4));
   });
+
+  it("preserves the latest decision when authoritative plan data refreshes", () => {
+    const decision = {
+      status: "waitlisted" as const,
+      reason: "Capacity is currently full.",
+      version: 7,
+    };
+    const result = seedWithAuthoritativePlan(
+      {
+        ...seed,
+        decisionBySubmission: { "submission-1": decision },
+      },
+      authoritativePlan("closed", "2026-08-21T23:59:59.000Z", 8),
+    );
+
+    expect(result.decisionBySubmission["submission-1"]).toEqual(decision);
+  });
 });

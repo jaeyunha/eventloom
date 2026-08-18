@@ -3,6 +3,8 @@ import type {
   CreateRoomInput,
   CreateSessionInput,
   CreateTaxonomyInput,
+  DecisionSessionStatusReconciliationInput,
+  DecisionVersionFence,
   Format,
   Level,
   PublishedSessionContentHandoff,
@@ -63,6 +65,8 @@ export interface SessionServiceOptions {
 export interface AcceptedSessionProjectionInput {
   readonly session: Session;
   readonly actorId: string;
+  readonly decisionFence?: DecisionVersionFence | undefined;
+  readonly beforePersist?: () => Promise<boolean>;
 }
 type SessionListItem = Omit<Session, "history">;
 type SessionListPageProjection = Omit<SessionListPage, "items"> & {
@@ -357,11 +361,33 @@ function sessionIsPubliclyApproved(session: Session): boolean {
 }
 
 function actorLabel(actor: SessionActor): string {
-  const record = actor as unknown as Record<string, unknown>;
-  const displayName = record.displayName ?? record.name;
-  return typeof displayName === "string" && displayName.trim().length > 0
-    ? displayName.trim()
-    : actor.userId;
+  return actor.kind === "automation" ? "Eventloom automation" : "Authorized organizer";
+}
+
+function persistedActorLabel(actorId: string | undefined, value: unknown): string {
+  const label = typeof value === "string" ? value.trim() : "";
+  return label && label !== actorId && !label.includes("@") ? label : "Authorized organizer";
+}
+
+function sanitizeAuditValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => sanitizeAuditValue(entry));
+  if (value === null || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+  const actorId = typeof source.actorId === "string" ? source.actorId : undefined;
+  return Object.fromEntries(
+    Object.entries(source).map(([key, entry]) => [
+      key,
+      key === "actorLabel" ? persistedActorLabel(actorId, entry) : sanitizeAuditValue(entry),
+    ]),
+  );
+}
+
+function sanitizeAuditEntry(entry: SessionAuditEntry): SessionAuditEntry {
+  return {
+    ...clone(entry),
+    ...(entry.before === undefined ? {} : { before: sanitizeAuditValue(entry.before) }),
+    ...(entry.after === undefined ? {} : { after: sanitizeAuditValue(entry.after) }),
+  };
 }
 
 function historyEntry(
@@ -407,7 +433,12 @@ function sessionContentSnapshot(session: Session): SessionContentSnapshot {
 
 function orderedSessionHistory(history: readonly SessionHistoryEntry[]): SessionHistoryEntry[] {
   return [...history]
-    .map((entry) => clone(entry))
+    .map((entry) => {
+      return {
+        ...clone(entry),
+        actorLabel: persistedActorLabel(entry.actorId, entry.actorLabel),
+      };
+    })
     .sort(
       (left, right) =>
         left.version - right.version ||
@@ -602,6 +633,9 @@ export class SessionService {
         history: current === null ? [] : orderedSessionHistory(current.history),
       };
       if (current !== null && acceptedSessionFieldsEqual(current, desired)) {
+        if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+          throw conflict("accepted session decision");
+        }
         await this.synchronizeAgenda(projectionActor, eventId);
         return sessionProjection(current);
       }
@@ -622,7 +656,7 @@ export class SessionService {
             {
               title,
               description,
-              actorLabel: actorId,
+              actorLabel: actorLabel(projectionActor),
               contentStatus: desiredContentStatus,
               ...(current === null ? {} : { priorStatus: current.status }),
               newStatus: desired.status,
@@ -647,15 +681,22 @@ export class SessionService {
         next,
       );
       try {
+        if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+          throw conflict("accepted session decision");
+        }
         if (this.#repository.commit !== undefined) {
           await this.#repository.commit({
             operation: "putSession",
             value: next,
             expectedVersion: current?.version ?? null,
             audit,
+            ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
           });
         } else {
-          await this.#repository.putSession(next, current?.version ?? null);
+          if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+            throw conflict("accepted session decision");
+          }
+          await this.#repository.putSession(next, current?.version ?? null, input.decisionFence);
           await this.recordAudit(audit);
         }
       } catch (error) {
@@ -669,6 +710,45 @@ export class SessionService {
       return sessionProjection(next);
     }
     throw versionConflict("accepted session");
+  }
+
+  async reconcileDecisionSessionStatus(
+    input: DecisionSessionStatusReconciliationInput,
+  ): Promise<Session | null> {
+    const current = await this.#repository.getSession(
+      input.tenantId,
+      this.event(input.eventId),
+      resourceId(input.sessionId, "session id"),
+    );
+    if (current === null) return null;
+    const settings = await this.#repository.getSettings(input.tenantId, input.eventId);
+    const targetStatus = settings?.statuses.find((candidate) =>
+      sameStatus(candidate, input.status),
+    );
+    const effectiveTargetStatus = targetStatus ?? "Draft";
+    const actor: SessionActor = {
+      tenantId: input.tenantId,
+      userId: input.actorId,
+      kind: "user",
+      isOrganizer: true,
+      grants: [{ eventId: input.eventId, role: "organizer" }],
+    };
+    if (sameStatus(current.status, effectiveTargetStatus)) {
+      if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) {
+        return current;
+      }
+      await this.synchronizeAgenda(actor, input.eventId);
+      return current;
+    }
+    return this.updateSession(actor, {
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      sessionId: current.id,
+      expectedVersion: current.version,
+      status: effectiveTargetStatus,
+      beforePersist: input.isCurrentDecision,
+      decisionFence: input.decisionFence,
+    });
   }
 
   async createSession(actor: SessionActor, input: CreateSessionInput): Promise<Session> {
@@ -1152,6 +1232,9 @@ export class SessionService {
       current,
       next,
     );
+    if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+      return sessionProjection(current);
+    }
     try {
       if (this.#repository.commit !== undefined) {
         await this.#repository.commit({
@@ -1159,9 +1242,13 @@ export class SessionService {
           value: next,
           expectedVersion: expected,
           audit,
+          ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
         });
       } else {
-        await this.#repository.putSession(next, expected);
+        if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+          return sessionProjection(current);
+        }
+        await this.#repository.putSession(next, expected, input.decisionFence);
         await this.recordAudit(audit);
       }
     } catch (error) {
@@ -1613,11 +1700,9 @@ export class SessionService {
       this.event(input.eventId),
       input.entityId,
     );
-    return clone(
-      entries.filter(
-        (entry) => entry.tenantId === actor.tenantId && entry.eventId === input.eventId,
-      ),
-    );
+    return entries
+      .filter((entry) => entry.tenantId === actor.tenantId && entry.eventId === input.eventId)
+      .map((entry) => sanitizeAuditEntry(entry));
   }
 
   /**
@@ -2287,7 +2372,10 @@ export class InMemorySessionRepository implements SessionRepository {
   readonly #audit = new Map<string, SessionAuditEntry[]>();
   readonly #speakerIds = new Map<string, Set<string>>();
 
-  constructor(seed: SessionRepositorySeed = {}) {
+  constructor(
+    seed: SessionRepositorySeed = {},
+    private readonly decisionFenceChecker?: (fence: DecisionVersionFence) => Promise<boolean>,
+  ) {
     for (const session of seed.sessions ?? [])
       this.#sessions.set(key(session.tenantId, session.eventId, session.id), clone(session));
     for (const room of seed.rooms ?? [])
@@ -2319,7 +2407,18 @@ export class InMemorySessionRepository implements SessionRepository {
       .filter((value) => value.tenantId === tenantId && value.eventId === eventId)
       .map(clone);
   }
-  async putSession(value: Session, expected: number | null): Promise<void> {
+  async putSession(
+    value: Session,
+    expected: number | null,
+    decisionFence?: DecisionVersionFence,
+  ): Promise<void> {
+    if (
+      decisionFence !== undefined &&
+      this.decisionFenceChecker !== undefined &&
+      !(await this.decisionFenceChecker(decisionFence))
+    ) {
+      throw new SessionRepositoryConflictError("The evaluation decision changed.");
+    }
     putVersioned(this.#sessions, key(value.tenantId, value.eventId, value.id), value, expected);
   }
   async deleteSession(

@@ -2,9 +2,9 @@ ALTER TABLE review_rounds ADD COLUMN ai_triage_enabled INTEGER NOT NULL DEFAULT 
 
 PRAGMA defer_foreign_keys = TRUE;
 
-CREATE TABLE _0051_evaluation_suggestions AS SELECT * FROM evaluation_suggestions;
-CREATE TABLE _0051_evaluation_suggestion_candidates AS SELECT * FROM evaluation_suggestion_candidates;
-CREATE TABLE _0051_evaluation_suggestion_history AS SELECT * FROM evaluation_suggestion_history;
+CREATE TABLE _0052_evaluation_suggestions AS SELECT * FROM evaluation_suggestions;
+CREATE TABLE _0052_evaluation_suggestion_candidates AS SELECT * FROM evaluation_suggestion_candidates;
+CREATE TABLE _0052_evaluation_suggestion_history AS SELECT * FROM evaluation_suggestion_history;
 
 DROP TABLE evaluation_suggestion_history;
 DROP TABLE evaluation_suggestion_candidates;
@@ -68,9 +68,9 @@ CREATE TABLE evaluation_suggestion_history (
   FOREIGN KEY (organization_id, event_id, suggestion_id) REFERENCES evaluation_suggestions(organization_id, event_id, id) ON DELETE RESTRICT
 ) STRICT;
 
-INSERT INTO evaluation_suggestions SELECT * FROM _0051_evaluation_suggestions;
-INSERT INTO evaluation_suggestion_candidates SELECT * FROM _0051_evaluation_suggestion_candidates;
-INSERT INTO evaluation_suggestion_history SELECT * FROM _0051_evaluation_suggestion_history;
+INSERT INTO evaluation_suggestions SELECT * FROM _0052_evaluation_suggestions;
+INSERT INTO evaluation_suggestion_candidates SELECT * FROM _0052_evaluation_suggestion_candidates;
+INSERT INTO evaluation_suggestion_history SELECT * FROM _0052_evaluation_suggestion_history;
 
 ALTER TABLE evaluation_suggestions ADD COLUMN override_json TEXT;
 
@@ -81,6 +81,6 @@ CREATE UNIQUE INDEX evaluation_suggestions_shared_active_scope_unique ON evaluat
 CREATE INDEX evaluation_suggestion_candidates_order_idx ON evaluation_suggestion_candidates (organization_id, event_id, suggestion_id, criterion_id, ordinal);
 CREATE INDEX evaluation_suggestion_history_order_idx ON evaluation_suggestion_history (organization_id, event_id, suggestion_id, ordinal);
 
-DROP TABLE _0051_evaluation_suggestion_history;
-DROP TABLE _0051_evaluation_suggestion_candidates;
-DROP TABLE _0051_evaluation_suggestions;
+DROP TABLE _0052_evaluation_suggestion_history;
+DROP TABLE _0052_evaluation_suggestion_candidates;
+DROP TABLE _0052_evaluation_suggestions;

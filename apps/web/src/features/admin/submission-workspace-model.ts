@@ -476,6 +476,7 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
       : fieldAnswer(canonicalFieldValue(submission.answers, definition), definition);
   };
   const title = answer("title");
+  const normalizedTitle = title.trim();
   const abstractAnswer = answer("abstract");
   const abstractValue = abstractAnswer === "—" ? answer("description") : abstractAnswer;
   const submittedAt = submission.submittedAt ?? null;
@@ -499,7 +500,8 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
   return {
     eventId: submission.eventId,
     id: submission.id,
-    title: title === "—" ? "Untitled submission" : title,
+    title:
+      normalizedTitle === "—" || normalizedTitle === submission.id ? "No title" : normalizedTitle,
     status: submission.status,
     track: answer("track"),
     format: answer("format"),

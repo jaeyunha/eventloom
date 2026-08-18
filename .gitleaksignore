@@ -31,6 +31,10 @@ edccaa919ea19332af5fd86d57548aeb36327607:apps/web/src/features/integrations/api.
 4fe15279e1f91483f361fe008035e113357d009e:apps/api/src/integrations/accelevents/accelevents.test.ts:generic-api-key:208
 4fe15279e1f91483f361fe008035e113357d009e:apps/api/src/integrations/accelevents/accelevents.test.ts:generic-api-key:243
 299d9198edefef5837810d3a9dd9435ce6570671:apps/api/src/infrastructure/airtable/retry.ts:airtable-api-key:1
+2d0b37ebf06de46e785ccddb16b69363fd0b4086:apps/api/src/infrastructure/cloudflare/repositories/speaker-lifecycle.test.ts:generic-api-key:842
+d450fd8f738c8b3ce0ae84eaceda39d828547123:tests/e2e/redesign-workspaces.spec.ts:generic-api-key:1610
+2bcbe2fa3179e4cc64fa00c0e0b20c94d7768d32:apps/api/src/infrastructure/cloudflare/reminder-repository.test.ts:generic-api-key:110
+7fbef309e4afb366523a25b32b818a59d4effadf:apps/api/src/runtime/composition.test.ts:airtable-api-key:16
 # Current-tree fingerprints for the same reviewed source identifiers and fixtures.
 apps/api/src/infrastructure/airtable/retry.ts:airtable-api-key:1
 apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:301
@@ -47,3 +51,10 @@ apps/api/src/infrastructure/cloudflare/repositories/event-role-invitations.test.
 apps/api/src/runtime/composition.test.ts:generic-api-key:243
 scripts/release/migrate-organization-id.mjs:airtable-api-key:545
 scripts/release/migrate-organization-id.mjs:airtable-api-key:575
+apps/api/src/features/crm/service.test.ts:generic-api-key:1311
+apps/api/src/infrastructure/cloudflare/reminder-repository.test.ts:generic-api-key:122
+apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:514
+apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:537
+apps/api/src/infrastructure/cloudflare/repositories/speaker-lifecycle.test.ts:generic-api-key:842
+apps/api/src/runtime/composition.test.ts:generic-api-key:254
+tests/e2e/redesign-workspaces.spec.ts:generic-api-key:1658

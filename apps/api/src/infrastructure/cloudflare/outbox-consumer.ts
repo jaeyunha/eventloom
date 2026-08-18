@@ -13,6 +13,7 @@ import { createCalendarOpenSendMessage } from "../../integrations/opensend/calen
 import { OpenSendError, openSendMessageSchema } from "../../integrations/opensend/types";
 import {
   type CloudflareBindings,
+  type CloudflareEvaluationDecisionPayload,
   type CloudflareFileScanPayload,
   type CloudflareOutboxInvitationTransient,
   type CloudflareOutboxMessage,
@@ -486,6 +487,7 @@ export interface OutboxAdapters {
   readonly "cache-invalidation"?: TopicAdapter<{ readonly eventId: string }>;
   readonly cacheInvalidation?: TopicAdapter<{ readonly eventId: string }>;
   readonly reports?: TopicAdapter<CloudflareReportsPayload>;
+  readonly "evaluation-decisions"?: TopicAdapter<CloudflareEvaluationDecisionPayload>;
   readonly "file-scan"?: TopicAdapter<CloudflareFileScanPayload>;
 }
 
@@ -898,6 +900,59 @@ function parseReportsPayload(value: unknown): CloudflareReportsPayload {
   return { kind: "evaluation_review_export", runId: value.runId };
 }
 
+const evaluationDecisionPayloadKeys = new Set([
+  "kind",
+  "tenantId",
+  "eventId",
+  "planId",
+  "submissionId",
+  "decisionId",
+  "decisionVersion",
+  "status",
+  "priorStatus",
+  "reason",
+  "decidedBy",
+  "decidedAt",
+  "transitionIdempotencyKey",
+]);
+const evaluationDecisionStatuses = new Set(["accepted", "waitlisted", "rejected"]);
+
+function parseEvaluationDecisionPayload(value: unknown): CloudflareEvaluationDecisionPayload {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, evaluationDecisionPayloadKeys) ||
+    value.kind !== "evaluation_decision_work" ||
+    typeof value.tenantId !== "string" ||
+    value.tenantId.trim().length === 0 ||
+    typeof value.eventId !== "string" ||
+    value.eventId.trim().length === 0 ||
+    typeof value.planId !== "string" ||
+    value.planId.trim().length === 0 ||
+    typeof value.submissionId !== "string" ||
+    value.submissionId.trim().length === 0 ||
+    typeof value.decisionId !== "string" ||
+    value.decisionId.trim().length === 0 ||
+    !Number.isSafeInteger(value.decisionVersion) ||
+    Number(value.decisionVersion) < 1 ||
+    typeof value.status !== "string" ||
+    !evaluationDecisionStatuses.has(value.status) ||
+    (value.priorStatus !== null &&
+      (typeof value.priorStatus !== "string" ||
+        !evaluationDecisionStatuses.has(value.priorStatus))) ||
+    typeof value.reason !== "string" ||
+    value.reason.trim().length === 0 ||
+    typeof value.decidedBy !== "string" ||
+    value.decidedBy.trim().length === 0 ||
+    typeof value.decidedAt !== "string" ||
+    validDate(value.decidedAt) === null ||
+    typeof value.transitionIdempotencyKey !== "string" ||
+    value.transitionIdempotencyKey.trim().length === 0
+  ) {
+    malformedPayload("evaluation-decisions");
+  }
+  return value as unknown as CloudflareEvaluationDecisionPayload;
+}
+
 function normalizeFailure(cause: unknown): OutboxDeliveryError {
   if (cause instanceof OutboxDeliveryError) return cause;
   if (cause instanceof OpenSendError) {
@@ -1129,6 +1184,7 @@ function createConfiguredAdapters(
 
 export class OutboxConsumer {
   readonly #repository: OutboxJobRepository;
+  readonly #database: D1Database | undefined;
   readonly #adapters: OutboxAdapters;
   readonly #statusRecorder: OutboxDeliveryStatusRecorder | undefined;
   readonly #now: () => Date;
@@ -1146,6 +1202,7 @@ export class OutboxConsumer {
     const optionsOnly = isOutboxOptions(bindingsOrOptions);
     const bindings = optionsOnly ? ({} as OutboxConsumerBindings) : bindingsOrOptions;
     const effectiveOptions = optionsOnly ? bindingsOrOptions : options;
+    this.#database = optionsOnly ? undefined : bindings.DB;
     this.#repository = effectiveOptions.repository ?? new D1OutboxJobRepository(bindings.DB);
     this.#statusRecorder = effectiveOptions.statusRecorder;
     this.#now = effectiveOptions.now ?? (() => new Date());
@@ -1408,6 +1465,51 @@ export class OutboxConsumer {
   ): Promise<OutboxDeliveryReceipt | undefined> {
     switch (job.topic) {
       case "communications": {
+        const payloadRecord = isRecord(job.payload) ? job.payload : null;
+        const hasFence = payloadRecord !== null && "decisionFence" in payloadRecord;
+        const isDecisionMessage = payloadRecord?.purpose === "decision";
+        const fence = isRecord(payloadRecord?.decisionFence) ? payloadRecord.decisionFence : null;
+        const validFence =
+          fence !== null &&
+          typeof fence.eventId === "string" &&
+          typeof fence.planId === "string" &&
+          typeof fence.submissionId === "string" &&
+          Number.isSafeInteger(fence.version) &&
+          (fence.status === "accepted" ||
+            fence.status === "waitlisted" ||
+            fence.status === "rejected");
+        if (
+          (hasFence || isDecisionMessage) &&
+          (!hasFence || this.#database === undefined || !validFence)
+        ) {
+          throw new OutboxDeliveryError(
+            "MALFORMED_PAYLOAD",
+            "The decision communication fence is invalid.",
+            { retryable: false },
+          );
+        }
+        const database = this.#database;
+        if (validFence && database !== undefined) {
+          const current = await database
+            .prepare(
+              `SELECT version, status
+                 FROM evaluation_decisions
+                WHERE organization_id = ?
+                  AND event_id = ?
+                  AND plan_id = ?
+                  AND submission_id = ?
+                LIMIT 1`,
+            )
+            .bind(job.tenantId, fence.eventId, fence.planId, fence.submissionId)
+            .first<{ version: number; status: string }>();
+          if (
+            current === null ||
+            current.version !== fence.version ||
+            current.status !== fence.status
+          ) {
+            return;
+          }
+        }
         let payload: OpenSendMessage;
         if (transient === undefined) {
           payload = parseEmailPayload(job.payload);
@@ -1443,6 +1545,26 @@ export class OutboxConsumer {
       case "reports": {
         const payload = parseReportsPayload(job.payload);
         const adapter = this.#adapters.reports;
+        if (adapter === undefined) throw adapterError(job.topic);
+        await adapter(payload, context);
+        return;
+      }
+      case "evaluation-decisions": {
+        const payload = parseEvaluationDecisionPayload(job.payload);
+        const expectedKey = `evaluation-decision:${payload.planId}:${payload.submissionId}:v${payload.decisionVersion}`;
+        const expectedJobId = `evaluation-decision:${payload.decisionId}:v${payload.decisionVersion}`;
+        if (
+          payload.tenantId !== job.tenantId ||
+          job.deduplicationKey !== expectedKey ||
+          job.id !== expectedJobId
+        ) {
+          throw new OutboxDeliveryError(
+            "MESSAGE_MISMATCH",
+            "The evaluation decision payload does not match its durable outbox identity.",
+            { retryable: false },
+          );
+        }
+        const adapter = this.#adapters["evaluation-decisions"];
         if (adapter === undefined) throw adapterError(job.topic);
         await adapter(payload, context);
         return;

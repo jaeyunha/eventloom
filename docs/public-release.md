@@ -36,6 +36,17 @@ source identifiers, or import paths; their exact fingerprints are recorded in
 `.gitleaksignore`. Repeat scans reported no leaks. This is preparation evidence
 only: rerun both scanners against the final public candidate, and re-review every
 finding if history is rewritten because commit fingerprints will change.
+A 2026-08-18 scan ran Gitleaks 8.30.1 against candidate `3fcef362`: full
+reachable history (869 commits), `--all` refs, and the tracked tree (filtered
+via `git ls-files`, excluding ignored local state), plus `bun audit` (no
+vulnerabilities). Eleven new findings were individually reviewed — test
+idempotency keys, a `BETTER_AUTH_SECRET` test fixture, and an Airtable
+import-type line — and their fingerprints were added to `.gitleaksignore`.
+Both the history and tracked-tree scans now report no leaks for the candidate.
+The reachable history still contains the competition-brief PDF, host
+transcript, and QA screenshots removed from the current tree; the
+publication-history decision below is still required before any visibility
+change.
 
 ## Source that can remain public after review
 
@@ -68,33 +79,49 @@ bun audit
 
 ## Before changing GitHub or Forge visibility
 
-- [ ] Run a secret scanner against the complete public history, not only the
-      working tree.
-- [ ] Run a secret scanner against the exact current candidate tree.
-- [ ] Record whether publication uses current history, rewritten history, or a
-      separate sanitized repository.
-- [ ] Review every tracked source snapshot, transcript, screenshot, and
-      evidence artifact for privacy and redistribution rights.
-- [ ] Confirm every contributor has agreed to the ELv2 licensing terms or has
-      assigned the required rights.
-- [ ] Confirm dependencies, fonts, screenshots, and copied assets have
-      compatible redistribution rights.
-- [ ] Run `git status --short` from a clean candidate and inspect the complete
-      diff.
-- [ ] Record authenticated and unauthenticated GitHub/Forge visibility immediately
-      before and after the external visibility change.
-- [ ] Rotate any credential if the full-history scan finds it anywhere.
+- [x] Run a secret scanner against the complete public history, not only the
+      working tree. (2026-08-18, Gitleaks 8.30.1, candidate `3fcef362` and
+      `f5b1406d` history: clean)
+- [x] Run a secret scanner against the exact current candidate tree.
+      (2026-08-18, tracked-tree scan: clean)
+- [x] Record whether publication uses current history, rewritten history, or a
+      separate sanitized repository. (2026-08-18 owner decision: current
+      history)
+- [x] Review every tracked source snapshot, transcript, screenshot, and
+      evidence artifact for privacy and redistribution rights. (2026-08-18
+      owner decision: the competition brief PDF, host transcript, and QA
+      screenshots in reachable history are approved for publication — the
+      brief and transcript are public sources; the screenshots are internal QA
+      captures of this product's own UI)
+- [x] Confirm every contributor has agreed to the ELv2 licensing terms or has
+      assigned the required rights. (2026-08-18 owner confirmation: sole
+      contributor `jaeyunha`)
+- [x] Confirm dependencies, fonts, screenshots, and copied assets have
+      compatible redistribution rights. (2026-08-18: no bundled fonts or
+      vendored code; README images are shields.io badges; evidence artifacts
+      covered by the owner decision above)
+- [x] Run `git status --short` from a clean candidate and inspect the complete
+      diff. (clean at `f5b1406d`)
+- [x] Record authenticated and unauthenticated GitHub/Forge visibility immediately
+      before and after the external visibility change. (before 2026-08-18T02:39:45Z:
+      both PRIVATE, anonymous access fails; after 2026-08-18T02:44:59Z: GitHub
+      `jaeyunha/eventloom` and Forge `jaeyunha/open-sessionboard` both PUBLIC,
+      anonymous `ls-remote` returns `eb05786d` on both)
+- [x] Rotate any credential if the full-history scan finds it anywhere.
+      (2026-08-18 scans found no credentials — nothing to rotate)
 
-## Questions requiring owner decisions
+## Owner decisions recorded 2026-08-18
 
-1. Confirm that Elastic License 2.0 applies to all first-party code.
-2. Confirm that every contributor has the right to publish their work under
-   ELv2.
-3. Choose the publication-history policy: current history, rewritten history,
-   or a separate sanitized repository.
-4. Confirm that the selected public candidate and its reachable history contain
-   no unapproved copied assets, source snapshots, transcripts, screenshots, or
-   private evidence.
+1. Elastic License 2.0 applies to all first-party code: confirmed.
+2. Sole contributor `jaeyunha` has the right to publish under ELv2:
+   confirmed.
+3. Publication-history policy: **current history** (no rewrite, no separate
+   sanitized repository).
+4. The candidate `f5b1406d` and its reachable history contain no unapproved
+   copied assets, source snapshots, transcripts, screenshots, or private
+   evidence: confirmed. The competition brief PDF and host transcript in
+   history are public sources; the QA screenshots are internal QA captures of
+   this product's own UI.
 
 ## Visibility commands and anonymous verification
 
@@ -103,8 +130,8 @@ part of this preparation change. After every item above is complete and the
 chosen public history has been pushed, the repository owner can run:
 
 ```bash
-gh repo edit jaeyunha/eventloom --visibility public --accept-visibility-change-consequences
-gh repo view jaeyunha/eventloom --json visibility,isPrivate,url,licenseInfo
+gh repo edit namuh-eng/eventloom --visibility public --accept-visibility-change-consequences
+gh repo view namuh-eng/eventloom --json visibility,isPrivate,url,licenseInfo
 ```
 
 After changing visibility, verify both mirrors without stored credentials:
@@ -112,7 +139,7 @@ After changing visibility, verify both mirrors without stored credentials:
 ```bash
 env -u GH_TOKEN -u GITHUB_TOKEN GIT_TERMINAL_PROMPT=0 \
   git -c credential.helper= ls-remote \
-  https://github.com/jaeyunha/eventloom.git HEAD
+    https://github.com/namuh-eng/eventloom.git HEAD
 
 env -u GH_TOKEN -u GITHUB_TOKEN GIT_TERMINAL_PROMPT=0 \
   git -c credential.helper= ls-remote \

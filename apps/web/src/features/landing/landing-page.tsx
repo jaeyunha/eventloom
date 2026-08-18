@@ -22,15 +22,15 @@ export function LandingPage() {
       <footer className="site-footer">
         <div className="wrap footer-inner">
           <strong>Eventloom</strong>
-          <span>Open-source program operations for conference teams.</span>
+          <span>Source-available program operations for conference teams.</span>
           <nav className="footer-links" aria-label="Footer navigation">
             <Link href="/events">Events</Link>
             <Link href="/login">Sign in</Link>
             <Link href="/privacy">Privacy</Link>
             <Link href="/terms">Terms</Link>
-            <a href="https://github.com/jaeyunha/open-sessionboard">GitHub</a>
+            <a href="https://github.com/namuh-eng/eventloom">GitHub</a>
           </nav>
-          <span>AGPL-3.0-or-later</span>
+          <span>Elastic-2.0 (source-available)</span>
         </div>
       </footer>
       <LandingInteractions />

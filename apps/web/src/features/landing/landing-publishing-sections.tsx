@@ -2,7 +2,7 @@ import Link from "next/link";
 import { LandingIcon } from "./landing-icon";
 
 const openSourceBenefits = [
-  "AGPL-3.0-or-later",
+  "Elastic-2.0 (source-available)",
   "Self-hostable",
   "Versioned API and webhooks",
   "Privacy-safe projections",

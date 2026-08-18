@@ -4,14 +4,7 @@ import { uploadMimeTypeLabels } from "@eventloom/contracts";
 import { CheckCircle2, FileText, MailCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  type FormEvent,
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { ThemeToggle } from "../../components/product-shell/theme-toggle";
 import { Button } from "../../components/ui/button";
 import { FileUpload } from "../../components/ui/file-upload";
@@ -1038,7 +1031,7 @@ function FileRequestControl({
                 ? "Uploading securely…"
                 : displayState.status === "ready"
                   ? "Uploaded and ready"
-                  : displayState.message ?? "Upload failed",
+                  : (displayState.message ?? "Upload failed"),
             status:
               displayState.status === "pending"
                 ? ("uploading" as const)
@@ -1052,9 +1045,11 @@ function FileRequestControl({
     <div className={styles.fileRequestControl}>
       <FileUpload
         id={id}
-        accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
+        {...(acceptedTypes.length > 0 ? { accept: acceptedTypes.join(",") } : {})}
         disabled={displayState?.status === "pending"}
-        title={hasUploadedFile ? "Drop a replacement file or browse" : "Drop your files here or browse"}
+        title={
+          hasUploadedFile ? "Drop a replacement file or browse" : "Drop your files here or browse"
+        }
         hint={
           requirementParts.length > 0
             ? requirementParts.join(" · ")
@@ -1070,8 +1065,10 @@ function FileRequestControl({
         describedBy={[
           ...(requirementParts.length > 0 ? [helpId] : []),
           ...(displayState?.status === "error" ? [errorId] : []),
-          ...(displayState?.status === "pending" || displayState?.status === "ready" ? [statusId] : []),
-        ].join(" ") || undefined}
+          ...(displayState?.status === "pending" || displayState?.status === "ready"
+            ? [statusId]
+            : []),
+        ].join(" ")}
         invalid={displayState?.status === "error"}
         files={selectedFiles}
         onFilesSelected={(files) => handleSelectedFile(files[0])}

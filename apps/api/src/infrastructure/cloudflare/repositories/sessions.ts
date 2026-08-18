@@ -23,6 +23,7 @@ import type {
   Room,
   Session,
   SessionAuditEntry,
+  DecisionVersionFence,
   SessionHistoryEntry,
   SessionRepository,
   SessionRepositoryCommand,
@@ -225,8 +226,12 @@ export class D1SessionRepository implements SessionRepository {
     ).filter((value): value is Session => value !== null);
   }
 
-  async putSession(value: Session, expectedVersion: number | null): Promise<void> {
-    await this.#commitPut("session", value, expectedVersion);
+  async putSession(
+    value: Session,
+    expectedVersion: number | null,
+    decisionFence?: DecisionVersionFence,
+  ): Promise<void> {
+    await this.#commitPut("session", value, expectedVersion, undefined, decisionFence);
   }
 
   async deleteSession(
@@ -408,7 +413,13 @@ export class D1SessionRepository implements SessionRepository {
   async commit(command: SessionRepositoryCommand): Promise<void> {
     switch (command.operation) {
       case "putSession":
-        return this.#commitPut("session", command.value, command.expectedVersion, command.audit);
+        return this.#commitPut(
+          "session",
+          command.value,
+          command.expectedVersion,
+          command.audit,
+          command.decisionFence,
+        );
       case "putRoom":
         return this.#commitPut("room", command.value, command.expectedVersion, command.audit);
       case "putTrack":
@@ -564,8 +575,9 @@ export class D1SessionRepository implements SessionRepository {
     value: PutValue,
     expectedVersion: number | null,
     audit?: SessionAuditEntry,
+    decisionFence?: DecisionVersionFence,
   ): Promise<void> {
-    const primary = this.#putStatement(type, value, expectedVersion);
+    const primary = this.#putStatement(type, value, expectedVersion, decisionFence);
     const statements: D1PreparedStatement[] = [primary];
     if (audit !== undefined) {
       statements.push(
@@ -611,7 +623,31 @@ export class D1SessionRepository implements SessionRepository {
     type: ResourceType,
     value: PutValue,
     expectedVersion: number | null,
+    decisionFence?: DecisionVersionFence,
   ): D1PreparedStatement {
+    const decisionGuard =
+      decisionFence === undefined
+        ? { sql: "1 = 1", values: [] as readonly unknown[] }
+        : {
+            sql: `EXISTS (
+              SELECT 1
+              FROM evaluation_decisions
+              WHERE organization_id = ?
+                AND event_id = ?
+                AND plan_id = ?
+                AND submission_id = ?
+                AND version = ?
+                AND status = ?
+            )`,
+            values: [
+              decisionFence.tenantId,
+              decisionFence.eventId,
+              decisionFence.planId,
+              decisionFence.submissionId,
+              decisionFence.version,
+              decisionFence.status,
+            ],
+          };
     const table = tableName(type);
     const fields =
       type === "session"
@@ -663,7 +699,7 @@ export class D1SessionRepository implements SessionRepository {
       ];
       return this.binding
         .prepare(
-          `INSERT INTO ${table} (${columns.join(", ")}) SELECT ${columns.map(() => "?").join(", ")} WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE id = ?)`,
+          `INSERT INTO ${table} (${columns.join(", ")}) SELECT ${columns.map(() => "?").join(", ")} WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE id = ?) AND ${decisionGuard.sql}`,
         )
         .bind(
           value.id,
@@ -676,11 +712,12 @@ export class D1SessionRepository implements SessionRepository {
           value.createdBy,
           value.updatedBy,
           value.id,
+          ...decisionGuard.values,
         );
     }
     return this.binding
       .prepare(
-        `UPDATE ${table} SET ${[...fields.map((field) => `${field} = ?`), "version = ?", "updated_at = ?", "updated_by = ?"].join(", ")} WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
+        `UPDATE ${table} SET ${[...fields.map((field) => `${field} = ?`), "version = ?", "updated_at = ?", "updated_by = ?"].join(", ")} WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND ${decisionGuard.sql}`,
       )
       .bind(
         ...fieldValues,
@@ -691,6 +728,7 @@ export class D1SessionRepository implements SessionRepository {
         value.eventId,
         value.id,
         expectedVersion,
+        ...decisionGuard.values,
       );
   }
 

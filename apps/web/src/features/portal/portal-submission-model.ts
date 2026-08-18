@@ -44,7 +44,7 @@ function humanizeReference(reference: string): string {
     .trim()
     .split(" ")
     .filter(Boolean);
-  if (words.length === 0) return "Untitled submission";
+  if (words.length === 0) return "No title";
   return words
     .map((word, index) => {
       const normalized = word.toLocaleLowerCase();
@@ -94,7 +94,7 @@ export function portalSubmissionDisplayTitle(
       return humanizeReference(reference);
     }
   }
-  return "Untitled proposal";
+  return "No title";
 }
 
 export interface PortalSubmissionActionTargets {
