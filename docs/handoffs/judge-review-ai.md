@@ -60,7 +60,7 @@
   uniqueness index. Its deployed index name now exactly matches the Drizzle
   declaration: `evaluation_suggestions_shared_active_scope_unique`.
 
-## Verified evidence through `c9d320ad`
+## Verified evidence through `39251bae`
 
 - Full focused matrix (API features, D1 repository, AI integrations, web
   review UI): 81 files, 881 passed, 2 intentional live-provider skips.
@@ -75,11 +75,11 @@
 - Repository typecheck: API and web both pass (web after the inherited
   integrations/layout drift was resolved by merged main).
 - Repository lint: no errors; lane-owned files formatter-clean.
-- `make test` at `fb115a8c` (the immediately preceding documentation-only
-  head) ran 2,438 tests: 2,438 passed, 3 skipped, and one failed. The sole
-  failure is the inherited `workspace-surface-tokens.test.ts` speaker-CSS
-  contract from `github/main`; its last-changing commit is an ancestor of
-  `github/main`, and this lane has no diff in that web-CSS path.
+- `make test` at `39251bae` ran 2,438 tests: 2,438 passed, 3 skipped, and
+  one failed. The sole failure is the inherited
+  `workspace-surface-tokens.test.ts` speaker-CSS contract from
+  `github/main`; its last-changing commit is an ancestor of `github/main`,
+  and this lane has no diff in that web-CSS path.
 - Formatter: every lane-owned changed file is clean. Four remaining drift
   files (`file-upload.tsx`, `cfp-wizard-sections.tsx`,
   `portal-task-upload.tsx`, `file-upload-dropzone-qa.spec.ts`) are inherited
@@ -89,21 +89,41 @@
 - Local D1 migration applied cleanly to a fresh isolated state via
   `make db-local`.
 
-## Final-review requirement
+## Final review evidence
 
-Five independent reviews must inspect the final pushed documentation head
-created by this handoff update; PR #34 evidence must record that immutable
-head and its `github/main` merge-base.
+Five independent review lanes inspected exact code-review head
+`39251baea66e3981826245b99f402d4dbe36ed53`; all returned PASS with no
+blocker or high findings:
+
+- Security: verified fail-closed blind provider input, organizer-only
+  suggestion operations, tenant scoping, `store: false`, and temperature 0.
+- Code quality: verified the migration/schema partial-index name and
+  predicate align; stale-to-regenerate regressions cover the deployed D1
+  lifecycle; no residual reviewer-suggestion contract or invalid UI floor.
+- Integration/deployability: verified snapshot-rebuild ordering, `0051`
+  fixture wiring, conflict reload behavior, config rendering, and deleted
+  reviewer request variants.
+- Compliance: verified human-controlled advisory behavior, backend-only
+  OpenAI integration, English rationale enforcement, audit vocabulary, and
+  D1 authority.
+- Functional/UX: verified accessible status/error feedback and desktop/mobile
+  parity. The exact-head Chromium reviewer scenario passed (1 test, desktop
+  and mobile human-only controls with no AI surfaces).
+
+`make check` reaches format verification after typecheck and lint, then
+reports only the four inherited formatter-drift files named above; they are
+outside this lane and remain untouched. PR #34 evidence must record the
+final documentation-only head created from this update and its
+`github/main` merge-base.
+
 Round one (at `46365bc3`) and round two (at `0167ec28`) produced FAIL
 verdicts; every finding from both rounds is addressed in `65a53dee`:
 shared-scope race, blind-review answer and filename leakage, OpenAI
 retention, deployed reasoning default, migration stale-row predicate,
 desktop column order, loading/error accessibility, English enforcement,
 Drizzle enum drift, dropdown audit values, `.env.example` default, override
-input bounds, and reviewer contract residue. Round three runs against the
-final head; its exact SHA and verdicts belong in the PR #34 and issue #47
-evidence comments. An independent integration review found and the lane
-fixed one additional non-behavioral drift: migration `0051` created the
-same shared active-scope unique index under a different name than its
-Drizzle declaration. Do not merge or deploy until all five verdicts pass
-and the inherited main failures have an explicit release decision.
+input bounds, and reviewer contract residue. An independent integration
+review found and the lane fixed one additional non-behavioral drift:
+migration `0051` created the same shared active-scope unique index under a
+different name than its Drizzle declaration. Do not merge or deploy until
+the inherited main failures have an explicit release decision.
