@@ -79,33 +79,47 @@ bun audit
 
 ## Before changing GitHub or Forge visibility
 
-- [ ] Run a secret scanner against the complete public history, not only the
-      working tree.
-- [ ] Run a secret scanner against the exact current candidate tree.
-- [ ] Record whether publication uses current history, rewritten history, or a
-      separate sanitized repository.
-- [ ] Review every tracked source snapshot, transcript, screenshot, and
-      evidence artifact for privacy and redistribution rights.
-- [ ] Confirm every contributor has agreed to the ELv2 licensing terms or has
-      assigned the required rights.
-- [ ] Confirm dependencies, fonts, screenshots, and copied assets have
-      compatible redistribution rights.
-- [ ] Run `git status --short` from a clean candidate and inspect the complete
-      diff.
+- [x] Run a secret scanner against the complete public history, not only the
+      working tree. (2026-08-18, Gitleaks 8.30.1, candidate `3fcef362` and
+      `f5b1406d` history: clean)
+- [x] Run a secret scanner against the exact current candidate tree.
+      (2026-08-18, tracked-tree scan: clean)
+- [x] Record whether publication uses current history, rewritten history, or a
+      separate sanitized repository. (2026-08-18 owner decision: current
+      history)
+- [x] Review every tracked source snapshot, transcript, screenshot, and
+      evidence artifact for privacy and redistribution rights. (2026-08-18
+      owner decision: the competition brief PDF, host transcript, and QA
+      screenshots in reachable history are approved for publication — the
+      brief and transcript are public sources; the screenshots are internal QA
+      captures of this product's own UI)
+- [x] Confirm every contributor has agreed to the ELv2 licensing terms or has
+      assigned the required rights. (2026-08-18 owner confirmation: sole
+      contributor `jaeyunha`)
+- [x] Confirm dependencies, fonts, screenshots, and copied assets have
+      compatible redistribution rights. (2026-08-18: no bundled fonts or
+      vendored code; README images are shields.io badges; evidence artifacts
+      covered by the owner decision above)
+- [x] Run `git status --short` from a clean candidate and inspect the complete
+      diff. (clean at `f5b1406d`)
 - [ ] Record authenticated and unauthenticated GitHub/Forge visibility immediately
-      before and after the external visibility change.
-- [ ] Rotate any credential if the full-history scan finds it anywhere.
+      before and after the external visibility change. (before state recorded
+      2026-08-18T02:39:45Z: both PRIVATE, anonymous `ls-remote` fails on both)
+- [x] Rotate any credential if the full-history scan finds it anywhere.
+      (2026-08-18 scans found no credentials — nothing to rotate)
 
-## Questions requiring owner decisions
+## Owner decisions recorded 2026-08-18
 
-1. Confirm that Elastic License 2.0 applies to all first-party code.
-2. Confirm that every contributor has the right to publish their work under
-   ELv2.
-3. Choose the publication-history policy: current history, rewritten history,
-   or a separate sanitized repository.
-4. Confirm that the selected public candidate and its reachable history contain
-   no unapproved copied assets, source snapshots, transcripts, screenshots, or
-   private evidence.
+1. Elastic License 2.0 applies to all first-party code: confirmed.
+2. Sole contributor `jaeyunha` has the right to publish under ELv2:
+   confirmed.
+3. Publication-history policy: **current history** (no rewrite, no separate
+   sanitized repository).
+4. The candidate `f5b1406d` and its reachable history contain no unapproved
+   copied assets, source snapshots, transcripts, screenshots, or private
+   evidence: confirmed. The competition brief PDF and host transcript in
+   history are public sources; the QA screenshots are internal QA captures of
+   this product's own UI.
 
 ## Visibility commands and anonymous verification
 
