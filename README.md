@@ -127,7 +127,7 @@ integration, authentication, and deployment boundaries.
 ### Run the integrated local stack
 
 ```bash
-git clone https://github.com/jaeyunha/eventloom.git
+git clone https://github.com/namuh-eng/eventloom.git
 cd eventloom
 bun install
 cp .env.example .env

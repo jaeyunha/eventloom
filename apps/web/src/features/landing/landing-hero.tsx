@@ -2,7 +2,7 @@ import { z } from "zod";
 import { LandingIcon } from "./landing-icon";
 import { LandingProductDemo } from "./landing-product-demo";
 
-const repositoryApiUrl = "https://api.github.com/repos/jaeyunha/open-sessionboard";
+const repositoryApiUrl = "https://api.github.com/repos/namuh-eng/eventloom";
 const GITHUB_STAR_COUNT_FORMATTER = new Intl.NumberFormat("en-US");
 const repositoryResponseSchema = z.object({
   stargazers_count: z.number().int().nonnegative(),
@@ -67,7 +67,7 @@ export async function LandingHero() {
     <section className="hero" id="top" aria-labelledby="hero-title">
       <div className="wrap">
         <div className="hero-copy">
-          <p className="eyebrow">Open-source conference program operations</p>
+          <p className="eyebrow">Source-available conference program operations</p>
           <h1 id="hero-title">
             <span className="hero-title-line">Shape the program.</span>
             <span className="hero-title-line">Keep every handoff connected.</span>
@@ -83,7 +83,7 @@ export async function LandingHero() {
             </a>
             <a
               className="button button-secondary github-button"
-              href="https://github.com/jaeyunha/open-sessionboard"
+              href="https://github.com/namuh-eng/eventloom"
               aria-label={`GitHub · ${repositoryBadge.accessibleLabel}`}
             >
               <LandingIcon name="github" />
