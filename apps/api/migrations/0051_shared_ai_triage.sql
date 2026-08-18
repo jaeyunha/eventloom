@@ -77,7 +77,7 @@ ALTER TABLE evaluation_suggestions ADD COLUMN override_json TEXT;
 CREATE INDEX evaluation_suggestions_plan_idx ON evaluation_suggestions (organization_id, event_id, plan_id, round_id, created_at);
 CREATE INDEX evaluation_suggestions_assignment_idx ON evaluation_suggestions (organization_id, event_id, assignment_id, created_at);
 CREATE INDEX evaluation_suggestions_status_idx ON evaluation_suggestions (organization_id, event_id, status, updated_at);
-CREATE UNIQUE INDEX evaluation_suggestions_shared_scope_unique ON evaluation_suggestions (organization_id, event_id, plan_id, round_id, submission_id) WHERE assignment_id IS NULL AND status IN ('pending', 'overridden');
+CREATE UNIQUE INDEX evaluation_suggestions_shared_active_scope_unique ON evaluation_suggestions (organization_id, event_id, plan_id, round_id, submission_id) WHERE assignment_id IS NULL AND status IN ('pending', 'overridden');
 CREATE INDEX evaluation_suggestion_candidates_order_idx ON evaluation_suggestion_candidates (organization_id, event_id, suggestion_id, criterion_id, ordinal);
 CREATE INDEX evaluation_suggestion_history_order_idx ON evaluation_suggestion_history (organization_id, event_id, suggestion_id, ordinal);
 
