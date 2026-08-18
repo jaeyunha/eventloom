@@ -70,7 +70,8 @@ export type AirtableRepositoryErrorCode =
   | "NOT_FOUND"
   | "DUPLICATE_APPLICATION_ID"
   | "INVALID_RESPONSE"
-  | "REQUEST_FAILED";
+  | "REQUEST_FAILED"
+  | "UNSUPPORTED_OPERATION";
 
 export class AirtableRepositoryError extends Error {
   readonly code: AirtableRepositoryErrorCode;

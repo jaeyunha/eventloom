@@ -42,8 +42,10 @@ export interface OrganizerReviewOverviewProps {
   readonly completionPercent: number;
   readonly attentionSummary: OrganizerReviewAttentionSummary;
   readonly rows: readonly OrganizerReviewRow[];
+  readonly aiTriage?: OrganizerAiTriageView | undefined;
   readonly onManageReviewers: (id: string) => void;
   readonly onOpenPlan: () => void;
   readonly onOpenReviewers: () => void;
   readonly onOpenDecisions: (id: string) => void;
 }
+import type { OrganizerAiTriageView } from "./organizer-ai-triage";

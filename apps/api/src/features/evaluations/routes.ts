@@ -103,6 +103,7 @@ const roundSchema = z.object({
   sequence: z.number(),
   opensAt: evaluationInstantSchema.nullable().optional(),
   closesAt: evaluationInstantSchema.nullable().default(null),
+  aiTriageEnabled: z.boolean().optional(),
   blindReview: z.boolean().optional(),
   anonymization: anonymizationSchema.optional(),
   reviewerPool: reviewerPoolSchema.optional(),
@@ -185,25 +186,21 @@ const saveReviewSchema = z.object({
     z.object({
       criterionId: z.string(),
       value: z.union([z.number(), z.string()]),
-      origin: z.enum(["human", "ai"]),
+      origin: z.literal("human"),
       evidence: z.array(z.string()).optional(),
     }),
   ),
   comment: z.string().optional(),
   expectedVersion: z.number().int().positive().optional(),
 });
-
-const confirmScoresSchema = z.object({
-  criterionIds: z.array(z.string()),
-  expectedVersion: z.number().int().positive(),
+const generateRoundSuggestionsSchema = z.object({
+  regenerate: z.boolean().optional(),
 });
-const generateSuggestionsSchema = z.object({});
-const resolveSuggestionSchema = z.object({
-  action: z.enum(["accept", "edit", "reject"]),
+
+const overrideSuggestionSchema = z.object({
   expectedVersion: z.number().int().positive(),
-  reason: z.string().optional(),
-  scores: z.record(z.string(), z.number()).optional(),
-  criterionScores: z.record(z.string(), z.number()).optional(),
+  valueByCriterion: z.record(z.string(), z.union([z.number(), z.string()])),
+  reason: z.string().max(2_000).optional(),
 });
 
 const conflictSchema = z.object({ reason: z.string() });
@@ -1120,61 +1117,43 @@ export function createEvaluationRoutes(
   routes.get("/assignments/:assignmentId", async (context) =>
     context.json(await service.getReviewContext(actor(context), context.req.param("assignmentId"))),
   );
-  routes.get("/assignments/:assignmentId/suggestions", async (context) =>
+  routes.get("/plans/:planId/rounds/:roundId/suggestions", async (context) =>
     context.json({
-      suggestions: await service.listAiSuggestions(
+      suggestions: await service.listRoundAiSuggestions(
         actor(context),
-        context.req.param("assignmentId"),
+        context.req.param("planId"),
+        context.req.param("roundId"),
       ),
     }),
   );
-  routes.post("/assignments/:assignmentId/suggestions/generate", async (context) => {
-    generateSuggestionsSchema.parse(await context.req.json());
-    return context.json(
-      await service.generateAiSuggestions(actor(context), {
-        assignmentId: context.req.param("assignmentId"),
-      }),
-      201,
-    );
-  });
-  routes.post("/assignments/:assignmentId/suggestions/:suggestionId/resolve", async (context) => {
-    const body = resolveSuggestionSchema.parse(await context.req.json());
-    return context.json(
-      await service.resolveAiSuggestion(actor(context), context.req.param("suggestionId"), body),
-    );
-  });
-  routes.post("/assignments/:assignmentId/suggestions", async (context) => {
-    generateSuggestionsSchema.parse(await context.req.json());
-    return context.json(
-      await service.generateAiSuggestions(actor(context), {
-        assignmentId: context.req.param("assignmentId"),
-      }),
-      201,
-    );
-  });
-  routes.post("/suggestions/:suggestionId/resolve", async (context) => {
-    const body = resolveSuggestionSchema.parse(await context.req.json());
-    return context.json(
-      await service.resolveAiSuggestion(actor(context), context.req.param("suggestionId"), body),
-    );
-  });
-
+  routes.post(
+    "/plans/:planId/rounds/:roundId/submissions/:submissionId/suggestions/generate",
+    async (context) => {
+      const body = generateRoundSuggestionsSchema.parse(await context.req.json());
+      return context.json(
+        await service.generateRoundAiSuggestions(actor(context), {
+          planId: context.req.param("planId"),
+          roundId: context.req.param("roundId"),
+          submissionId: context.req.param("submissionId"),
+          ...(body.regenerate === true ? { regenerate: true } : {}),
+        }),
+        201,
+      );
+    },
+  );
+  routes.put(
+    "/plans/:planId/rounds/:roundId/suggestions/:suggestionId/override",
+    async (context) => {
+      const body = overrideSuggestionSchema.parse(await context.req.json());
+      return context.json(
+        await service.overrideAiSuggestion(actor(context), context.req.param("suggestionId"), body),
+      );
+    },
+  );
   routes.put("/assignments/:assignmentId/review", async (context) => {
     const body = saveReviewSchema.parse(await context.req.json());
     return context.json(
       await service.saveReview(actor(context), context.req.param("assignmentId"), body),
-    );
-  });
-
-  routes.post("/assignments/:assignmentId/review/confirm", async (context) => {
-    const body = confirmScoresSchema.parse(await context.req.json());
-    return context.json(
-      await service.confirmAiScores(
-        actor(context),
-        context.req.param("assignmentId"),
-        body.criterionIds,
-        body.expectedVersion,
-      ),
     );
   });
 

@@ -4,13 +4,11 @@ import { useEvaluatorScoreActions } from "./evaluator-score-actions";
 import type { EvaluatorWorkspaceProps } from "./evaluator-state";
 import { useEvaluatorState } from "./evaluator-state";
 import { useEvaluatorSubmissionActions } from "./evaluator-submission-actions";
-import { useEvaluatorSuggestionActions } from "./evaluator-suggestion-actions";
 import { isAccountIdentityField } from "./model-is-account-identity-field";
 export function useEvaluatorController(props: EvaluatorWorkspaceProps) {
   const state = useEvaluatorState(props);
   const autosave = useEvaluatorAutosaveActions(state);
-  const suggestions = useEvaluatorSuggestionActions(autosave);
-  const scores = useEvaluatorScoreActions(suggestions);
+  const scores = useEvaluatorScoreActions(autosave);
   const controller = useEvaluatorSubmissionActions(scores);
   const rubricCriteria = controller.assignment.round.rubric.criteria;
   const identityRedacted =

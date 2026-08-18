@@ -9,6 +9,7 @@ export function buildEvaluationPlanCreateDto(input: CreateEvaluationPlanFormInpu
     sequence: 1,
     opensAt: null,
     closesAt: null,
+    aiTriageEnabled: false,
     blindReview: false,
     anonymization: "none" as const,
     rubric: {

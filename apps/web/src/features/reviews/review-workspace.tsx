@@ -25,7 +25,6 @@ export { reminderDeliveryMessage } from "./workspace/model-reminder-delivery-mes
 export { reminderRequestPresentation } from "./workspace/model-reminder-request-presentation";
 export { reminderReviewerIdsRequiringSend } from "./workspace/model-reminder-reviewer-ids-requiring-send";
 export { reviewerDisplayLabel } from "./workspace/model-reviewer-display-label";
-export { validateSuggestionEditValue } from "./workspace/model-validate-suggestion-edit-value";
 export { buildEvaluationPlanCreateDto } from "./workspace/organizer-build-evaluation-plan-create-dto";
 export { createEvaluationPlan } from "./workspace/organizer-create-evaluation-plan";
 export type { CreateEvaluationPlanFormInput } from "./workspace/organizer-create-evaluation-plan-form-input";

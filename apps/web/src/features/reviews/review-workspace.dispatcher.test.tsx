@@ -43,8 +43,6 @@ function evaluatorAssignment(): EvaluatorAssignment {
       completionPercent: 0,
       rubric: { name: "Rubric", criteria: [criterion] },
     },
-    aiSuggestions: {},
-    suggestions: [],
   };
 }
 

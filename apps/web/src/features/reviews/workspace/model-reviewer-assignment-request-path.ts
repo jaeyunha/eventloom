@@ -1,20 +1,11 @@
 import type { EvaluatorAssignment } from "./assignment-evaluator-assignment";
 
-type ReviewerAssignmentAction =
-  | { kind: "conflict" }
-  | { kind: "generateSuggestions" }
-  | { kind: "resolveSuggestion"; suggestionId: string }
-  | { kind: "review" }
-  | { kind: "submit" };
+type ReviewerAssignmentAction = { kind: "conflict" } | { kind: "review" } | { kind: "submit" };
 
 function assignmentActionPath(action: ReviewerAssignmentAction): string {
   switch (action.kind) {
     case "conflict":
       return "/conflict";
-    case "generateSuggestions":
-      return "/suggestions/generate";
-    case "resolveSuggestion":
-      return `/suggestions/${encodeURIComponent(action.suggestionId)}/resolve`;
     case "review":
       return "/review";
     case "submit":

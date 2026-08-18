@@ -60,13 +60,14 @@ function decisionDatabase() {
       organization_id TEXT NOT NULL,
       event_id TEXT NOT NULL,
       id TEXT NOT NULL,
+      status TEXT NOT NULL,
       PRIMARY KEY (organization_id, event_id, id)
     );
     ${migration("0009_evaluations.sql")}
     INSERT INTO organizations (organization_id) VALUES ('tenant-1');
     INSERT INTO events (organization_id,id) VALUES ('tenant-1','event-1');
-    INSERT INTO submissions (organization_id,event_id,id)
-    VALUES ('tenant-1','event-1','submission-1');
+    INSERT INTO submissions (organization_id,event_id,id,status)
+    VALUES ('tenant-1','event-1','submission-1','submitted');
     INSERT INTO review_plans
       (id,organization_id,event_id,name,status,blind_review,closes_at,reviews_per_submission,
        max_assignments_per_reviewer,track_filter,auto_distribute,

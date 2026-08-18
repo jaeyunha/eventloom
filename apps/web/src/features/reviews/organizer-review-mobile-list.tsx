@@ -7,11 +7,12 @@ import {
   ReviewerSummary,
   SubmissionIdentity,
 } from "./organizer-review-row-parts";
+import { OrganizerAiTriagePanel } from "./organizer-ai-triage-panel";
 import { reviewStatus } from "./organizer-review-status";
 export function OrganizerReviewMobileList({
   controller,
 }: Readonly<{ controller: OrganizerReviewOverviewController }>) {
-  const { visibleRows, onManageReviewers, onOpenDecisions } = controller;
+  const { visibleRows, onManageReviewers, onOpenDecisions, aiTriage } = controller;
   return (
     <div className={styles.mobileList}>
       {visibleRows.map((row) => (
@@ -46,6 +47,13 @@ export function OrganizerReviewMobileList({
               <dd>{row.decisionLabel}</dd>
             </div>
           </dl>
+          {aiTriage?.enabled === true ? (
+            <OrganizerAiTriagePanel
+              key={`${row.id}:${aiTriage.suggestions[row.id]?.version ?? "new"}`}
+              submissionId={row.id}
+              aiTriage={aiTriage}
+            />
+          ) : null}
           <ReviewerSummary row={row} />
           <div className={styles.mobileAction}>
             <ReviewAction

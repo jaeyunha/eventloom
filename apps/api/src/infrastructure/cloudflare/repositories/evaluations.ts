@@ -10,12 +10,13 @@ import {
 } from "../evaluation-decision-outbox";
 import type {
   EvaluationPlanRevisionPrecondition,
-  EvaluationPlanScheduleSync,
   EvaluationPlanScheduleState,
+  EvaluationPlanScheduleSync,
   EvaluationRepository,
   EvaluationReviewWriteAdmission,
   OrganizerWorkspaceRecords,
   ReviewerWorkspaceRecords,
+  WriteEvaluationReview,
 } from "../../../features/evaluations/repository";
 import type {
   EvaluationAssignment,
@@ -33,7 +34,6 @@ import type {
   EvaluationSuggestion,
   EvaluationSuggestionAuditEntry,
   EvaluationSuggestionCandidate,
-  EvaluationSuggestionResolution,
   ReviewRound,
   RubricCriterion,
   RubricScore,
@@ -95,6 +95,153 @@ async function atomic(
     });
     writeConflict(message);
   }
+}
+
+function sharedSuggestionGuard(
+  database: D1Database,
+  suggestion: EvaluationSuggestion,
+  expectedSubmissionRevision: number = suggestion.submissionRevision,
+): D1PreparedStatement {
+  return guard(
+    database,
+    `EXISTS (
+        SELECT 1 FROM submissions
+        WHERE organization_id = ? AND event_id = ? AND id = ?
+          AND status = 'submitted'
+      )
+      AND EXISTS (
+        SELECT 1 FROM submission_versions
+        WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+          AND version = (
+            SELECT MAX(version) FROM submission_versions
+            WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+          )
+          AND version = ?
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM evaluation_decisions
+        WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND submission_id = ?
+    )`,
+    [
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.submissionId,
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.submissionId,
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.submissionId,
+      expectedSubmissionRevision,
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.planId,
+      suggestion.submissionId,
+    ],
+  );
+}
+
+function reviewWriteAuthorityGuard(
+  database: D1Database,
+  input: WriteEvaluationReview,
+): D1PreparedStatement {
+  const { authority } = input;
+  const planVersion =
+    input.authority.expectedPlanVersion ??
+    input.review.planVersion ??
+    input.review.planRevision ??
+    1;
+  const planRevision = input.review.planRevision ?? input.review.planVersion ?? 1;
+  const roundRevision = input.review.roundRevision ?? input.review.rubricRevision ?? 1;
+  const rubricRevision = input.review.rubricRevision ?? input.review.rubricVersion ?? 1;
+  const submissionRevision = input.review.submissionRevision ?? input.review.submissionVersion ?? 1;
+  const reviewTimestamp = input.review.updatedAt;
+  return guard(
+    database,
+    `EXISTS (
+      SELECT 1 FROM review_assignments
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND round_id = ?
+        AND submission_id = ? AND id = ? AND reviewer_id = ? AND version = ?
+        AND status IN ('assigned', 'in_progress')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM evaluation_conflicts
+      WHERE organization_id = ? AND event_id = ? AND assignment_id = ?
+    )
+    AND EXISTS (
+      SELECT 1 FROM submissions
+      WHERE organization_id = ? AND event_id = ? AND id = ?
+        AND status = 'submitted'
+    )
+    AND EXISTS (
+      SELECT 1 FROM submission_versions
+      WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+        AND version = (
+          SELECT MAX(version) FROM submission_versions
+          WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+        )
+        AND version = ?
+    )
+    AND EXISTS (
+      SELECT 1 FROM review_plans
+      WHERE organization_id = ? AND event_id = ? AND id = ?
+        AND status = 'open' AND version = ?
+        AND COALESCE(grading_revision, version) = ?
+        AND (closes_at IS NULL OR closes_at > ?)
+    )
+    AND EXISTS (
+      SELECT 1 FROM review_rounds
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND id = ?
+        AND revision = ? AND rubric_revision = ?
+        AND (opens_at IS NULL OR opens_at <= ?)
+        AND (closes_at IS NULL OR closes_at > ?)
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM evaluation_decisions
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND submission_id = ?
+    )`,
+    [
+      authority.tenantId,
+      authority.eventId,
+      authority.planId,
+      authority.roundId,
+      authority.submissionId,
+      authority.assignmentId,
+      authority.reviewerId,
+      authority.expectedAssignmentVersion,
+      authority.tenantId,
+      authority.eventId,
+      authority.assignmentId,
+      authority.tenantId,
+      authority.eventId,
+      authority.submissionId,
+      authority.tenantId,
+      authority.eventId,
+      authority.submissionId,
+      authority.tenantId,
+      authority.eventId,
+      authority.submissionId,
+      submissionRevision,
+      authority.tenantId,
+      authority.eventId,
+      authority.planId,
+      planVersion,
+      planRevision,
+      reviewTimestamp,
+      authority.tenantId,
+      authority.eventId,
+      authority.planId,
+      authority.roundId,
+      roundRevision,
+      rubricRevision,
+      reviewTimestamp,
+      reviewTimestamp,
+      authority.tenantId,
+      authority.eventId,
+      authority.planId,
+      authority.submissionId,
+    ],
+  );
 }
 
 function canonicalPlanBoundaries<T extends EvaluationPlan | EvaluationPlanScheduleState>(
@@ -319,7 +466,7 @@ function reviewWriteAdmissionGuard(
           AND assignment.round_id = ?
           AND assignment.submission_id = ?
           AND assignment.reviewer_id = ?
-          AND assignment.plan_revision = ?
+           AND assignment.plan_version = ?
           AND assignment.rubric_revision = ?
           AND assignment.round_revision = ?
           AND assignment.submission_revision = ?
@@ -490,8 +637,8 @@ function updateAssignment(database: D1Database, assignment: EvaluationAssignment
 }
 
 export class D1EvaluationRepository implements EvaluationRepository {
+  readonly authority = "transactional" as const;
   readonly supportsAtomicPlanRevisionSync = true;
-
   constructor(
     private readonly database: D1Database,
     private readonly decisionOutboxQueue?: Queue<CloudflareOutboxMessage>,
@@ -1325,16 +1472,15 @@ export class D1EvaluationRepository implements EvaluationRepository {
   async getSuggestion(tenantId: string, suggestionId: string) {
     const row = await statement(
       this.database,
-      "SELECT * FROM evaluation_suggestions WHERE organization_id = ? AND id = ?",
+      "SELECT * FROM evaluation_suggestions WHERE organization_id = ? AND id = ? AND assignment_id IS NULL",
       [tenantId, suggestionId],
     ).first<Row>();
     return row === null ? null : this.hydrateSuggestion(row);
   }
-
   async listSuggestions(tenantId: string, planId: string) {
     const result = await statement(
       this.database,
-      "SELECT * FROM evaluation_suggestions WHERE organization_id = ? AND plan_id = ? ORDER BY id",
+      "SELECT * FROM evaluation_suggestions WHERE organization_id = ? AND plan_id = ? AND assignment_id IS NULL ORDER BY id",
       [tenantId, planId],
     ).all<Row>();
     return Promise.all(rows(result).map((row) => this.hydrateSuggestion(row)));
@@ -1343,63 +1489,23 @@ export class D1EvaluationRepository implements EvaluationRepository {
   async putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
-    admission?: EvaluationReviewWriteAdmission,
+    expectedSubmissionRevision = suggestion.submissionRevision,
+    allowClosedPlan = false,
   ) {
-    const commands = this.suggestionStatements(suggestion, expectedVersion);
-    if (admission !== undefined) {
+    const commands = [
+      sharedSuggestionGuard(this.database, suggestion, expectedSubmissionRevision),
+      ...this.suggestionStatements(suggestion, expectedVersion),
+    ];
+    if (!allowClosedPlan) {
       commands.unshift(
-        authoritativePlanWritableGuard(this.database, admission.assignment),
-        reviewWriteAdmissionGuard(this.database, admission),
+        authoritativePlanWritableGuard(this.database, {
+          tenantId: suggestion.tenantId,
+          eventId: suggestion.eventId,
+          planId: suggestion.planId,
+        }),
       );
     }
     await atomic(this.database, commands, "Suggestion changed since it was loaded.");
-  }
-
-  async resolveSuggestion(
-    suggestion: EvaluationSuggestion,
-    expectedSuggestionVersion: number,
-    assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number | null,
-    review: EvaluationReview | null,
-    expectedReviewVersion: number | null,
-    admission: EvaluationReviewWriteAdmission,
-  ): Promise<EvaluationSuggestionResolution> {
-    if (
-      (assignment !== null &&
-        (assignment.tenantId !== suggestion.tenantId ||
-          assignment.id !== suggestion.assignmentId)) ||
-      (review !== null &&
-        (review.tenantId !== suggestion.tenantId ||
-          review.assignmentId !== suggestion.assignmentId))
-    ) {
-      writeConflict("Suggestion resolution targeted another assignment.");
-    }
-    const commands = [...this.suggestionStatements(suggestion, expectedSuggestionVersion)];
-    commands.unshift(
-      authoritativePlanWritableGuard(this.database, admission.assignment),
-      reviewWriteAdmissionGuard(this.database, admission),
-    );
-    if (assignment !== null) {
-      commands.push(
-        expectedAssignmentVersion === null
-          ? insertGuard(this.database, "review_assignments", "organization_id = ? AND id = ?", [
-              assignment.tenantId,
-              assignment.id,
-            ])
-          : updateGuard(
-              this.database,
-              "review_assignments",
-              "organization_id = ? AND id = ? AND version = ?",
-              [assignment.tenantId, assignment.id, expectedAssignmentVersion],
-            ),
-        expectedAssignmentVersion === null
-          ? insertAssignment(this.database, assignment)
-          : updateAssignment(this.database, assignment),
-      );
-    }
-    if (review !== null) commands.push(...this.reviewStatements(review, expectedReviewVersion));
-    await atomic(this.database, commands, "Suggestion resolution changed since it was loaded.");
-    return { suggestion, review };
   }
 
   async listReviewerWorkspaceRecords(
@@ -1660,6 +1766,46 @@ export class D1EvaluationRepository implements EvaluationRepository {
     );
   }
 
+  async writeReview(input: WriteEvaluationReview) {
+    const { authority, review, assignmentUpdate } = input;
+    if (
+      review.tenantId !== authority.tenantId ||
+      review.eventId !== authority.eventId ||
+      review.planId !== authority.planId ||
+      review.roundId !== authority.roundId ||
+      review.assignmentId !== authority.assignmentId ||
+      review.submissionId !== authority.submissionId ||
+      review.reviewerId !== authority.reviewerId
+    ) {
+      writeConflict("Review write targeted another assignment.");
+    }
+    if (assignmentUpdate !== undefined) {
+      if (
+        assignmentUpdate.id !== authority.assignmentId ||
+        assignmentUpdate.tenantId !== authority.tenantId ||
+        assignmentUpdate.eventId !== authority.eventId ||
+        assignmentUpdate.planId !== authority.planId ||
+        assignmentUpdate.roundId !== authority.roundId ||
+        assignmentUpdate.submissionId !== authority.submissionId ||
+        assignmentUpdate.reviewerId !== authority.reviewerId ||
+        assignmentUpdate.version !== authority.expectedAssignmentVersion + 1
+      ) {
+        writeConflict("Assignment transition targeted another revision.");
+      }
+    }
+    await atomic(
+      this.database,
+      [
+        reviewWriteAuthorityGuard(this.database, input),
+        ...this.reviewStatements(review, input.expectedReviewVersion),
+        ...(assignmentUpdate === undefined
+          ? []
+          : [updateAssignment(this.database, assignmentUpdate)]),
+      ],
+      "Assignment, submission, conflict, decision, or review state changed.",
+    );
+  }
+
   async saveReviewDraft(
     assignment: EvaluationAssignment,
     expectedAssignmentVersion: number,
@@ -1718,8 +1864,23 @@ export class D1EvaluationRepository implements EvaluationRepository {
       [
         guard(
           this.database,
-          `EXISTS (SELECT 1 FROM review_assignments WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?)
-          AND NOT EXISTS (SELECT 1 FROM evaluation_conflicts WHERE organization_id = ? AND event_id = ? AND assignment_id = ?)`,
+          `EXISTS (
+            SELECT 1 FROM review_assignments
+            WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?
+              AND status IN ('assigned', 'in_progress', 'submitted')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM evaluation_conflicts
+            WHERE organization_id = ? AND event_id = ? AND assignment_id = ?
+          )
+          AND EXISTS (
+            SELECT 1 FROM submissions
+            WHERE organization_id = ? AND event_id = ? AND id = ? AND status = 'submitted'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM evaluation_decisions
+            WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND submission_id = ?
+          )`,
           [
             assignment.tenantId,
             assignment.eventId,
@@ -1728,6 +1889,13 @@ export class D1EvaluationRepository implements EvaluationRepository {
             declaration.tenantId,
             declaration.eventId,
             declaration.assignmentId,
+            assignment.tenantId,
+            assignment.eventId,
+            assignment.submissionId,
+            assignment.tenantId,
+            assignment.eventId,
+            assignment.planId,
+            assignment.submissionId,
           ],
         ),
         updateAssignment(this.database, assignment),
@@ -1817,6 +1985,14 @@ export class D1EvaluationRepository implements EvaluationRepository {
 
   async putDecision(decision: EvaluationDecision, expectedVersion: number | null) {
     const commands: D1PreparedStatement[] = [
+      guard(
+        this.database,
+        `EXISTS (
+          SELECT 1 FROM submissions
+          WHERE organization_id = ? AND event_id = ? AND id = ? AND status = 'submitted'
+        )`,
+        [decision.tenantId, decision.eventId, decision.submissionId],
+      ),
       expectedVersion === null
         ? insertGuard(
             this.database,
@@ -2038,6 +2214,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
       closesAt: nullableText(row.closes_at),
       blindReview: bool(row.blind_review),
       anonymization: row.anonymization as ReviewRound["anonymization"],
+      aiTriageEnabled: row.ai_triage_enabled != null ? Boolean(row.ai_triage_enabled) : false,
       ...(row.track_filter == null ? {} : { trackFilter: text(row.track_filter) }),
       ...(reviewerPool === undefined ? {} : { reviewerPool }),
       rubric: {
@@ -2097,8 +2274,8 @@ export class D1EvaluationRepository implements EvaluationRepository {
       statement(
         this.database,
         `${insert} INTO review_rounds
-        (id, organization_id, event_id, plan_id, predecessor_round_id, name, sequence, revision, rubric_id, rubric_revision, opens_at, closes_at, blind_review, anonymization, track_filter)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, organization_id, event_id, plan_id, predecessor_round_id, name, sequence, revision, rubric_id, rubric_revision, opens_at, closes_at, blind_review, anonymization, ai_triage_enabled, track_filter)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           round.id,
           plan.tenantId,
@@ -2114,6 +2291,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
           round.closesAt,
           (round.blindReview ?? plan.blindReview) ? 1 : 0,
           round.anonymization ?? ((round.blindReview ?? plan.blindReview) ? "single" : "none"),
+          (round.aiTriageEnabled ?? false) ? 1 : 0,
           round.trackFilter ?? null,
         ],
       ),
@@ -2393,8 +2571,8 @@ export class D1EvaluationRepository implements EvaluationRepository {
         statement(
           this.database,
           `INSERT INTO evaluation_scores
-        (organization_id, event_id, review_id, criterion_id, value_number, value_text, origin, human_confirmed_by, suggestion_id, suggestion_status, rubric_revision, submission_revision, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (organization_id, event_id, review_id, criterion_id, value_number, value_text, origin, rubric_revision, submission_revision, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             review.tenantId,
             review.eventId,
@@ -2403,9 +2581,6 @@ export class D1EvaluationRepository implements EvaluationRepository {
             typeof score.value === "number" ? score.value : null,
             typeof score.value === "string" ? score.value : null,
             score.origin,
-            score.humanConfirmedBy,
-            score.suggestionId ?? null,
-            score.suggestionStatus ?? null,
             score.rubricRevision ?? score.rubricVersion ?? revisions[2] ?? 1,
             score.submissionRevision ?? score.submissionVersion ?? revisions[3] ?? 1,
             score.updatedAt,
@@ -2428,7 +2603,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
   private async hydrateReview(row: Row): Promise<EvaluationReview> {
     const scoreResult = await statement(
       this.database,
-      `SELECT * FROM evaluation_scores WHERE organization_id = ? AND event_id = ? AND review_id = ? ORDER BY criterion_id`,
+      `SELECT * FROM evaluation_scores WHERE organization_id = ? AND event_id = ? AND review_id = ? AND origin = 'human' ORDER BY criterion_id`,
       [text(row.organization_id), text(row.event_id), text(row.id)],
     ).all<Row>();
     const scores: Record<string, RubricScore> = {};
@@ -2450,17 +2625,8 @@ export class D1EvaluationRepository implements EvaluationRepository {
     return {
       criterionId: text(score.criterion_id),
       value: score.value_number == null ? text(score.value_text) : numberValue(score.value_number),
-      origin: score.origin as RubricScore["origin"],
+      origin: "human",
       evidence,
-      humanConfirmedBy: nullableText(score.human_confirmed_by),
-      ...(score.suggestion_id == null ? {} : { suggestionId: text(score.suggestion_id) }),
-      ...(score.suggestion_status == null
-        ? {}
-        : {
-            suggestionStatus: score.suggestion_status as NonNullable<
-              RubricScore["suggestionStatus"]
-            >,
-          }),
       rubricRevision: numberValue(score.rubric_revision),
       submissionRevision: numberValue(score.submission_revision),
       updatedAt: text(score.updated_at),
@@ -2522,8 +2688,8 @@ export class D1EvaluationRepository implements EvaluationRepository {
         statement(
           this.database,
           `INSERT INTO evaluation_suggestions
-      (id, organization_id, event_id, plan_id, round_id, assignment_id, submission_id, reviewer_id, plan_revision, rubric_revision, submission_revision, rubric_id, provider, model, prompt_version, generated_at, source_references_json, provenance_json, status, version, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, organization_id, event_id, plan_id, round_id, assignment_id, submission_id, reviewer_id, plan_revision, rubric_revision, submission_revision, rubric_id, provider, model, prompt_version, generated_at, source_references_json, provenance_json, override_json, status, version, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             suggestion.id,
             suggestion.tenantId,
@@ -2543,6 +2709,9 @@ export class D1EvaluationRepository implements EvaluationRepository {
             suggestion.provenance.generatedAt,
             json(suggestion.provenance.sourceReferences),
             provenanceJson,
+            suggestion.override === null || suggestion.override === undefined
+              ? null
+              : json(suggestion.override),
             suggestion.status,
             suggestion.version,
             suggestion.createdAt,
@@ -2554,11 +2723,14 @@ export class D1EvaluationRepository implements EvaluationRepository {
       commands.push(
         statement(
           this.database,
-          `UPDATE evaluation_suggestions SET status = ?, version = ?, provenance_json = ?, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
+          `UPDATE evaluation_suggestions SET status = ?, version = ?, provenance_json = ?, override_json = ?, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
           [
             suggestion.status,
             suggestion.version,
             provenanceJson,
+            suggestion.override === null || suggestion.override === undefined
+              ? null
+              : json(suggestion.override),
             suggestion.updatedAt,
             suggestion.tenantId,
             suggestion.eventId,
@@ -2647,15 +2819,27 @@ export class D1EvaluationRepository implements EvaluationRepository {
         sourceReferences: [],
       }),
     }));
-    const history: EvaluationSuggestionAuditEntry[] = rows(historyResult).map((item) => ({
-      action: item.action as EvaluationSuggestionAuditEntry["action"],
-      actorId: nullableText(item.actor_id),
-      at: text(item.at),
-      ...(item.reason == null ? {} : { reason: text(item.reason) }),
-      ...(item.values_json == null
-        ? {}
-        : { valueByCriterion: parseJson(text(item.values_json), {}) }),
-    }));
+    const history: EvaluationSuggestionAuditEntry[] = rows(historyResult).map((item) => {
+      const values =
+        item.values_json == null
+          ? null
+          : parseJson<Record<string, unknown>>(text(item.values_json), {});
+      const valueByCriterion: Record<string, number | string> = {};
+      if (values !== null) {
+        for (const [key, value] of Object.entries(values)) {
+          if (typeof value === "number" || typeof value === "string") {
+            valueByCriterion[key] = value;
+          }
+        }
+      }
+      return {
+        action: item.action as EvaluationSuggestionAuditEntry["action"],
+        actorId: nullableText(item.actor_id),
+        at: text(item.at),
+        ...(item.reason == null ? {} : { reason: text(item.reason) }),
+        ...(Object.keys(valueByCriterion).length === 0 ? {} : { valueByCriterion }),
+      };
+    });
     const byCriterion: Record<string, EvaluationSuggestionCandidate[]> = {};
     for (const candidate of candidates) {
       const existing = byCriterion[candidate.criterionId];
@@ -2677,7 +2861,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
       eventId: text(row.event_id),
       planId: text(row.plan_id),
       roundId: text(row.round_id),
-      assignmentId: text(row.assignment_id),
+      assignmentId: null,
       submissionId: text(row.submission_id),
       reviewerId: text(row.reviewer_id),
       planRevision: numberValue(row.plan_revision),
@@ -2688,6 +2872,10 @@ export class D1EvaluationRepository implements EvaluationRepository {
       criterionCandidates: candidates,
       provenance,
       status: row.status as EvaluationSuggestion["status"],
+      override:
+        row.override_json == null
+          ? null
+          : (parseJson(text(row.override_json), null) as EvaluationSuggestion["override"] | null),
       version: numberValue(row.version),
       history,
       audit: history,

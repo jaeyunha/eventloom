@@ -138,6 +138,17 @@ function patConnectionEnabled(configuration, environment) {
   return value;
 }
 
+const reasoningEfforts = ["none", "low", "medium", "high", "xhigh", "max"];
+
+function optionalReasoningEffort(configuration, environment, key) {
+  const value = configuration[key]?.trim().toLowerCase();
+  if (value === undefined || value === "") return null;
+  if (!reasoningEfforts.includes(value)) {
+    throw new Error(`${environment} ${key} must be one of ${reasoningEfforts.join(", ")}.`);
+  }
+  return value;
+}
+
 function replaceEnvironmentVariable(template, environment, key, value) {
   const sectionHeader = `[env.${environment}.vars]`;
   const sectionStart = template.indexOf(sectionHeader);
@@ -193,7 +204,7 @@ export function renderApiWrangler(template, environment, configuration) {
     (current, [key, value]) => current.replaceAll(placeholder[key], value),
     template,
   );
-  return replaceEnvironmentVariable(
+  let configured = replaceEnvironmentVariable(
     replaceEnvironmentVariable(
       rendered,
       environment,
@@ -204,6 +215,17 @@ export function renderApiWrangler(template, environment, configuration) {
     "AIRTABLE_PAT_CONNECTION_ENABLED",
     patConnectionEnabled(configuration, environment),
   );
+  for (const key of [
+    "OPENAI_AGENDA_REASONING_EFFORT",
+    "OPENAI_EVALUATION_REASONING_EFFORT",
+    "OPENAI_REMIX_REASONING_EFFORT",
+  ]) {
+    const effort = optionalReasoningEffort(configuration, environment, key);
+    if (effort !== null) {
+      configured = replaceEnvironmentVariable(configured, environment, key, effort);
+    }
+  }
+  return configured;
 }
 
 export function renderWebWrangler(template, environment, configuration) {

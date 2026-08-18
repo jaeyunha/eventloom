@@ -20,8 +20,9 @@ explicit user instruction.
 - [x] Reproduced and retained unrelated calendar and redesign-workspace E2E
       failures without weakening those tests.
 - [x] Complete the refreshed five-lane pre-PR review.
-- [ ] Commit and push the refreshed verification increment.
-- [ ] Open the unmerged PR against current main and record its exact base SHA.
+- [x] Commit and push the refreshed verification increment.
+- [x] Open and merge PR #61 against current main; the export work is now included
+      in `main` at `5de02118b194c429bee50bf3eac9acd5ffeecf1e`.
 
 ## Repository and worktree
 
@@ -42,7 +43,9 @@ explicit user instruction.
   `6467ff1f48c73229c5c45dba6b4716df724a3bdd`
 - The pushed checkpoint commit is the commit containing this document. Its exact
   URL is recorded in the GitHub handoff issue.
-- Pull request: none exists at pause time. No PR was opened, merged, or deployed.
+- Pull request: the historical lane PR is
+  https://github.com/jaeyunha/eventloom/pull/61 (MERGED; no production deployment
+  is claimed by this record).
 
 ## Lane objective and scope
 

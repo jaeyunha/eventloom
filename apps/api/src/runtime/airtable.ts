@@ -72,14 +72,17 @@ import type {
 } from "../features/crm/types";
 import { conflict } from "../features/evaluations/errors";
 import type {
-  EvaluationPlanScheduleSync,
   EvaluationPlanScheduleState,
+  EvaluationPlanScheduleSync,
+  EvaluationProjectionReader,
+  EvaluationReminderPlanSource,
   EvaluationRepository,
   EvaluationReviewWriteAdmission,
   OrganizerWorkspaceRecords,
   ReviewerWorkspaceRecords,
   SubmissionReviewLookup,
   SubmissionReviewSource,
+  WriteEvaluationReview,
 } from "../features/evaluations/repository";
 import type {
   EvaluationReminderBoundary,
@@ -95,7 +98,6 @@ import type {
   EvaluationSubmissionSource,
 } from "../features/evaluations/service";
 import { EvaluationService } from "../features/evaluations/service";
-import type { OrganizationPolicy } from "../features/organizations/policy";
 import type {
   EvaluationActor,
   EvaluationAssignment,
@@ -111,7 +113,6 @@ import type {
   EvaluationReview,
   EvaluationReviewHistory,
   EvaluationSuggestion,
-  EvaluationSuggestionResolution,
   SubmissionReviewMaterial,
 } from "../features/evaluations/types";
 import { EventService, ProgramPublicationService } from "../features/events/service";
@@ -122,6 +123,7 @@ import {
   EventRepositoryConflictError,
   type ProgramPublicationManifest,
 } from "../features/events/types";
+import type { OrganizationPolicy } from "../features/organizations/policy";
 import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
   IdempotencyBeginResult,
@@ -351,47 +353,13 @@ function isEvaluationSuggestionRecord(value: object): value is EvaluationSuggest
     typeof value.eventId === "string" &&
     typeof value.planId === "string" &&
     typeof value.roundId === "string" &&
-    typeof value.assignmentId === "string" &&
+    value.assignmentId === null &&
     typeof value.submissionId === "string" &&
     typeof value.reviewerId === "string" &&
     typeof value.version === "number"
   );
 }
 
-function evaluationAssignmentMatchesScope(
-  assignment: EvaluationAssignment,
-  scope: EvaluationAssignmentScope,
-): boolean {
-  return (
-    assignment.tenantId === scope.tenantId &&
-    assignment.eventId === scope.eventId &&
-    assignment.planId === scope.planId &&
-    assignment.roundId === scope.roundId &&
-    (scope.submissionId === undefined || assignment.submissionId === scope.submissionId) &&
-    (scope.planVersion === undefined || assignment.planVersion === scope.planVersion)
-  );
-}
-
-function evaluationReviewHistory(
-  reviews: readonly EvaluationReview[],
-  assignment: EvaluationAssignment,
-): readonly EvaluationReviewHistory[] {
-  const review = reviews.find(
-    (candidate) =>
-      candidate.tenantId === assignment.tenantId && candidate.assignmentId === assignment.id,
-  );
-  return review === undefined ? [] : [{ assignment: clone(assignment), review: clone(review) }];
-}
-
-function assertEvaluationVersion(
-  currentVersion: number | null,
-  expectedVersion: number | null,
-  entityName: string,
-): void {
-  if (currentVersion !== expectedVersion) {
-    throw conflict(`${entityName} changed since it was loaded.`);
-  }
-}
 interface AirtableEvaluationAssignmentGenerationSnapshot {
   readonly version: number;
   readonly committedAt: string;
@@ -1670,8 +1638,34 @@ function assertAirtableAssignmentWriteAdmission(
   }
 }
 
-export class AirtableEvaluationRepository implements EvaluationRepository {
+function evaluationAssignmentMatchesScope(
+  assignment: EvaluationAssignment,
+  scope: EvaluationAssignmentScope,
+): boolean {
+  return (
+    assignment.tenantId === scope.tenantId &&
+    assignment.eventId === scope.eventId &&
+    assignment.planId === scope.planId &&
+    assignment.roundId === scope.roundId &&
+    (scope.submissionId === undefined || assignment.submissionId === scope.submissionId)
+  );
+}
+
+function assertEvaluationVersion(actual: number, expected: number, label: string): void {
+  if (actual !== expected) throw conflict(`${label} changed since it was loaded.`);
+}
+
+function evaluationReviewHistory(
+  reviews: readonly EvaluationReview[],
+  assignment: EvaluationAssignment,
+): readonly EvaluationReviewHistory[] {
+  const review = reviews.find((candidate) => candidate.assignmentId === assignment.id);
+  return review === undefined ? [] : [{ assignment: clone(assignment), review: clone(review) }];
+}
+
+class AirtableEvaluationDataStore implements EvaluationRepository {
   readonly supportsAtomicPlanRevisionSync = false;
+  readonly authority = "transactional" as const;
   readonly #plans: AirtableJsonStore<AirtableEvaluationPlanRecord>;
   readonly #assignments: AirtableJsonStore<EvaluationAssignment>;
   readonly #reviews: AirtableJsonStore<EvaluationReview>;
@@ -1679,8 +1673,6 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   readonly #evaluations: AirtableJsonStore<JsonRecord>;
   readonly #conflicts: AirtableJsonStore<EvaluationConflictDeclaration>;
   readonly #decisions: AirtableJsonStore<EvaluationDecision>;
-  readonly #baseId: string;
-  readonly #transport: AirtableTransport;
   readonly #suggestionListsInFlight = new Map<string, Promise<readonly EvaluationSuggestion[]>>();
 
   constructor(options: {
@@ -1688,8 +1680,6 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     readonly transport: AirtableTransport;
   }) {
     const shared = { baseId: options.baseId, transport: options.transport };
-    this.#baseId = options.baseId;
-    this.#transport = options.transport;
     this.#plans = new AirtableJsonStore({
       ...shared,
       table: "Review Plans",
@@ -2224,7 +2214,6 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       ? untagged(suggestion)
       : null;
   }
-
   async listSuggestions(
     tenantId: string,
     planId: string,
@@ -2261,22 +2250,12 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   async putSuggestion(
     _suggestion: EvaluationSuggestion,
     _expectedVersion: number | null,
-    _admission?: EvaluationReviewWriteAdmission,
+    _expectedSubmissionRevision?: number,
+    _allowClosedPlan = false,
   ): Promise<void> {
     throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
 
-  async resolveSuggestion(
-    _suggestion: EvaluationSuggestion,
-    _expectedSuggestionVersion: number,
-    _assignment: EvaluationAssignment | null,
-    _expectedAssignmentVersion: number | null,
-    _review: EvaluationReview | null,
-    _expectedReviewVersion: number | null,
-    _admission: EvaluationReviewWriteAdmission,
-  ): Promise<EvaluationSuggestionResolution> {
-    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
-  }
   async listReviewerWorkspaceRecords(
     tenantId: string,
     reviewerId: string,
@@ -2458,8 +2437,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       throw conflict("A conflict has already been declared for this assignment.");
     }
     await this.#upsertEvaluationEntities([
-      tagged(assignment, "evaluation_assignment"),
-      tagged({ ...declaration, id: `conflict:${assignment.id}` }, "evaluation_conflict"),
+      tagged(assignment, "evaluation_assignment") as unknown as JsonRecord,
+      tagged(
+        { ...declaration, id: `conflict:${assignment.id}` },
+        "evaluation_conflict",
+      ) as unknown as JsonRecord,
     ]);
   }
 
@@ -2483,96 +2465,6 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     return decision !== undefined && decision.tenantId === tenantId ? untagged(decision) : null;
   }
 
-  async putDecision(decision: EvaluationDecision, expectedVersion: number | null): Promise<void> {
-    const id = `decision:${decision.planId}:${decision.submissionId}`;
-    const existingRecord = await this.#decisions.findWithRecordId(id);
-    const existing = existingRecord?.entity;
-    if (
-      (existing?.version ?? null) !== expectedVersion ||
-      (existing && existing.tenantId !== decision.tenantId)
-    ) {
-      throw conflict("Decision changed since it was loaded.");
-    }
-    const storedDecision = tagged({ ...decision, id }, "evaluation_decision");
-    if (existingRecord === undefined) await this.#decisions.create(storedDecision);
-    else await this.#decisions.updateByRecordId(id, existingRecord.recordId, storedDecision);
-  }
-
-  async #commitAssignmentGeneration(
-    planRecord: {
-      readonly recordId: string;
-      readonly entity: AirtableEvaluationPlanRecord;
-    },
-    assignments: readonly EvaluationAssignment[],
-    committedAt: string,
-  ): Promise<void> {
-    const byId = new Map<string, EvaluationAssignment>();
-    for (const assignment of assignments) {
-      if (
-        assignment.tenantId !== planRecord.entity.tenantId ||
-        assignment.eventId !== planRecord.entity.eventId ||
-        assignment.planId !== planRecord.entity.id
-      ) {
-        throw conflict("Reviewer assignment generation is outside its target plan.");
-      }
-      if (byId.has(assignment.id)) {
-        throw conflict("Reviewer assignment generation contains duplicate assignments.");
-      }
-      byId.set(assignment.id, clone(assignment));
-    }
-
-    const snapshot: AirtableEvaluationAssignmentGenerationSnapshot = {
-      version: (planRecord.entity.assignmentGenerationSnapshot?.version ?? 0) + 1,
-      committedAt,
-      assignments: [...byId.values()].sort((left, right) => left.id.localeCompare(right.id)),
-    };
-    const storedPlan: AirtableEvaluationPlanRecord = {
-      ...clone(planRecord.entity),
-      assignmentGenerationSnapshot: snapshot,
-    };
-
-    // This single Review Plan update is the authoritative visibility boundary.
-    await this.#plans.updateByRecordId(planRecord.entity.id, planRecord.recordId, storedPlan);
-
-    // Assignment rows are only a cache/history materialization. A failed later
-    // Airtable batch cannot alter the already committed authoritative snapshot.
-    try {
-      await this.#upsertEvaluationEntities(
-        snapshot.assignments.map((assignment) => tagged(assignment, "evaluation_assignment")),
-      );
-    } catch {
-      // Snapshot readers remain authoritative; a later mutation rematerializes all rows.
-    }
-  }
-  async #upsertEvaluationEntities(entities: readonly object[]): Promise<void> {
-    for (let index = 0; index < entities.length; index += 10) {
-      const batch = entities.slice(index, index + 10);
-      const response = await this.#transport.request({
-        method: "PATCH",
-        baseId: this.#baseId,
-        table: "Evaluations",
-        body: {
-          performUpsert: { fieldsToMergeOn: [APPLICATION_ID] },
-          records: batch.map((entity) => ({
-            fields: {
-              [APPLICATION_ID]: recordId(entity),
-              "Scores JSON": JSON.stringify(entity),
-            },
-          })),
-        },
-      });
-      if (response.status < 200 || response.status >= 300) {
-        throw new AirtableRepositoryError(
-          "REQUEST_FAILED",
-          "The Airtable evaluation mutation failed.",
-          {
-            status: response.status,
-            retryable: response.status === 429 || response.status >= 500,
-          },
-        );
-      }
-    }
-  }
   async findPlanForTenant(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
     return this.getPlan(tenantId, planId);
   }
@@ -2581,6 +2473,112 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     assignmentId: string,
   ): Promise<EvaluationAssignment | null> {
     return this.getAssignment(tenantId, assignmentId);
+  }
+
+  async writeReview(_input: WriteEvaluationReview): Promise<void> {
+    throw conflict("Evaluation review writes require the authoritative D1 runtime.");
+  }
+
+  async putDecision(_decision: EvaluationDecision, _expectedVersion: number | null): Promise<void> {
+    throw conflict("Evaluation decision writes require the authoritative D1 runtime.");
+  }
+
+  async #commitAssignmentGeneration(
+    planRecord: { readonly entity: EvaluationPlan },
+    assignments: readonly EvaluationAssignment[],
+    _updatedAt: string,
+  ): Promise<void> {
+    await this.#upsertEvaluationEntities(
+      assignments.map(
+        (assignment) => tagged(assignment, "evaluation_assignment") as unknown as JsonRecord,
+      ),
+    );
+    await this.#plans.update(planRecord.entity.id, planRecord.entity);
+  }
+
+  async #upsertEvaluationEntities(entities: readonly JsonRecord[]): Promise<void> {
+    for (const entity of entities) {
+      const id = typeof entity.id === "string" ? entity.id : null;
+      if (id === null) continue;
+      const existing = await this.#evaluations.findWithRecordId(id);
+      if (existing === undefined) {
+        await this.#evaluations.create(entity);
+      } else {
+        await this.#evaluations.updateByRecordId(id, existing.recordId, entity);
+      }
+    }
+  }
+}
+
+export class AirtableEvaluationProjectionStore implements EvaluationProjectionReader {
+  readonly #repository: AirtableEvaluationDataStore;
+
+  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+    this.#repository = new AirtableEvaluationDataStore(options);
+  }
+
+  getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
+    return this.#repository.getPlan(tenantId, planId);
+  }
+  getPlanScheduleState(
+    tenantId: string,
+    planId: string,
+  ): Promise<EvaluationPlanScheduleState | null> {
+    return this.#repository.getPlanScheduleState(tenantId, planId);
+  }
+  getPlanSuccessor(
+    tenantId: string,
+    eventId: string,
+    predecessorPlanId: string,
+  ): Promise<EvaluationPlan | null> {
+    return this.#repository.getPlanSuccessor(tenantId, eventId, predecessorPlanId);
+  }
+  listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
+    return this.#repository.listPlans(tenantId, eventId);
+  }
+  getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null> {
+    return this.#repository.getAssignment(tenantId, assignmentId);
+  }
+  listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]> {
+    return this.#repository.listAssignments(tenantId, planId);
+  }
+  getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
+    return this.#repository.getReview(tenantId, assignmentId);
+  }
+  listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]> {
+    return this.#repository.listReviews(tenantId, planId);
+  }
+  getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null> {
+    return this.#repository.getSuggestion(tenantId, suggestionId);
+  }
+  listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]> {
+    return this.#repository.listSuggestions(tenantId, planId);
+  }
+  listReviewerWorkspaceRecords(
+    tenantId: string,
+    reviewerId: string,
+    eventIds: readonly string[],
+  ): Promise<ReviewerWorkspaceRecords> {
+    return this.#repository.listReviewerWorkspaceRecords(tenantId, reviewerId, eventIds);
+  }
+  listOrganizerWorkspaceRecords(
+    tenantId: string,
+    eventId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    return this.#repository.listOrganizerWorkspaceRecords(tenantId, eventId);
+  }
+  getConflict(
+    tenantId: string,
+    assignmentId: string,
+  ): Promise<EvaluationConflictDeclaration | null> {
+    return this.#repository.getConflict(tenantId, assignmentId);
+  }
+  getDecision(
+    tenantId: string,
+    planId: string,
+    submissionId: string,
+  ): Promise<EvaluationDecision | null> {
+    return this.#repository.getDecision(tenantId, planId, submissionId);
   }
 }
 
@@ -8093,7 +8091,7 @@ export class D1EvaluationReviewerIdentityBoundary implements EvaluationReviewerI
 
 export class AirtableEvaluationReminderBoundary implements EvaluationReminderBoundary {
   constructor(
-    private readonly plans: Pick<EvaluationRepository, "getPlan" | "listAssignments">,
+    private readonly plans: EvaluationReminderPlanSource,
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
     private readonly senderAddresses: OpenSendSenderAddresses,

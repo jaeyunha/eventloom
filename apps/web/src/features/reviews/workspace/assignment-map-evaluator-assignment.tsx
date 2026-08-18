@@ -51,7 +51,6 @@ export function mapEvaluatorAssignment(
     },
   };
   const scores = context.review?.scores ?? {};
-  const suggestions = context.suggestions ?? [];
   const parsedComment = parseScorecardResponses(context.review?.comment ?? "");
   const initialResponses: Record<string, string> = {
     ...parsedComment.responses,
@@ -78,43 +77,6 @@ export function mapEvaluatorAssignment(
       ];
     }),
   );
-  const aiSuggestionEntries: Array<
-    readonly [string, { value: number; evidence: readonly string[] }]
-  > = [];
-  for (const [criterionId, score] of Object.entries(scores)) {
-    const criterion = criterionById.get(criterionId);
-    if (
-      score.origin !== "ai" ||
-      criterion === undefined ||
-      criterionType(criterion) !== "numeric" ||
-      typeof score.value !== "number"
-    ) {
-      continue;
-    }
-    aiSuggestionEntries.push([
-      criterionId,
-      { value: Number(score.value), evidence: score.evidence },
-    ]);
-  }
-  for (const suggestion of suggestions) {
-    if (suggestion.status !== "pending") continue;
-    for (const [criterionId, candidates] of Object.entries(suggestion.candidates)) {
-      const criterion = criterionById.get(criterionId);
-      const candidate = candidates[0];
-      if (
-        criterion === undefined ||
-        criterionType(criterion) !== "numeric" ||
-        candidate === undefined
-      ) {
-        continue;
-      }
-      aiSuggestionEntries.push([
-        criterionId,
-        { value: candidate.value, evidence: candidate.evidence },
-      ]);
-    }
-  }
-  const aiSuggestions = Object.fromEntries(aiSuggestionEntries);
   const initialConfirmed: string[] = [];
   for (const [criterionId, score] of Object.entries(scores)) {
     const criterion = criterionById.get(criterionId);
@@ -163,7 +125,5 @@ export function mapEvaluatorAssignment(
       round.blindReview === true || context.submission.identityRedacted === true,
     ),
     round,
-    aiSuggestions,
-    suggestions,
   };
 }

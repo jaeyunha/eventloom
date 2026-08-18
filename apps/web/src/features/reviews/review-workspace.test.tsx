@@ -306,15 +306,6 @@ function testAssignment(eventId: string): EvaluatorAssignment {
     track: "Public services",
     abstract: "A practical session for resilient public services.",
     round,
-    aiSuggestions: Object.fromEntries(
-      testCriteria
-        .filter((criterion) => criterion.inputType !== "free_text")
-        .map((criterion, index) => [
-          criterion.id,
-          { value: 3 + (index % 3), evidence: ["Cited proposal evidence."] },
-        ]),
-    ),
-    suggestions: [],
   };
 }
 
@@ -887,6 +878,7 @@ describe("review workspace", () => {
           sequence: 1,
           opensAt: null,
           closesAt: null,
+          aiTriageEnabled: false,
           blindReview: false,
           anonymization: "none",
           rubric: {
@@ -1206,14 +1198,12 @@ describe("review workspace", () => {
     );
 
     expect(organizerMarkup).toContain("Results");
-    expect(organizerMarkup).not.toContain("AI suggestions remain advisory");
     expect(organizerMarkup).not.toContain("Confirm human decision");
     expect(organizerMarkup).not.toContain("Written reason");
     expect(organizerMarkup).not.toContain("Review decision");
     expect(evaluatorMarkup).not.toContain('type="number"');
     expect(evaluatorMarkup).toContain('role="radiogroup"');
     expect(evaluatorMarkup).toContain('type="radio"');
-    expect(evaluatorMarkup).toContain("AI suggestions remain advisory");
   });
 
   it("keeps evaluator content blind and limited to one assignment", () => {
@@ -1346,7 +1336,7 @@ describe("review workspace", () => {
     }
   });
 
-  it("marks AI evidence uncounted and requires a written abstention reason", () => {
+  it("renders only human review controls and requires a written abstention reason", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         eventId: "summit-2026",
@@ -1355,9 +1345,8 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("AI suggestion · uncounted");
-    expect(markup).toContain("Cited evidence");
-    expect(markup).toContain("Confirm or edit this suggestion");
+    expect(markup).not.toContain("Cited evidence");
+    expect(markup).not.toContain("Confirm or edit this suggestion");
     expect(markup).toContain("Submission waits for autosave");
     expect(markup).toContain("Submit review");
     expect(markup).not.toContain("Confirm review submission");

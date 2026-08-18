@@ -13,7 +13,6 @@ import { ReviewNavigation } from "./evaluator-queue-review-navigation";
 import { EvaluatorRoundAvailabilityNotice } from "./evaluator-round-availability-notice";
 import { EvaluatorScorecardView } from "./evaluator-scorecard-view";
 import { EvaluatorSubmissionPanel } from "./evaluator-submission-panel";
-import { AuthorityNotice } from "./workspace-authority-notice";
 export function EvaluatorWorkspaceView({
   controller,
 }: Readonly<{ controller: EvaluatorController }>) {
@@ -33,7 +32,6 @@ export function EvaluatorWorkspaceView({
     return (
       <div className={`${styles.embeddedEvaluator} ${styles.evaluatorMode}`}>
         <div className={styles.embeddedEvaluatorScroll} data-reviewer-scorecard-scroll="true">
-          <AuthorityNotice />
           {reviewSections}
         </div>
         <EvaluatorActionBar controller={controller} />
@@ -90,7 +88,6 @@ export function EvaluatorWorkspaceView({
         </header>
       )}
       <div id="review-content" tabIndex={-1}>
-        <AuthorityNotice />
         {reviewSections}
         <EvaluatorActionBar controller={controller} />
         <EvaluatorConflictDialog controller={controller} />

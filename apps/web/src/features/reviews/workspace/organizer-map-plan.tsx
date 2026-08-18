@@ -79,6 +79,7 @@ export function mapPlan(
             : "open",
       opensAt: dateLabel(round.opensAt ?? plan.createdAt),
       closesAt: dateLabel(round.closesAt),
+      aiTriageEnabled: round.aiTriageEnabled === true,
       completionPercent: assignmentCompletionPercent(assignments, round.id),
       blindReview: round.blindReview === true || plan.blindReview,
       anonymization: round.anonymization,

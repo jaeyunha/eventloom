@@ -1,9 +1,9 @@
 "use client";
-import type { EvaluatorSuggestionController } from "./evaluator-suggestion-actions";
+import type { EvaluatorAutosaveController } from "./evaluator-autosave-actions";
 import { criterionNumericValue } from "./model-criterion-numeric-value";
 import { criterionType } from "./model-criterion-type";
 import type { RubricCriterion } from "./scorecard-rubric-criterion";
-export function useEvaluatorScoreActions(scope: EvaluatorSuggestionController) {
+export function useEvaluatorScoreActions(scope: EvaluatorAutosaveController) {
   const {
     assignment,
     scoreValues,
@@ -16,11 +16,8 @@ export function useEvaluatorScoreActions(scope: EvaluatorSuggestionController) {
     showValidation,
     setAutosaveState,
     setConflictDialogOpen,
-    suggestions,
     reportDraft,
-    suggestionForCriterion,
     enqueueAutosave,
-    resolveSuggestion,
   } = scope;
   function changeScore(criterionId: string, value: string): void {
     const criterion = assignment.round.rubric.criteria.find(
@@ -33,12 +30,6 @@ export function useEvaluatorScoreActions(scope: EvaluatorSuggestionController) {
     setScoreValues(nextScores);
     reportDraft(nextScores, responseValues, nextConfirmed, comment);
     setHumanConfirmed(nextConfirmed);
-    const generated = suggestionForCriterion(criterionId);
-    if (generated !== null && Number.isFinite(numericValue)) {
-      setAutosaveState("Unsaved changes");
-      void resolveSuggestion(generated.suggestion, "edit", criterionId, numericValue);
-      return;
-    }
     setAutosaveState("Unsaved changes");
     enqueueAutosave(nextScores, comment, nextConfirmed, responseValues);
   }
@@ -49,29 +40,6 @@ export function useEvaluatorScoreActions(scope: EvaluatorSuggestionController) {
     reportDraft(scoreValues, nextResponses, humanConfirmed, comment);
     setAutosaveState("Unsaved changes");
     enqueueAutosave(scoreValues, comment, humanConfirmed, nextResponses);
-  }
-
-  function confirmAiSuggestion(criterion: RubricCriterion): void {
-    const generated = suggestionForCriterion(criterion.id);
-    if (generated !== null) {
-      void resolveSuggestion(generated.suggestion, "accept");
-      return;
-    }
-    if (suggestions.some((candidate) => candidate.candidates[criterion.id]?.length !== undefined)) {
-      return;
-    }
-    const suggestion = assignment.aiSuggestions[criterion.id];
-    if (!suggestion) return;
-    const nextScores = {
-      ...scoreValues,
-      [criterion.id]: String(suggestion.value),
-    };
-    const nextConfirmed = new Set(humanConfirmed).add(criterion.id);
-    setScoreValues(nextScores);
-    reportDraft(nextScores, responseValues, nextConfirmed, comment);
-    setHumanConfirmed(nextConfirmed);
-    setAutosaveState("Unsaved changes");
-    enqueueAutosave(nextScores, comment, nextConfirmed, responseValues);
   }
 
   function countedScore(): number {
@@ -127,7 +95,6 @@ export function useEvaluatorScoreActions(scope: EvaluatorSuggestionController) {
     ...scope,
     changeScore,
     changeResponse,
-    confirmAiSuggestion,
     countedScore,
     possibleScore,
     criterionComplete,

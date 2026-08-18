@@ -1,6 +1,7 @@
 import { type CloudflareAiBinding, CloudflareAiProviderError } from "./cloudflare";
 
 export const DEFAULT_OPENAI_RESPONSES_MODEL = "gpt-5.6-terra";
+export const DEFAULT_OPENAI_EVALUATION_MODEL = "gpt-5.6-sol";
 const DEFAULT_OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const JSON_RESPONSE_FORMAT = { type: "json_object" } as const;
 
@@ -37,6 +38,7 @@ export function createOpenAiResponsesBinding(
         throw invalidResponsesOutput();
       }
       const reasoning = openAiReasoning(inputs.reasoning);
+      const temperature = openAiTemperature(inputs.temperature);
       const responseFormat = openAiResponseFormat(inputs.response_format);
 
       let response: Response;
@@ -51,8 +53,10 @@ export function createOpenAiResponsesBinding(
           body: JSON.stringify({
             model,
             input: prompt,
+            store: false,
             text: { format: responseFormat },
             ...(reasoning === undefined ? {} : { reasoning }),
+            ...(temperature === undefined ? {} : { temperature }),
           }),
         });
       } catch {
@@ -105,6 +109,12 @@ function openAiReasoning(value: unknown): { effort: string } | undefined {
     throw invalidResponsesOutput();
   }
   return { effort: value.effort };
+}
+
+function openAiTemperature(value: unknown): 0 | undefined {
+  if (value === undefined) return undefined;
+  if (value !== 0) throw invalidResponsesOutput();
+  return 0;
 }
 
 function normalizeEndpoint(value: string | undefined): string {

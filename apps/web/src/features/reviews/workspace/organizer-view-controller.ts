@@ -6,6 +6,7 @@ import type { ApiPlan } from "./api-api-plan";
 import type { AggregateRow } from "./organizer-aggregate-row";
 import type { DecisionStatus } from "./organizer-decision-status";
 import { loadRoundAggregates } from "./organizer-load-round-aggregates";
+import { useOrganizerAiTriage } from "../organizer-ai-triage";
 import { mapSeedRoundAggregates } from "./organizer-map-seed-round-aggregates";
 import {
   createOrganizerResultsExportAttemptRunner,
@@ -114,6 +115,15 @@ export function useOrganizerWorkspaceViewController({
   const exportAbortControllerRef = useRef<AbortController | null>(null);
   const exportAttemptRunnerRef = useRef(createOrganizerResultsExportAttemptRunner());
   const selectedRound = seed.rounds.find((round) => round.id === selectedRoundId) ?? activeRound;
+  const aiTriage = useOrganizerAiTriage({
+    baseUrl,
+    planId: seed.planId,
+    roundId: selectedRoundId,
+    enabled: selectedRound?.aiTriageEnabled === true,
+  });
+  const aiTriageCriterionLabels = Object.fromEntries(
+    (selectedRound?.rubric.criteria ?? []).map((criterion) => [criterion.id, criterion.label]),
+  );
   useEffect(
     () => () => {
       exportAbortControllerRef.current?.abort();
@@ -256,6 +266,7 @@ export function useOrganizerWorkspaceViewController({
     setDecisionRowLimit,
     decisionEditorRef,
     selectedRound,
+    aiTriage: { ...aiTriage, criterionLabels: aiTriageCriterionLabels },
     ...derived,
     openReviewersForSubmission,
     openDecisionForSubmission,

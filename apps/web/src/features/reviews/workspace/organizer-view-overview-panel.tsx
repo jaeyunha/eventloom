@@ -12,6 +12,7 @@ export function OrganizerOverviewPanel({
     overviewMetrics,
     overviewCompletionPercent,
     overviewAttentionSummary,
+    aiTriage,
     openReviewersForSubmission,
     openDecisionForSubmission,
     setView,
@@ -25,6 +26,7 @@ export function OrganizerOverviewPanel({
       completionPercent={overviewCompletionPercent}
       attentionSummary={overviewAttentionSummary}
       rows={overviewRows}
+      aiTriage={aiTriage}
       onManageReviewers={openReviewersForSubmission}
       onOpenPlan={() => setView("setup")}
       onOpenReviewers={() => setView("assignments")}

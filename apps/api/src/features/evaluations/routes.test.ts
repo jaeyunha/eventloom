@@ -282,6 +282,153 @@ describe("evaluation HTTP routes", () => {
       version: 1,
     });
   });
+
+  it("persists the organizer-controlled AI triage opt-in for each round", async () => {
+    const app = createTestApp();
+    const response = await jsonRequest(app, "/evaluations/plans", "POST", {
+      ...planRequest,
+      id: "plan-ai-triage",
+      rounds: planRequest.rounds.map((round) => ({
+        ...round,
+        aiTriageEnabled: true,
+      })),
+    });
+    const body = (await response.json()) as {
+      rounds: readonly { aiTriageEnabled?: boolean | undefined }[];
+    };
+
+    expect(response.status).toBe(201);
+    expect(body.rounds[0]?.aiTriageEnabled).toBe(true);
+  });
+
+  it("lets organizers generate, list, and override one shared round AI triage result", async () => {
+    const app = createTestApp(
+      {
+        aiSuggestionProducer: async () => ({
+          candidates: [
+            {
+              criterionId: "quality",
+              value: 4,
+              evidence: [
+                "The practical delivery plan gives the audience a concrete implementation outcome, indicating a feasible session.",
+              ],
+              provenance: {
+                provider: "test-provider",
+                model: "test-model",
+                generatedAt: "2026-08-08T12:00:00.000Z",
+                sourceReferences: [
+                  "abstract:The practical delivery plan gives the audience a concrete implementation outcome.",
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      {},
+      [
+        {
+          id: "submission-1",
+          tenantId: "tenant-1",
+          eventId: "event-1",
+          status: "submitted",
+          title: "Practical delivery plan",
+          abstract:
+            "The practical delivery plan gives the audience a concrete implementation outcome.",
+          answers: {},
+          identityFieldIds: [],
+          participants: [],
+        },
+      ],
+    );
+    const created = await jsonRequest(app, "/evaluations/plans", "POST", {
+      ...planRequest,
+      rounds: planRequest.rounds.map((round) => ({
+        ...round,
+        aiTriageEnabled: true,
+      })),
+    });
+    const draft = (await created.json()) as { version: number };
+    const opened = await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
+      expectedVersion: draft.version,
+    });
+    expect(opened.status).toBe(200);
+
+    const generatePath =
+      "/evaluations/plans/plan-1/rounds/round-1/submissions/submission-1/suggestions/generate";
+    const generated = await jsonRequest(app, generatePath, "POST", {});
+    const suggestion = (await generated.json()) as {
+      id: string;
+      version: number;
+      assignmentId: string | null;
+      status: string;
+    };
+    const listed = await app.request("/evaluations/plans/plan-1/rounds/round-1/suggestions", {
+      headers: { "x-test-actor": "organizer" },
+    });
+    const listBody = (await listed.json()) as { suggestions: readonly { id: string }[] };
+    const overridden = await jsonRequest(
+      app,
+      `/evaluations/plans/plan-1/rounds/round-1/suggestions/${suggestion.id}/override`,
+      "PUT",
+      {
+        expectedVersion: suggestion.version,
+        valueByCriterion: { quality: 5 },
+        reason: "Committee review found stronger evidence.",
+      },
+    );
+    const overriddenBody = (await overridden.json()) as {
+      status: string;
+      override: { valueByCriterion: Record<string, number> } | null;
+    };
+    const reviewerAttempt = await jsonRequest(app, generatePath, "POST", {}, "reviewer");
+
+    expect(generated.status).toBe(201);
+    expect(suggestion).toMatchObject({ assignmentId: null, status: "pending" });
+    expect(listed.status).toBe(200);
+    expect(listBody.suggestions.map((item) => item.id)).toEqual([suggestion.id]);
+    expect(overridden.status).toBe(200);
+    expect(overriddenBody).toMatchObject({
+      status: "overridden",
+      override: { valueByCriterion: { quality: 5 } },
+    });
+    expect(reviewerAttempt.status).toBe(403);
+  });
+
+  it("rejects reviewer-supplied AI scores and has no AI confirmation route", async () => {
+    const app = createTestApp();
+    const aiScore = await jsonRequest(app, "/evaluations/assignments/assignment-1/review", "PUT", {
+      scores: [
+        {
+          criterionId: "quality",
+          value: 4,
+          origin: "ai",
+        },
+      ],
+    });
+    const confirmation = await jsonRequest(
+      app,
+      "/evaluations/assignments/assignment-1/review/confirm",
+      "POST",
+      { criterionIds: ["quality"], expectedVersion: 1 },
+    );
+    const legacySuggestions = await app.request(
+      "/evaluations/assignments/assignment-1/suggestions",
+      { headers: { "x-test-actor": "reviewer" } },
+    );
+    const legacyGeneration = await jsonRequest(
+      app,
+      "/evaluations/assignments/assignment-1/suggestions/generate",
+      "POST",
+      {},
+      "reviewer",
+    );
+
+    expect(aiScore.status).toBe(400);
+    expect(confirmation.status).toBe(404);
+    expect(legacySuggestions.status).toBe(404);
+    expect(legacyGeneration.status).toBe(404);
+  });
+
   it("lists plans by event without crossing tenant boundaries", async () => {
     const app = createTestApp();
     const eventOne = await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
@@ -622,6 +769,7 @@ describe("evaluation HTTP routes", () => {
         id: "submission-1",
         tenantId: "tenant-1",
         eventId: "event-1",
+        status: "submitted",
         title: "Blind proposal",
         abstract: "Proposal details",
         answers: { identity: "Hidden", topic: "Visible" },
@@ -639,6 +787,7 @@ describe("evaluation HTTP routes", () => {
         id: "submission-2",
         tenantId: "tenant-1",
         eventId: "event-1",
+        status: "submitted",
         title: "Second proposal",
         abstract: "Second details",
         answers: { identity: "Other hidden", topic: "Second visible" },
@@ -862,6 +1011,7 @@ describe("evaluation HTTP routes", () => {
         id: "submission-sam-1",
         tenantId: "tenant-1",
         eventId: "event-1",
+        status: "submitted",
         title: "First blind proposal",
         abstract: "First proposal details",
         answers: { identity: "First hidden identity", topic: "First visible topic" },
@@ -879,6 +1029,7 @@ describe("evaluation HTTP routes", () => {
         id: "submission-sam-2",
         tenantId: "tenant-1",
         eventId: "event-1",
+        status: "submitted",
         title: "Second blind proposal",
         abstract: "Second proposal details",
         answers: { identity: "Second hidden identity", topic: "Second visible topic" },

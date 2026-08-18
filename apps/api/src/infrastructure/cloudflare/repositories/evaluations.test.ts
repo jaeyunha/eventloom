@@ -9,6 +9,10 @@ import type {
   EvaluationReview,
   EvaluationSuggestion,
 } from "../../../features/evaluations/types";
+import {
+  createSpeakerLifecycleFixture,
+  speakerLifecycleIds,
+} from "../../../test-support/speaker-lifecycle";
 import { SqliteD1 } from "../../../test-support/sqlite-d1";
 import { D1EvaluationRepository } from "./evaluations";
 
@@ -130,10 +134,7 @@ function workspaceDatabase(reviewCount: number, scoresPerReview: number): Record
       criterion_id: `criterion-${scoreIndex + 1}`,
       value_number: scoreIndex === 0 ? null : scoreIndex + 3,
       value_text: scoreIndex === 0 ? "strong" : null,
-      origin: scoreIndex === 0 ? "ai" : "human",
-      human_confirmed_by: scoreIndex === 0 ? `reviewer-${reviewIndex + 1}` : null,
-      suggestion_id: scoreIndex === 0 ? `suggestion-${reviewIndex + 1}` : null,
-      suggestion_status: scoreIndex === 0 ? "edited" : null,
+      origin: "human",
       rubric_revision: 4,
       submission_revision: 5,
       updated_at: timestamp,
@@ -171,7 +172,7 @@ describe("D1EvaluationRepository organizer workspace hydration", () => {
     ]);
   });
 
-  it("uses a fixed five statements while preserving complete review score hydration", async () => {
+  it("uses a fixed five statements while preserving complete human review score hydration", async () => {
     const smallDatabase = workspaceDatabase(1, 1);
     const largeDatabase = workspaceDatabase(4, 3);
 
@@ -210,11 +211,8 @@ describe("D1EvaluationRepository organizer workspace hydration", () => {
       scores: {
         "criterion-1": {
           value: "strong",
-          origin: "ai",
+          origin: "human",
           evidence: ["review-1:criterion-1:first", "review-1:criterion-1:second"],
-          humanConfirmedBy: "reviewer-1",
-          suggestionId: "suggestion-1",
-          suggestionStatus: "edited",
           rubricRevision: 4,
           submissionRevision: 5,
         },
@@ -536,7 +534,6 @@ const review: EvaluationReview = {
       value: 4,
       origin: "human",
       evidence: ["Specific evidence"],
-      humanConfirmedBy: null,
       rubricRevision: 4,
       submissionRevision: 5,
       updatedAt: timestamp,
@@ -557,8 +554,8 @@ function database() {
   return new RecordingD1();
 }
 
-function batchSql(db: RecordingD1): string {
-  return db.batches[0]?.map((item) => item.sql).join("\n") ?? "";
+function batchSql(db: RecordingD1, batchIndex = 0): string {
+  return db.batches[batchIndex]?.map((item) => item.sql).join("\n") ?? "";
 }
 
 const operationalScheduleSchema = `
@@ -1043,6 +1040,84 @@ describe("D1EvaluationRepository compound CAS", () => {
     expect(assignmentGuard?.values.slice(0, 4)).toEqual(["org-1", "event-1", "assignment-1", 1]);
   });
 
+  it("batches the compound review authority guard before every review write", async () => {
+    const db = database();
+    await new D1EvaluationRepository(db as unknown as D1Database).writeReview({
+      authority: {
+        tenantId: assignment.tenantId,
+        eventId: assignment.eventId,
+        planId: assignment.planId,
+        roundId: assignment.roundId,
+        assignmentId: assignment.id,
+        submissionId: assignment.submissionId,
+        reviewerId: assignment.reviewerId,
+        expectedAssignmentVersion: assignment.version,
+      },
+      review,
+      expectedReviewVersion: null,
+      assignmentUpdate: {
+        ...assignment,
+        status: "in_progress",
+        version: assignment.version + 1,
+      },
+    });
+
+    expect(db.batches).toHaveLength(1);
+    const guard = db.batches[0]?.[0];
+    expect(guard?.sql).toContain("D1_CAS_CONFLICT");
+    expect(batchSql(db)).toContain("status IN ('assigned', 'in_progress')");
+    expect(batchSql(db)).toContain("FROM evaluation_conflicts");
+    expect(batchSql(db)).toContain("FROM submissions");
+    expect(batchSql(db)).toContain("status = 'submitted'");
+    expect(batchSql(db)).toContain("FROM submission_versions");
+    expect(batchSql(db)).toContain("FROM review_plans");
+    expect(batchSql(db)).toContain("FROM review_rounds");
+    expect(batchSql(db)).toContain("FROM evaluation_decisions");
+    expect(batchSql(db)).toContain("INSERT INTO evaluation_reviews");
+    expect(batchSql(db)).toContain("UPDATE review_assignments");
+    expect(guard?.values).toEqual([
+      "org-1",
+      "event-1",
+      "plan-1",
+      "round-1",
+      "submission-1",
+      "assignment-1",
+      "reviewer-1",
+      2,
+      "org-1",
+      "event-1",
+      "assignment-1",
+      "org-1",
+      "event-1",
+      "submission-1",
+      "org-1",
+      "event-1",
+      "submission-1",
+      "org-1",
+      "event-1",
+      "submission-1",
+      5,
+      "org-1",
+      "event-1",
+      "plan-1",
+      2,
+      2,
+      timestamp,
+      "org-1",
+      "event-1",
+      "plan-1",
+      "round-1",
+      3,
+      4,
+      timestamp,
+      timestamp,
+      "org-1",
+      "event-1",
+      "plan-1",
+      "submission-1",
+    ]);
+  });
+
   it("uses one tenant-scoped guard for assignment abstention and conflict insertion", async () => {
     const db = database();
     await new D1EvaluationRepository(db as unknown as D1Database).abstainAssignment(
@@ -1062,60 +1137,9 @@ describe("D1EvaluationRepository compound CAS", () => {
     );
 
     expect(db.batches).toHaveLength(1);
-    expect(batchSql(db)).toContain("EXISTS (SELECT 1 FROM review_assignments");
-    expect(batchSql(db)).toContain("NOT EXISTS (SELECT 1 FROM evaluation_conflicts");
+    expect(batchSql(db)).toMatch(/EXISTS \(\s*SELECT 1 FROM review_assignments/u);
+    expect(batchSql(db)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
     expect(batchSql(db)).toContain("INSERT INTO evaluation_conflicts");
-  });
-
-  it("resolves a suggestion, assignment, and review in one guarded batch", async () => {
-    const db = database();
-    const suggestion: EvaluationSuggestion = {
-      id: "suggestion-1",
-      tenantId: "org-1",
-      eventId: "event-1",
-      planId: "plan-1",
-      roundId: "round-1",
-      assignmentId: "assignment-1",
-      submissionId: "submission-1",
-      reviewerId: "reviewer-1",
-      rubricRevision: 4,
-      submissionRevision: 5,
-      criterionCandidates: [],
-      candidates: {},
-      provenance: {
-        provider: "provider",
-        model: "model",
-        generatedAt: timestamp,
-        sourceReferences: [],
-      },
-      status: "accepted",
-      version: 2,
-      history: [],
-      audit: [],
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-
-    await new D1EvaluationRepository(db as unknown as D1Database).resolveSuggestion(
-      suggestion,
-      1,
-      assignment,
-      1,
-      review,
-      null,
-      {
-        assignment,
-        expectedAssignmentVersion: 1,
-        authorizedAt: timestamp,
-      },
-    );
-
-    expect(db.batches).toHaveLength(1);
-    expect(batchSql(db)).toContain("evaluation_suggestions");
-    expect(batchSql(db)).toContain("review_assignments");
-    expect(batchSql(db)).toContain("evaluation_reviews");
-    expect(batchSql(db)).toContain("WITH RECURSIVE family");
-    expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(5);
   });
 
   it("tenant-scopes plan, assignment, review, suggestion, conflict, and decision reads", async () => {
@@ -1131,6 +1155,236 @@ describe("D1EvaluationRepository compound CAS", () => {
     for (const prepared of db.statements) {
       expect(prepared.sql).toContain("organization_id = ?");
       expect(prepared.values[0]).toBe("org-1");
+    }
+  });
+});
+
+const migratedSuggestion: EvaluationSuggestion = {
+  id: "suggestion-migrated-1",
+  tenantId: speakerLifecycleIds.organizationId,
+  eventId: speakerLifecycleIds.eventId,
+  planId: "plan-migrated-1",
+  roundId: "round-migrated-1",
+  assignmentId: null,
+  submissionId: speakerLifecycleIds.acceptedSubmissionId,
+  reviewerId: "organizer-migrated-1",
+  rubricRevision: 1,
+  submissionRevision: 1,
+  criterionCandidates: [],
+  candidates: {},
+  provenance: {
+    provider: "provider",
+    model: "model",
+    generatedAt: timestamp,
+    sourceReferences: [],
+  },
+  status: "pending",
+  version: 1,
+  history: [],
+  audit: [],
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+const migratedReview: EvaluationReview = {
+  ...review,
+  id: "review-migrated-1",
+  tenantId: speakerLifecycleIds.organizationId,
+  eventId: speakerLifecycleIds.eventId,
+  planId: "plan-migrated-1",
+  roundId: "round-migrated-1",
+  assignmentId: "assignment-migrated-1",
+  submissionId: speakerLifecycleIds.acceptedSubmissionId,
+  reviewerId: "reviewer-migrated-1",
+  planRevision: 1,
+  roundRevision: 1,
+  rubricRevision: 1,
+  submissionRevision: 1,
+  version: 1,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+function seedMigratedEvaluationAssignment(
+  database: ReturnType<typeof createSpeakerLifecycleFixture>["database"],
+): void {
+  database.executeScript(`
+    INSERT INTO review_plans (
+      id, organization_id, event_id, name, status, blind_review,
+      reviews_per_submission, max_assignments_per_reviewer, auto_distribute,
+      reviewer_projection_field_ids_json, reviewer_projection_file_ids_json,
+      version, revision_sync_pending, created_at, updated_at
+    ) VALUES (
+      '${migratedSuggestion.planId}', '${migratedSuggestion.tenantId}',
+      '${migratedSuggestion.eventId}', 'Migrated review', 'open', 0,
+      1, 5, 0, '[]', '[]', 1, 0, '${timestamp}', '${timestamp}'
+    );
+    INSERT INTO review_rounds (
+      id, organization_id, event_id, plan_id, name, sequence, revision,
+      rubric_id, rubric_revision, blind_review, anonymization
+    ) VALUES (
+      '${migratedSuggestion.roundId}', '${migratedSuggestion.tenantId}',
+      '${migratedSuggestion.eventId}', '${migratedSuggestion.planId}',
+      'Migrated round', 0, 1, 'rubric-migrated-1', 1, 0, 'none'
+    );
+    INSERT INTO submission_versions (
+      organization_id, event_id, submission_id, version, reason,
+      actor_id, idempotency_key, snapshot_json, created_at
+    ) VALUES (
+      '${migratedSuggestion.tenantId}', '${migratedSuggestion.eventId}',
+      '${migratedSuggestion.submissionId}', 1, 'draft_created',
+      'reviewer-migrated-1', NULL, '{}', '${timestamp}'
+    );
+    INSERT INTO review_assignments (
+      id, organization_id, event_id, plan_id, round_id, round_revision,
+      submission_id, reviewer_id, status, plan_version, rubric_revision,
+      submission_revision, version, created_at, updated_at
+    ) VALUES (
+      '${migratedSuggestion.assignmentId}', '${migratedSuggestion.tenantId}',
+      '${migratedSuggestion.eventId}', '${migratedSuggestion.planId}',
+      '${migratedSuggestion.roundId}', 1, '${migratedSuggestion.submissionId}',
+      '${migratedSuggestion.reviewerId}', 'in_progress', 1, 1, 1, 1,
+      '${timestamp}', '${timestamp}'
+    );
+  `);
+}
+
+describe("D1EvaluationRepository migrated lifecycle CAS", () => {
+  it("persists a suggestion through the migrated submissions.id guard", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      await repository.putSuggestion(migratedSuggestion, null, 1);
+
+      await expect(
+        repository.getSuggestion(migratedSuggestion.tenantId, migratedSuggestion.id),
+      ).resolves.toMatchObject({
+        id: migratedSuggestion.id,
+        status: "pending",
+      });
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("allows a fresh shared suggestion after the previous one becomes stale", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      await repository.putSuggestion(migratedSuggestion, null, 1);
+      const staled: EvaluationSuggestion = {
+        ...migratedSuggestion,
+        status: "stale",
+        version: migratedSuggestion.version + 1,
+        updatedAt: timestamp,
+      };
+      await repository.putSuggestion(staled, migratedSuggestion.version, 1, true);
+      const replacement: EvaluationSuggestion = {
+        ...migratedSuggestion,
+        id: "suggestion-migrated-replacement",
+        status: "pending",
+      };
+
+      await expect(repository.putSuggestion(replacement, null, 1)).resolves.toBeUndefined();
+      await expect(
+        repository.getSuggestion(migratedSuggestion.tenantId, replacement.id),
+      ).resolves.toMatchObject({ id: replacement.id, status: "pending" });
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("rejects a second active shared suggestion for the same triage scope", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      await repository.putSuggestion(migratedSuggestion, null, 1);
+      const duplicate = { ...migratedSuggestion, id: "suggestion-migrated-2" };
+
+      await expect(repository.putSuggestion(duplicate, null, 1)).rejects.toThrow();
+      await expect(
+        repository.getSuggestion(migratedSuggestion.tenantId, duplicate.id),
+      ).resolves.toBeNull();
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("persists no suggestion when withdrawal commits immediately before the D1 batch", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      fixture.database.beforeNextBatch(() => {
+        fixture.database.run(
+          `UPDATE submissions
+           SET status = 'withdrawn', version = version + 1, updated_at = '${timestamp}'
+           WHERE organization_id = '${migratedSuggestion.tenantId}'
+             AND event_id = '${migratedSuggestion.eventId}'
+             AND id = '${migratedSuggestion.submissionId}'`,
+        );
+      });
+
+      await expect(repository.putSuggestion(migratedSuggestion, null, 1)).rejects.toThrow();
+      await expect(
+        repository.getSuggestion(migratedSuggestion.tenantId, migratedSuggestion.id),
+      ).resolves.toBeNull();
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("persists no review when withdrawal commits immediately before the D1 batch", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      fixture.database.beforeNextBatch(() => {
+        fixture.database.run(
+          `UPDATE submissions
+           SET status = 'withdrawn', version = version + 1, updated_at = '${timestamp}'
+           WHERE organization_id = '${migratedReview.tenantId}'
+             AND event_id = '${migratedReview.eventId}'
+             AND id = '${migratedReview.submissionId}'`,
+        );
+      });
+
+      await expect(
+        repository.writeReview({
+          authority: {
+            tenantId: migratedReview.tenantId,
+            eventId: migratedReview.eventId,
+            planId: migratedReview.planId,
+            roundId: migratedReview.roundId,
+            assignmentId: migratedReview.assignmentId,
+            submissionId: migratedReview.submissionId,
+            reviewerId: migratedReview.reviewerId,
+            expectedAssignmentVersion: 1,
+          },
+          review: migratedReview,
+          expectedReviewVersion: null,
+          assignmentUpdate: {
+            ...assignment,
+            id: migratedReview.assignmentId,
+            tenantId: migratedReview.tenantId,
+            eventId: migratedReview.eventId,
+            planId: migratedReview.planId,
+            roundId: migratedReview.roundId,
+            submissionId: migratedReview.submissionId,
+            reviewerId: migratedReview.reviewerId,
+            status: "in_progress",
+            version: 2,
+          },
+        }),
+      ).rejects.toThrow();
+      await expect(
+        repository.getReview(migratedReview.tenantId, migratedReview.assignmentId),
+      ).resolves.toBeNull();
+    } finally {
+      fixture.dispose();
     }
   });
 });

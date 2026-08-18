@@ -18,5 +18,6 @@ export {
 export type { OpenAiResponsesBindingOptions } from "./openai";
 export {
   createOpenAiResponsesBinding,
+  DEFAULT_OPENAI_EVALUATION_MODEL,
   DEFAULT_OPENAI_RESPONSES_MODEL,
 } from "./openai";

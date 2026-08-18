@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createOpenAiResponsesBinding, DEFAULT_OPENAI_RESPONSES_MODEL } from "./openai";
+import {
+  createOpenAiResponsesBinding,
+  DEFAULT_OPENAI_EVALUATION_MODEL,
+  DEFAULT_OPENAI_RESPONSES_MODEL,
+} from "./openai";
 
 const SYNTHETIC_PROMPT = 'Return only {"ok":true} JSON.';
 
@@ -16,7 +20,7 @@ function responseBody(text: string): Record<string, unknown> {
 }
 
 describe("OpenAI Responses advisory binding", () => {
-  it("sends backend-authenticated JSON-mode requests and extracts REST output text", async () => {
+  it("sends backend-authenticated, non-stored JSON-mode requests and extracts REST output text", async () => {
     const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
     const binding = createOpenAiResponsesBinding({
       apiKey: "test-secret-never-print",
@@ -31,6 +35,7 @@ describe("OpenAI Responses advisory binding", () => {
         prompt: SYNTHETIC_PROMPT,
         response_format: { type: "json_object" },
         reasoning: { effort: "medium" },
+        temperature: 0,
       }),
     ).resolves.toEqual({ response: '{"ok":true}' });
 
@@ -40,9 +45,15 @@ describe("OpenAI Responses advisory binding", () => {
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
       model: "gpt-test",
       input: SYNTHETIC_PROMPT,
+      store: false,
       text: { format: { type: "json_object" } },
       reasoning: { effort: "medium" },
+      temperature: 0,
     });
+  });
+
+  it("uses GPT-5.6 Sol as the default evaluation model", () => {
+    expect(DEFAULT_OPENAI_EVALUATION_MODEL).toBe("gpt-5.6-sol");
   });
 
   it("maps strict JSON schemas to the Responses text format", async () => {

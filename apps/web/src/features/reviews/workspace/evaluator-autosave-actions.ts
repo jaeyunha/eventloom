@@ -1,6 +1,5 @@
 "use client";
 import type { ApiReviewContext } from "./api-api-review-context";
-import type { ApiSuggestion } from "./api-api-suggestion";
 import type { EvaluatorState } from "./evaluator-state";
 import { criterionNumericValue } from "./model-criterion-numeric-value";
 import { criterionOptionValue } from "./model-criterion-option-value";
@@ -28,7 +27,6 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
     autosaveQueue,
     setAutosaveState,
     setSubmitError,
-    suggestions,
   } = scope;
   function reportDraft(
     nextScores: Readonly<Record<string, string>> = scoreValues,
@@ -45,29 +43,6 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
       reviewVersion: nextVersion,
     });
   }
-  function suggestionForCriterion(criterionId: string): {
-    suggestion: ApiSuggestion;
-    candidate: {
-      value: number;
-      evidence: readonly string[];
-      provenance?: ApiSuggestion["candidates"][string][number]["provenance"];
-    };
-  } | null {
-    const criteria = assignment.round.rubric.criteria;
-    const criteriaById = new Map<string, (typeof criteria)[number]>();
-    for (const criterion of criteria) {
-      if (!criteriaById.has(criterion.id)) criteriaById.set(criterion.id, criterion);
-    }
-    for (const suggestion of suggestions) {
-      if (suggestion.status !== "pending") continue;
-      const criterion = criteriaById.get(criterionId);
-      if (criterion === undefined || criterionType(criterion) !== "numeric") continue;
-      const candidate = suggestion.candidates[criterionId]?.[0];
-      if (candidate !== undefined) return { suggestion, candidate };
-    }
-    return null;
-  }
-
   function applyAuthoritativeReview(review: NonNullable<ApiReviewContext["review"]>): void {
     setReviewVersion(review.version);
     reviewVersionRef.current = review.version;
@@ -129,29 +104,21 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
         }
         continue;
       }
-      const generated = suggestionForCriterion(criterion.id)?.candidate;
-      const hasSuggestionRecord = suggestions.some(
-        (candidate) => candidate.candidates[criterion.id]?.length !== undefined,
-      );
-      const suggestion =
-        generated ?? (hasSuggestionRecord ? undefined : assignment.aiSuggestions[criterion.id]);
+      const confirmed = nextConfirmed.has(criterion.id);
+      if (!confirmed) continue;
       const rawValue =
         criterionType(criterion) === "dropdown"
           ? (nextScores[criterion.id] ?? "")
-          : (nextScores[criterion.id] ??
-            (suggestion === undefined ? "" : String(suggestion.value)));
+          : (nextScores[criterion.id] ?? "");
       const numericValue =
         criterionType(criterion) === "dropdown"
           ? criterionNumericValue(criterion, rawValue)
           : Number(rawValue);
       if (!Number.isFinite(numericValue)) continue;
-      const confirmed = nextConfirmed.has(criterion.id);
-      if (!confirmed && suggestion === undefined) continue;
       scores.push({
         criterionId: criterion.id,
         value: numericValue,
-        origin: confirmed ? "human" : "ai",
-        ...(confirmed || suggestion === undefined ? {} : { evidence: suggestion.evidence }),
+        origin: "human",
       });
     }
     const review = await evaluationRequest<NonNullable<ApiReviewContext["review"]>>(
@@ -196,7 +163,6 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
   return {
     ...scope,
     reportDraft,
-    suggestionForCriterion,
     applyAuthoritativeReview,
     persistReview,
     enqueueAutosave,

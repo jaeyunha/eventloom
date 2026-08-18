@@ -3239,7 +3239,8 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       generateId: (prefix) => `${prefix}-local-${++crmSequence}`,
     },
   );
-  const evaluationRepository = new InMemoryEvaluationRepository();
+  const evaluationSubmissions = new InMemorySubmissionReviewSource();
+  const evaluationRepository = new InMemoryEvaluationRepository(evaluationSubmissions);
   localDecisionFenceChecker = async (fence) => {
     const decision = await evaluationRepository.getDecision(
       fence.tenantId,
@@ -3320,7 +3321,6 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     createdAt: SEEDED_AT,
     updatedAt: SEEDED_AT,
   };
-  const evaluationSubmissions = new InMemorySubmissionReviewSource();
   const localReviewMaterials = new Map<string, SubmissionReviewMaterial>();
   const localAcceptanceHandoff: EvaluationAcceptanceHandoff = {
     async accept(input: EvaluationAcceptanceHandoffInput): Promise<void> {

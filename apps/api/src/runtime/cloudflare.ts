@@ -56,6 +56,7 @@ import {
   type CloudflareAiBinding,
   createCloudflareAiProviders,
   createOpenAiResponsesBinding,
+  DEFAULT_OPENAI_EVALUATION_MODEL,
   DEFAULT_OPENAI_RESPONSES_MODEL,
 } from "../integrations/ai";
 import { createAirtableIntegrationDependencies } from "../integrations/airtable/runtime";
@@ -2533,18 +2534,18 @@ function selectedAiProvider(bindings: RuntimeBindings): SelectedAiProvider | nul
     const model = bindings.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_RESPONSES_MODEL;
     const agendaReasoningEffort = aiReasoningEffort(
       bindings.OPENAI_AGENDA_REASONING_EFFORT,
-      "medium",
+      "high",
     );
     const evaluationReasoningEffort = aiReasoningEffort(
       bindings.OPENAI_EVALUATION_REASONING_EFFORT,
-      "medium",
+      "high",
     );
     const remixReasoningEffort = aiReasoningEffort(bindings.OPENAI_REMIX_REASONING_EFFORT, "low");
     return {
       binding: createOpenAiResponsesBinding({ apiKey: openAiKey }),
       model,
       agendaModel: bindings.OPENAI_AGENDA_MODEL?.trim() || model,
-      evaluationModel: bindings.OPENAI_EVALUATION_MODEL?.trim() || model,
+      evaluationModel: bindings.OPENAI_EVALUATION_MODEL?.trim() || DEFAULT_OPENAI_EVALUATION_MODEL,
       remixModel: bindings.OPENAI_REMIX_MODEL?.trim() || model,
       ...(agendaReasoningEffort === null ? {} : { agendaReasoningEffort }),
       ...(evaluationReasoningEffort === null ? {} : { evaluationReasoningEffort }),
@@ -2610,7 +2611,7 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
   if (aiSelection === "openai") {
     for (const [name, value, fallback] of [
       ["OPENAI_AGENDA_REASONING_EFFORT", bindings.OPENAI_AGENDA_REASONING_EFFORT, "medium"],
-      ["OPENAI_EVALUATION_REASONING_EFFORT", bindings.OPENAI_EVALUATION_REASONING_EFFORT, "medium"],
+      ["OPENAI_EVALUATION_REASONING_EFFORT", bindings.OPENAI_EVALUATION_REASONING_EFFORT, "high"],
       ["OPENAI_REMIX_REASONING_EFFORT", bindings.OPENAI_REMIX_REASONING_EFFORT, "low"],
     ] as const) {
       if (aiReasoningEffort(value, fallback) === null) {

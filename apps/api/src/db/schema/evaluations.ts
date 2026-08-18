@@ -96,6 +96,7 @@ export const reviewRounds = sqliteTable(
     closesAt: text("closes_at"),
     blindReview: integer("blind_review", { mode: "boolean" }).notNull(),
     anonymization: text("anonymization", { enum: ["none", "single", "double"] }).notNull(),
+    aiTriageEnabled: integer("ai_triage_enabled", { mode: "boolean" }).default(false).notNull(),
     trackFilter: text("track_filter"),
   },
   (table) => [
@@ -543,12 +544,7 @@ export const evaluationScores = sqliteTable(
     criterionId: text("criterion_id").notNull(),
     valueNumber: real("value_number"),
     valueText: text("value_text"),
-    origin: text("origin", { enum: ["human", "ai"] }).notNull(),
-    humanConfirmedBy: text("human_confirmed_by"),
-    suggestionId: text("suggestion_id"),
-    suggestionStatus: text("suggestion_status", {
-      enum: ["pending", "accepted", "edited", "rejected", "stale"],
-    }),
+    origin: text("origin", { enum: ["human"] }).notNull(),
     rubricRevision: integer("rubric_revision").notNull(),
     submissionRevision: integer("submission_revision").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -564,23 +560,11 @@ export const evaluationScores = sqliteTable(
       ],
     }).onDelete("restrict"),
     index("evaluation_scores_review_idx").on(table.organizationId, table.eventId, table.reviewId),
-    index("evaluation_scores_suggestion_idx").on(
-      table.organizationId,
-      table.eventId,
-      table.suggestionId,
-    ),
     check(
       "evaluation_scores_one_value_check",
       sql`(${table.valueNumber} IS NOT NULL) <> (${table.valueText} IS NOT NULL)`,
     ),
-    check(
-      "evaluation_scores_origin_check",
-      sql`(${table.origin} = 'human' AND ${table.suggestionId} IS NULL AND ${table.suggestionStatus} IS NULL) OR (${table.origin} = 'ai' AND ${table.suggestionId} IS NOT NULL AND ${table.suggestionStatus} IS NOT NULL)`,
-    ),
-    check(
-      "evaluation_scores_confirmation_check",
-      sql`${table.humanConfirmedBy} IS NULL OR (${table.origin} = 'ai' AND ${table.suggestionStatus} IN ('accepted', 'edited'))`,
-    ),
+    check("evaluation_scores_origin_check", sql`${table.origin} = 'human'`),
     check(
       "evaluation_scores_revision_check",
       sql`${table.rubricRevision} > 0 AND ${table.submissionRevision} > 0`,
@@ -672,8 +656,10 @@ export const evaluationSuggestions = sqliteTable(
     eventId: text("event_id").notNull(),
     planId: text("plan_id").notNull(),
     roundId: text("round_id").notNull(),
-    assignmentId: text("assignment_id").notNull(),
+    /** Null for organizer-driven round-level suggestions. */
+    assignmentId: text("assignment_id"),
     submissionId: text("submission_id").notNull(),
+    /** Generating actor (organizer for round-level suggestions). */
     reviewerId: text("reviewer_id").notNull(),
     planRevision: integer("plan_revision").notNull(),
     rubricRevision: integer("rubric_revision").notNull(),
@@ -685,9 +671,9 @@ export const evaluationSuggestions = sqliteTable(
     generatedAt: text("generated_at").notNull(),
     sourceReferencesJson: text("source_references_json").notNull(),
     provenanceJson: text("provenance_json").notNull(),
-    status: text("status", {
-      enum: ["pending", "accepted", "edited", "rejected", "stale"],
-    }).notNull(),
+    status: text("status", { enum: ["pending", "stale", "overridden"] }).notNull(),
+    /** Serialized organizer override when status is overridden. */
+    overrideJson: text("override_json"),
     version: integer("version").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -697,20 +683,15 @@ export const evaluationSuggestions = sqliteTable(
       columns: [table.organizationId, table.eventId, table.planId],
       foreignColumns: [reviewPlans.organizationId, reviewPlans.eventId, reviewPlans.id],
     }).onDelete("restrict"),
-    foreignKey({
-      columns: [table.organizationId, table.eventId, table.assignmentId],
-      foreignColumns: [
-        reviewAssignments.organizationId,
-        reviewAssignments.eventId,
-        reviewAssignments.id,
-      ],
-    }).onDelete("restrict"),
     unique("evaluation_suggestions_organization_id_id_unique").on(table.organizationId, table.id),
     unique("evaluation_suggestions_event_id_unique").on(
       table.organizationId,
       table.eventId,
       table.id,
     ),
+    uniqueIndex("evaluation_suggestions_shared_active_scope_unique")
+      .on(table.organizationId, table.eventId, table.planId, table.roundId, table.submissionId)
+      .where(sql`${table.assignmentId} IS NULL AND ${table.status} IN ('pending', 'overridden')`),
     index("evaluation_suggestions_plan_idx").on(
       table.organizationId,
       table.eventId,
@@ -795,7 +776,7 @@ export const evaluationSuggestionHistory = sqliteTable(
     eventId: text("event_id").notNull(),
     suggestionId: text("suggestion_id").notNull(),
     ordinal: integer("ordinal").notNull(),
-    action: text("action", { enum: ["generate", "stale", "accept", "edit", "reject"] }).notNull(),
+    action: text("action", { enum: ["generate", "stale", "override"] }).notNull(),
     actorId: text("actor_id"),
     at: text("at").notNull(),
     reason: text("reason"),
