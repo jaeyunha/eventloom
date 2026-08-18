@@ -72,7 +72,6 @@ function assignment(
       identityRedacted: true,
     },
     review: null,
-    suggestions: [],
     plan: {
       id: "shared-plan",
       organizationId: tenantId,

@@ -57,7 +57,9 @@ export function OrganizerAiTriagePanel({
       <section className={styles.aiTriage} aria-label="AI triage">
         <div>
           <strong>AI triage</strong>
-          <span>{aiTriage.loading ? "Loading…" : busy ? "Generating…" : "Not generated"}</span>
+          <span role="status">
+            {aiTriage.loading ? "Loading…" : busy ? "Generating…" : "Not generated"}
+          </span>
         </div>
         {!aiTriage.loading ? (
           <Button
@@ -89,7 +91,7 @@ export function OrganizerAiTriagePanel({
       <div className={styles.aiTriageHeading}>
         <div>
           <strong>AI triage</strong>
-          <span>{suggestion.status}</span>
+          <span role="status">{suggestion.status}</span>
         </div>
         <Button
           type="button"
@@ -137,7 +139,6 @@ export function OrganizerAiTriagePanel({
             <Input
               id={`${suggestion.id}-${criterionId}-override`}
               type="number"
-              min={0}
               required
               value={values[criterionId] ?? String(candidate.value)}
               onChange={(event) =>

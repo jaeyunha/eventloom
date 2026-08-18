@@ -392,7 +392,6 @@ export interface ReviewContext {
   review: EvaluationReview | null;
   rubricRevision?: number;
   submissionRevision?: number;
-  suggestions?: readonly EvaluationSuggestion[];
 }
 
 export interface RubricTotal {

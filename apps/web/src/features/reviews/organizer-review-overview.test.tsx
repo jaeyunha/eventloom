@@ -207,6 +207,7 @@ describe("OrganizerReviewOverview", () => {
       }),
     );
     expect(loadingMarkup).toContain("Loading…");
+    expect(loadingMarkup).toContain('role="status"');
     expect(loadingMarkup).not.toContain(">Generate</button>");
 
     const errorMarkup = renderToStaticMarkup(

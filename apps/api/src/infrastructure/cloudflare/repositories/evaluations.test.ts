@@ -1268,6 +1268,34 @@ describe("D1EvaluationRepository migrated lifecycle CAS", () => {
     }
   });
 
+  it("allows a fresh shared suggestion after the previous one becomes stale", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      await repository.putSuggestion(migratedSuggestion, null, 1);
+      const staled: EvaluationSuggestion = {
+        ...migratedSuggestion,
+        status: "stale",
+        version: migratedSuggestion.version + 1,
+        updatedAt: timestamp,
+      };
+      await repository.putSuggestion(staled, migratedSuggestion.version, 1, true);
+      const replacement: EvaluationSuggestion = {
+        ...migratedSuggestion,
+        id: "suggestion-migrated-replacement",
+        status: "pending",
+      };
+
+      await expect(repository.putSuggestion(replacement, null, 1)).resolves.toBeUndefined();
+      await expect(
+        repository.getSuggestion(migratedSuggestion.tenantId, replacement.id),
+      ).resolves.toMatchObject({ id: replacement.id, status: "pending" });
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it("rejects a second active shared suggestion for the same triage scope", async () => {
     const fixture = createSpeakerLifecycleFixture();
     try {

@@ -2269,7 +2269,7 @@ describe("review drafts, AI assistance, and aggregates", () => {
     const suggestion = await generateTriage(service);
 
     const context = await service.getReviewContext(actor, assignment.id);
-    expect(context.suggestions ?? []).toEqual([]);
+    expect(context).not.toHaveProperty("suggestions");
     expect(await service.getAggregate(organizer, "plan-1", round.id, submission.id)).toMatchObject({
       submittedReviewCount: 0,
       averageWeightedTotal: null,
@@ -4724,11 +4724,23 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     const { service, plan } = await fixture({
       blindReview: true,
       reviewRound: triageRound,
-      reviewerProjection: { fieldIds: Object.keys(identifyingAnswers) },
+      reviewerProjection: {
+        fieldIds: Object.keys(identifyingAnswers),
+        fileIds: ["file-1"],
+      },
       submissionMaterial: {
         ...submission,
         answers: identifyingAnswers,
         identityFieldIds: ["speakerEmail"],
+        files: [
+          {
+            id: "file-1",
+            name: "Jane-Doe-CV.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 24_000,
+            url: "https://private-files.example.test/jane-cv.pdf",
+          },
+        ],
       },
       aiSuggestionProducer: async (input) => {
         capturedInput = input;
@@ -4752,9 +4764,14 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       ...Object.values(identifyingAnswers),
       "Speaker Name",
       "Identifying biography",
+      "Jane-Doe-CV.pdf",
+      "private-files.example.test",
     ]) {
       expect(providerPayload).not.toContain(identity);
     }
+    expect(capturedInput?.submission.files).toEqual([
+      { id: "redacted", name: "attachment", mimeType: "application/pdf", sizeBytes: 24_000 },
+    ]);
   });
 
   it("preserves explicitly projected answers for non-blind AI triage", async () => {
@@ -4777,6 +4794,35 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
 
     expect(capturedSubmission?.answers).toEqual({ experience: "Advanced" });
     expect(capturedSubmission?.identityRedacted).toBe(false);
+  });
+
+  it("regenerates after a revision change replaces the stale scorecard", async () => {
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      reviewRound: triageRound,
+      submissionMaterial: { ...submission, version: 1 },
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
+
+    const input = {
+      planId: plan.id,
+      roundId: triageRound.id,
+      submissionId: submission.id,
+    };
+    const first = await service.generateRoundAiSuggestions(organizer, input);
+
+    const regenerated = await service.generateRoundAiSuggestions(organizer, {
+      ...input,
+      regenerate: true,
+    });
+
+    expect(regenerated.id).not.toBe(first.id);
+    expect(regenerated.status).toBe("pending");
+    const listed = await service.listRoundAiSuggestions(organizer, plan.id, triageRound.id);
+    const active = listed.filter((item) => item.status !== "stale");
+    expect(active).toHaveLength(1);
+    expect(active[0]?.id).toBe(regenerated.id);
+    expect(listed.some((item) => item.id === first.id && item.status === "stale")).toBe(true);
   });
 
   it("persists exactly one shared scorecard when two organizers generate concurrently", async () => {

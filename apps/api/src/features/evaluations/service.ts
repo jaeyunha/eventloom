@@ -2772,7 +2772,16 @@ export class EvaluationService {
       submissionVersion: submissionRevision,
       round,
       submission: visibleSubmission.identityRedacted
-        ? { ...visibleSubmission, answers: {} }
+        ? {
+            ...visibleSubmission,
+            answers: {},
+            files: (visibleSubmission.files ?? []).map(({ mimeType, sizeBytes }) => ({
+              id: "redacted",
+              name: "attachment",
+              mimeType,
+              sizeBytes,
+            })),
+          }
         : visibleSubmission,
     };
     let result: EvaluationSuggestionProviderResult;

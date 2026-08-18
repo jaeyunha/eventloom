@@ -3,7 +3,7 @@ import type {
   EvaluationReviewerWorkspace,
   EvaluationReviewerWorkspaceAssignment,
 } from "../evaluations/service";
-import type { EvaluationActor, EvaluationSuggestion } from "../evaluations/types";
+import type { EvaluationActor } from "../evaluations/types";
 import {
   type AccessContextDependencies,
   AccessContextDependencyError,
@@ -95,19 +95,10 @@ function validatePlan(plan: AccessEvaluationPlan, organizationId: string): void 
 }
 
 function belongsToAssignment(
-  suggestion: EvaluationSuggestion,
   assignment: EvaluationReviewerWorkspaceAssignment,
   actor: EvaluationActor,
 ): boolean {
-  return (
-    suggestion.tenantId === actor.tenantId &&
-    suggestion.eventId === assignment.assignment.eventId &&
-    suggestion.planId === assignment.assignment.planId &&
-    suggestion.roundId === assignment.assignment.roundId &&
-    suggestion.assignmentId === assignment.assignment.id &&
-    suggestion.submissionId === assignment.assignment.submissionId &&
-    suggestion.reviewerId === actor.userId
-  );
+  return assignment.assignment.tenantId === actor.tenantId;
 }
 
 function validateAndLabelAssignment(
@@ -137,7 +128,7 @@ function validateAndLabelAssignment(
         review.assignmentId !== assignment.id ||
         review.submissionId !== assignment.submissionId ||
         review.reviewerId !== actor.userId)) ||
-    !(entry.suggestions ?? []).every((suggestion) => belongsToAssignment(suggestion, entry, actor))
+    !belongsToAssignment(entry, actor)
   ) {
     throw new AccessContextDependencyError(
       "The reviewer workspace returned data outside its organization scope.",
