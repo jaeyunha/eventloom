@@ -20,6 +20,17 @@ tenant-safe system.
 > release verification is still in progress; see the
 > [product contract](spec/eventloom.md) for current evidence and known gaps.
 
+## Origin
+
+Eventloom began as a submission to swyx's
+[Kill My SaaS](https://luma.com/ls-06v7) eval competition — a weekend
+challenge to clone sessionboard.com, with the winning entry receiving
+$10,000 and a Latent.Space writeup. In his
+[call for entries](https://x.com/swyx/status/2085517544795079014), swyx
+framed the premise as *"everyone wins except high margin low moat saas."*
+This repository is the open-sourced result of that attempt, now developed
+independently as Eventloom.
+
 [Quick start](#quick-start) · [Architecture](#architecture) ·
 [Self-hosting](#self-hosting) · [Documentation](#documentation) ·
 [License](#license)
@@ -275,6 +286,15 @@ The currently mounted public-v1 API is narrower than the full product contract:
 it exposes discovery and webhook administration through scoped bearer keys.
 Generic program-resource routes remain withheld until their public projections
 and concurrency contracts are publication-safe.
+
+## Hosted version and contact
+
+Running your own organization on Eventloom takes Cloudflare account setup,
+provider configuration, and operational care. If you would rather use a
+hosted deployment, or you want to discuss deploying Eventloom for your
+event program, reach out:
+
+- **Email:** [jaeyunha@namuh.co](mailto:jaeyunha@namuh.co)
 
 ## Documentation
 
