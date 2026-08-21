@@ -96,6 +96,7 @@ async function proxy(request: NextRequest, context: ApiProxyContext): Promise<Re
   headers.delete("content-length");
   headers.set("x-forwarded-host", request.nextUrl.host);
   headers.set("x-forwarded-proto", request.nextUrl.protocol.slice(0, -1));
+  headers.set("origin", request.nextUrl.origin);
 
   const upstreamController = new AbortController();
   let timedOut = false;
