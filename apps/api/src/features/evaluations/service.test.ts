@@ -3055,31 +3055,26 @@ describe("decision outcome projection", () => {
       { status: "rejected", decisionVersion: 3, submissionId: submission.id },
     ]);
   });
-  it("runs acceptance onboarding alongside the durable decision projection", async () => {
-    const started = new Set<string>();
-    let markBothStarted: (() => void) | undefined;
-    const bothStarted = new Promise<void>((resolve) => {
-      markBothStarted = resolve;
+  it("waits for durable decision projection before acceptance onboarding", async () => {
+    let projectionStarted: (() => void) | undefined;
+    const projectionHasStarted = new Promise<void>((resolve) => {
+      projectionStarted = resolve;
     });
-    let releaseWork: (() => void) | undefined;
-    const workReleased = new Promise<void>((resolve) => {
-      releaseWork = resolve;
+    let releaseProjection: (() => void) | undefined;
+    const projectionReleased = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
     });
-    const markStarted = (name: string) => {
-      started.add(name);
-      if (started.size === 2) markBothStarted?.();
-    };
+    let acceptanceStarted = false;
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async () => {
-          markStarted("projection");
-          await workReleased;
+          projectionStarted?.();
+          await projectionReleased;
         },
       },
       acceptanceHandoff: {
         accept: async () => {
-          markStarted("acceptance");
-          await workReleased;
+          acceptanceStarted = true;
         },
       },
     });
@@ -3089,12 +3084,14 @@ describe("decision outcome projection", () => {
       submissionId: submission.id,
       status: "accepted",
       reason: "Committee consensus",
-      idempotencyKey: "decision-concurrent-effects",
+      idempotencyKey: "decision-projection-before-acceptance",
     });
-    await bothStarted;
-    releaseWork?.();
+    await projectionHasStarted;
+    expect(acceptanceStarted).toBe(false);
+    releaseProjection?.();
 
     await expect(pending).resolves.toMatchObject({ status: "accepted" });
+    expect(acceptanceStarted).toBe(true);
   });
   it("returns after durable projection while scheduled acceptance onboarding continues", async () => {
     let markAcceptanceStarted: (() => void) | undefined;
@@ -3138,6 +3135,57 @@ describe("decision outcome projection", () => {
     expect(scheduled).toHaveLength(1);
     releaseAcceptance?.();
     await scheduled[0];
+  });
+  it("does not start handoffs when decision projection fails", async () => {
+    let acceptanceCalls = 0;
+    let reconciliationCalls = 0;
+    let scheduleCalls = 0;
+    const { service } = await fixture({
+      decisionProjection: {
+        projectDecision: async () => {
+          throw new Error("projection unavailable");
+        },
+      },
+      acceptanceHandoff: {
+        accept: async () => {
+          acceptanceCalls += 1;
+        },
+        reconcileSessionDecision: async () => {
+          reconciliationCalls += 1;
+        },
+      },
+    });
+
+    await expect(
+      service.recordDecision(
+        organizer,
+        {
+          planId: "plan-1",
+          submissionId: submission.id,
+          status: "accepted",
+          reason: "Committee consensus",
+          idempotencyKey: "projection-failure-accepted",
+        },
+        (operation) => {
+          void operation;
+          scheduleCalls += 1;
+          return true;
+        },
+      ),
+    ).rejects.toThrow("projection unavailable");
+    await expect(
+      service.recordDecision(organizer, {
+        planId: "plan-1",
+        submissionId: "submission-2",
+        status: "waitlisted",
+        reason: "Capacity changed",
+        idempotencyKey: "projection-failure-waitlisted",
+      }),
+    ).rejects.toThrow("projection unavailable");
+
+    expect(acceptanceCalls).toBe(0);
+    expect(reconciliationCalls).toBe(0);
+    expect(scheduleCalls).toBe(0);
   });
 
   it("surfaces projection failures and retries the persisted decision without duplicate success", async () => {

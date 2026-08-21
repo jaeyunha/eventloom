@@ -372,6 +372,156 @@ it("parses the published dynamic schema without dropping rules or reusable metad
   expect(published.form.rules[0]).toMatchObject({ id: "show-deck" });
   expect(published.organization.name).toBe("Eventloom");
 });
+describe("CFP form mutation field references", () => {
+  function formFixture() {
+    return {
+      id: "form-1",
+      tenantId: "org-1",
+      eventId: "event-1",
+      name: "CFP",
+      version: 1,
+      status: "draft" as const,
+      welcomeContent: "Welcome",
+      settings: {},
+      sections: [
+        { id: "proposal", title: "Proposal", description: "" },
+        { id: "people", title: "People", description: "" },
+      ],
+      submissionFields: [
+        {
+          id: "submission-company",
+          sectionId: "proposal",
+          key: "company",
+          label: "Company",
+          kind: "text",
+          required: false,
+          options: [],
+          fieldRef: "tenant.company",
+          fieldVersion: 4,
+        },
+        {
+          id: "submission-role",
+          sectionId: "proposal",
+          key: "role",
+          label: "Role",
+          kind: "text",
+          required: false,
+          options: [],
+          fieldRef: { id: "tenant.role", version: 2 },
+          fieldVersion: 2,
+        },
+        {
+          id: "submission-title",
+          sectionId: "proposal",
+          key: "title",
+          label: "Title",
+          kind: "text",
+          required: true,
+          options: [],
+        },
+      ],
+      participantFields: [
+        {
+          id: "participant-pronouns",
+          sectionId: "people",
+          key: "pronouns",
+          label: "Pronouns",
+          kind: "text",
+          required: false,
+          options: [],
+          fieldRef: "tenant.pronouns",
+          fieldVersion: 3,
+        },
+      ],
+      rules: [],
+    };
+  }
+
+  it("normalizes reusable field references in both create and save request bodies", async () => {
+    const requests: Array<{ method: string | undefined; body: Record<string, unknown> }> = [];
+    const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        method: init?.method,
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      });
+      return Response.json({ data: formFixture() });
+    }) as typeof fetch;
+    const api = createCfpApi("https://api.example.com", fetcher);
+
+    await api.createForm({
+      organizationId: "org-1",
+      eventId: "event-1",
+      form: formFixture(),
+    });
+    await api.saveForm({
+      organizationId: "org-1",
+      eventId: "event-1",
+      form: formFixture(),
+      expectedVersion: 1,
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.method)).toEqual(["POST", "PUT"]);
+    for (const { body } of requests) {
+      const form = body.form as {
+        submissionFields: Array<Record<string, unknown>>;
+        participantFields: Array<Record<string, unknown>>;
+      };
+      expect(form.submissionFields).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "submission-company",
+            fieldRef: { id: "tenant.company", version: 4 },
+          }),
+          expect.objectContaining({
+            id: "submission-role",
+            fieldRef: { id: "tenant.role", version: 2 },
+          }),
+          expect.objectContaining({ id: "submission-title" }),
+        ]),
+      );
+      expect(form.participantFields).toEqual([
+        expect.objectContaining({
+          id: "participant-pronouns",
+          fieldRef: { id: "tenant.pronouns", version: 3 },
+        }),
+      ]);
+      expect(form.submissionFields.every((field) => !("fieldVersion" in field))).toBe(true);
+      expect(form.participantFields.every((field) => !("fieldVersion" in field))).toBe(true);
+      expect(
+        form.submissionFields.find((field) => field.id === "submission-title"),
+      ).not.toHaveProperty("fieldRef");
+    }
+  });
+
+  it("rejects a legacy string reference without a positive version before fetch", async () => {
+    let fetchCount = 0;
+    const fetcher = (async () => {
+      fetchCount += 1;
+      return Response.json({ data: formFixture() });
+    }) as typeof fetch;
+    const api = createCfpApi("https://api.example.com", fetcher);
+    const form = formFixture();
+    const [firstSubmissionField] = form.submissionFields;
+    if (firstSubmissionField === undefined) throw new Error("Expected a submission field.");
+    form.submissionFields[0] = { ...firstSubmissionField, fieldVersion: 0 };
+
+    await expect(
+      api.createForm({
+        organizationId: "org-1",
+        eventId: "event-1",
+        form,
+      }),
+    ).rejects.toMatchObject({
+      name: "CfpApiError",
+      code: "CFP_INVALID_FIELD_REFERENCE",
+      status: 400,
+      message:
+        "Reusable field reference at submissionFields[0] requires a positive integer fieldVersion.",
+    });
+    expect(fetchCount).toBe(0);
+  });
+});
 describe("CFP mutation schema versions", () => {
   const submission = {
     id: "submission-1",

@@ -8,6 +8,9 @@ import {
   SubmissionListWorkspace,
 } from "./submission-workspace";
 import {
+  DECISION_COMMITTED_WITHOUT_DELIVERY_MESSAGE,
+  createEvaluationDecisionAttempt,
+  decisionAttemptMatches,
   decisionNotificationSummary,
   enrichCanonicalSubmission,
   getAcceptedHandoffMetadata,
@@ -19,6 +22,8 @@ import {
   loadOrganizerEventName,
   mapCanonicalSubmission,
   mergeCanonicalSubmissionEvaluation,
+  reconcileEvaluationDecisionFailure,
+  type EvaluationDecisionRecord,
   type OrganizerEvaluationWorkspace,
   submissionListState,
   submissionLoadErrorMessage,
@@ -158,6 +163,100 @@ describe("organizer submission workspace", () => {
         completedAt: "2026-08-13T20:00:00.000Z",
       }),
     ).toContain("Decision notification delivered");
+  });
+
+  describe("decision retries", () => {
+    const attempt = {
+      status: "accepted" as const,
+      reason: "Committee consensus",
+      idempotencyKey: "web-decision-committed",
+    };
+    const committedDecision = {
+      id: "decision-1",
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      planId: "plan-1",
+      submissionId: "submission-1",
+      status: "accepted" as const,
+      version: 1,
+      history: [
+        {
+          from: null,
+          to: "accepted" as const,
+          reason: attempt.reason,
+          decidedBy: "organizer-1",
+          decidedAt: "2027-01-03T12:00:00.000Z",
+          idempotencyKey: attempt.idempotencyKey,
+        },
+      ],
+      updatedAt: "2027-01-03T12:00:00.000Z",
+    } satisfies EvaluationDecisionRecord;
+
+    it("reconciles a committed decision into visible history", () => {
+      expect(
+        reconcileEvaluationDecisionFailure(committedDecision, attempt, "Gateway failed"),
+      ).toEqual({
+        status: "committed",
+        decision: committedDecision,
+        message: DECISION_COMMITTED_WITHOUT_DELIVERY_MESSAGE,
+      });
+    });
+    const [committedTransition] = committedDecision.history;
+    if (committedTransition === undefined) throw new Error("Expected a committed transition.");
+
+    it("retains the original error when reconciliation has no matching transition", () => {
+      expect(
+        reconcileEvaluationDecisionFailure(
+          {
+            ...committedDecision,
+            history: [{ ...committedTransition, reason: "A different reason" }],
+          },
+          attempt,
+          "Gateway failed",
+        ),
+      ).toEqual({ status: "retry", error: "Gateway failed" });
+      expect(reconcileEvaluationDecisionFailure(undefined, attempt, "Gateway failed")).toEqual({
+        status: "retry",
+        error: "Gateway failed",
+      });
+    });
+
+    it("reuses a key for the same trimmed payload", () => {
+      const randomUuid = vi.spyOn(globalThis.crypto, "randomUUID");
+      randomUuid.mockReturnValueOnce("attempt-1");
+
+      const first = createEvaluationDecisionAttempt("accepted", "  Committee consensus  ");
+      const retry = createEvaluationDecisionAttempt("accepted", "Committee consensus", first);
+
+      expect(first.idempotencyKey).toBe("web-decision-attempt-1");
+      expect(retry).toBe(first);
+      expect(decisionAttemptMatches(retry, "accepted", " Committee consensus ")).toBe(true);
+      randomUuid.mockRestore();
+    });
+
+    it("rotates the key after a payload change", () => {
+      const randomUuid = vi.spyOn(globalThis.crypto, "randomUUID");
+      randomUuid.mockReturnValueOnce("attempt-1").mockReturnValueOnce("attempt-2");
+
+      const first = createEvaluationDecisionAttempt("accepted", "Committee consensus");
+      const changed = createEvaluationDecisionAttempt("accepted", "A changed reason", first);
+
+      expect(first.idempotencyKey).toBe("web-decision-attempt-1");
+      expect(changed.idempotencyKey).toBe("web-decision-attempt-2");
+      randomUuid.mockRestore();
+    });
+
+    it("does not describe an ambiguous commit as queued notification delivery", () => {
+      const reconciliation = reconcileEvaluationDecisionFailure(
+        committedDecision,
+        attempt,
+        "Gateway failed",
+      );
+      if (reconciliation.status !== "committed")
+        throw new Error("Expected committed reconciliation.");
+      expect(reconciliation.message).toContain("notification/session delivery was not confirmed");
+      expect(reconciliation.message).not.toMatch(/queued/u);
+    });
   });
 
   it("distinguishes loading, failure, unconfigured, empty, and filtered states", () => {

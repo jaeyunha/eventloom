@@ -34,12 +34,18 @@ import { SubmissionDetailDrawer } from "./submission-detail-drawer";
 import styles from "./submission-workspace.module.css";
 import {
   answerText,
+  DECISION_COMMITTED_WITHOUT_DELIVERY_MESSAGE,
+  createEvaluationDecisionAttempt,
+  decisionAttemptMatches,
   decisionNotificationSummary,
+  reconcileEvaluationDecisionFailure,
+  type EvaluationDecisionAttempt,
   type EvaluationDecisionRecord,
   type EvaluationDecisionStatus,
   evaluationRequest,
   formatDateTime,
   getAcceptedHandoffMetadata,
+  loadOrganizerEvaluationDecision,
   type ReviewAssignment,
   type ReviewDataState,
   reviewDataIsReady,
@@ -74,6 +80,12 @@ const SUBMISSION_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
   timeZone: "UTC",
 });
+const decisionAttemptByScope = new Map<string, EvaluationDecisionAttempt>();
+const ambiguousDecisionScopes = new Set<string>();
+
+function decisionAttemptScope(baseUrl: string, submission: SubmissionRecord): string {
+  return `${baseUrl}\u0000${submission.eventId}\u0000${submission.evaluationPlanId ?? ""}\u0000${submission.id}`;
+}
 
 function submissionHref(eventId: string, submissionId: string, organizationId: string): string {
   return `${submissionListHref(eventId, organizationId)}/${encodeURIComponent(submissionId)}`;
@@ -1706,24 +1718,60 @@ function DecisionControl({
         : submission.status === "declined"
           ? "rejected"
           : "");
+  const initialReason = submission.decision?.history.at(-1)?.reason ?? "";
+  const attemptScope = decisionAttemptScope(baseUrl, submission);
+  const storedAttempt = decisionAttemptByScope.get(attemptScope);
   const [status, setStatus] = useState<EvaluationDecisionStatus | "">(initialStatus);
-  const [reason, setReason] = useState(submission.decision?.history.at(-1)?.reason ?? "");
+  const [reason, setReason] = useState(initialReason);
+  const [decisionAttempt, setDecisionAttempt] = useState<EvaluationDecisionAttempt | null>(() =>
+    initialStatus !== "" && decisionAttemptMatches(storedAttempt, initialStatus, initialReason)
+      ? storedAttempt
+      : null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notificationState, setNotificationState] = useState<"idle" | "queued" | "confirmed">(
-    submission.decision === undefined ? "idle" : "confirmed",
+  const [notificationState, setNotificationState] = useState<DecisionNotificationState>(() =>
+    ambiguousDecisionScopes.has(attemptScope)
+      ? "committed"
+      : submission.decision === undefined
+        ? "idle"
+        : "confirmed",
   );
   const hasDecisionApi = submission.evaluationPlanId !== undefined;
   const decisionHistory = submission.decision?.history ?? [];
   const canSubmit = hasDecisionApi && status !== "" && reason.trim().length >= 5 && !busy;
 
+  function clearAmbiguousCommit(): void {
+    ambiguousDecisionScopes.delete(attemptScope);
+    if (notificationState === "committed") setNotificationState("idle");
+  }
+
+  function updateAttemptForPayload(
+    nextStatus: EvaluationDecisionStatus | "",
+    nextReason: string,
+  ): void {
+    if (nextStatus !== "" && decisionAttemptMatches(decisionAttempt, nextStatus, nextReason))
+      return;
+    decisionAttemptByScope.delete(attemptScope);
+    setDecisionAttempt(null);
+    clearAmbiguousCommit();
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!canSubmit || submission.evaluationPlanId === undefined) return;
+    const selectedStatus = status as EvaluationDecisionStatus;
+    const selectedReason = reason.trim();
+    const attempt = createEvaluationDecisionAttempt(
+      selectedStatus,
+      selectedReason,
+      decisionAttempt,
+    );
+    decisionAttemptByScope.set(attemptScope, attempt);
+    setDecisionAttempt(attempt);
     setBusy(true);
     setError(null);
     try {
-      const selectedStatus = status as EvaluationDecisionStatus;
       const decision = await evaluationRequest<EvaluationDecisionRecord>(
         baseUrl,
         `/plans/${encodeURIComponent(submission.evaluationPlanId)}/submissions/${encodeURIComponent(submission.id)}/decision`,
@@ -1731,22 +1779,51 @@ function DecisionControl({
           method: "PUT",
           body: JSON.stringify({
             status: selectedStatus,
-            reason: reason.trim(),
+            reason: selectedReason,
             ...(submission.decision === undefined
               ? {}
               : { expectedVersion: submission.decision.version }),
-            idempotencyKey: `web-decision-${crypto.randomUUID()}`,
+            idempotencyKey: attempt.idempotencyKey,
           }),
         },
       );
+      decisionAttemptByScope.delete(attemptScope);
+      ambiguousDecisionScopes.delete(attemptScope);
+      setDecisionAttempt(null);
       onSaved(decision);
       setNotificationState("queued");
       setReason("");
     } catch (reasonValue: unknown) {
-      setError(
-        reasonValue instanceof Error ? reasonValue.message : "The decision could not be saved.",
+      const originalError =
+        reasonValue instanceof Error ? reasonValue.message : "The decision could not be saved.";
+      let reconciledDecision: EvaluationDecisionRecord | undefined;
+      try {
+        reconciledDecision = await loadOrganizerEvaluationDecision(
+          baseUrl,
+          submission.evaluationPlanId,
+          submission.id,
+        );
+      } catch {
+        // Keep the original PUT error when the reconciliation read is unavailable.
+      }
+      const reconciliation = reconcileEvaluationDecisionFailure(
+        reconciledDecision,
+        attempt,
+        originalError,
       );
-      setNotificationState("idle");
+      if (reconciliation.status === "committed") {
+        decisionAttemptByScope.set(attemptScope, attempt);
+        ambiguousDecisionScopes.add(attemptScope);
+        setDecisionAttempt(attempt);
+        setError(null);
+        setNotificationState("committed");
+        onSaved(reconciliation.decision);
+      } else {
+        decisionAttemptByScope.set(attemptScope, attempt);
+        setDecisionAttempt(attempt);
+        setError(reconciliation.error);
+        setNotificationState("idle");
+      }
     } finally {
       setBusy(false);
     }
@@ -1771,8 +1848,14 @@ function DecisionControl({
         onSubmit={(event) => {
           void handleSubmit(event);
         }}
-        onStatusChange={setStatus}
-        onReasonChange={setReason}
+        onStatusChange={(nextStatus) => {
+          setStatus(nextStatus);
+          updateAttemptForPayload(nextStatus, reason);
+        }}
+        onReasonChange={(nextReason) => {
+          setReason(nextReason);
+          updateAttemptForPayload(status, nextReason);
+        }}
       />
       <DecisionHistory
         submission={submission}
@@ -1784,7 +1867,7 @@ function DecisionControl({
   );
 }
 
-type DecisionNotificationState = "idle" | "queued" | "confirmed";
+type DecisionNotificationState = "idle" | "queued" | "confirmed" | "committed";
 
 type DecisionFormProps = Readonly<{
   status: EvaluationDecisionStatus | "";
@@ -1861,7 +1944,7 @@ function DecisionForm({
         disabled={!canSubmit}
       >
         Save {status === "accepted" ? "accept" : status === "rejected" ? "reject" : "waitlist"}{" "}
-        decision and queue notifications
+        decision
       </Button>
     </form>
   );
@@ -1905,7 +1988,12 @@ function DecisionHistory({
       ) : (
         <p className={styles.mutedText}>No decision has been recorded.</p>
       )}
-      {notificationState === "queued" ? (
+      {notificationState === "committed" ? (
+        <p className={styles.auditCallout} role="status">
+          {DECISION_COMMITTED_WITHOUT_DELIVERY_MESSAGE} Retry with the same request to safely
+          reconcile delivery.
+        </p>
+      ) : notificationState === "queued" ? (
         <p className={styles.successMessage} role="status">
           Decision notification queued for the all_participants audience.
           {status === "accepted"

@@ -3359,18 +3359,16 @@ export class EvaluationService {
     },
     scheduleAcceptance?: (operation: Promise<void>) => boolean,
   ): Promise<void> {
-    const projection = this.#runDecisionProjection(input);
+    await this.#runDecisionProjection(input);
     if (input.transition.to !== "accepted") {
-      const reconciliation = this.#runSessionDecisionReconciliation(input);
-      await Promise.all([projection, reconciliation]);
+      await this.#runSessionDecisionReconciliation(input);
       return;
     }
     const acceptance = this.#runAcceptanceHandoff(input);
     if (scheduleAcceptance?.(acceptance) === true) {
-      await projection;
       return;
     }
-    await Promise.all([projection, acceptance]);
+    await acceptance;
   }
   async #buildDistributionPreview(
     actor: EvaluationActor,
