@@ -32,7 +32,11 @@ export function OrganizerPlanActionsView({
     transition,
     reviseToDraft,
   } = controller;
-  const { eventTimeZone, eventStartsAt, eventEndsAt } = controller.seed;
+  const { eventTimeZone, eventStartsAt, eventEndsAt, sourceClosesAt } = controller.seed;
+  const unchangedPlanClosesAt =
+    eventTimeZone === undefined || typeof sourceClosesAt !== "string" || sourceClosesAt === ""
+      ? undefined
+      : [reviewLocalValue(sourceClosesAt, eventTimeZone)];
   const constraints =
     eventTimeZone === undefined || eventStartsAt === undefined || eventEndsAt === undefined
       ? undefined
@@ -87,11 +91,7 @@ export function OrganizerPlanActionsView({
               description="Update the deadline without exposing browser-native date controls."
               minimumDateTime={constraints?.minimum}
               maximumDateTime={constraints?.maximum}
-              unchangedValues={
-                eventTimeZone === undefined || controller.seed.closesAt === ""
-                  ? undefined
-                  : [reviewLocalValue(controller.seed.closesAt, eventTimeZone)]
-              }
+              unchangedValues={unchangedPlanClosesAt}
               clearable
               disabled={busy}
               onChange={setPlanClosesAt}

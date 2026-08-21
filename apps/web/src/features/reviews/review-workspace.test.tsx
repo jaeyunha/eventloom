@@ -1097,6 +1097,54 @@ describe("review workspace", () => {
     expect(markup).toContain("Reviews per proposal");
     expect(markup).not.toContain("Plan overview");
   });
+  it("renders event-timezone-backed draft plans with null closing dates", () => {
+    const seed = testPlan("event-empty");
+    const plan: ReviewPlanSeed = {
+      ...seed,
+      status: "draft",
+      closesAt: "—",
+      sourceClosesAt: null,
+      eventTimeZone: "America/New_York",
+      eventStartsAt: "2026-08-01T00:00:00.000Z",
+      eventEndsAt: "2026-08-31T23:59:59.000Z",
+      rounds: seed.rounds.map((round) => ({ ...round, closesAt: "—" })),
+    };
+    let markup = "";
+    expect(() => {
+      markup = renderToStaticMarkup(
+        createElement(ReviewWorkspace, {
+          eventId: "event-empty",
+          mode: "organizer",
+          initialState: { organizer: plan },
+        }),
+      );
+    }).not.toThrow();
+
+    expect(markup).toContain("Configure the plan");
+    expect(markup).toContain("Editable draft");
+    expect(markup).toContain("Overall review deadline");
+  });
+  it("keeps a valid authoritative closing instant available as a local draft value", () => {
+    const seed = testPlan("event-empty");
+    const plan: ReviewPlanSeed = {
+      ...seed,
+      status: "draft",
+      closesAt: "Aug 24, 2026",
+      sourceClosesAt: "2026-08-24T16:00:00.000Z",
+      eventTimeZone: "America/New_York",
+      eventStartsAt: "2026-08-01T00:00:00.000Z",
+      eventEndsAt: "2026-08-31T23:59:59.000Z",
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "event-empty",
+        mode: "organizer",
+        initialState: { organizer: plan },
+      }),
+    );
+
+    expect(markup).toContain('value="12:00"');
+  });
 
   it("keeps round reviewer-pool editing out of plan authoring", () => {
     const targetingSource = readFileSync(

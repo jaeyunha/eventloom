@@ -31,7 +31,9 @@ export function OrganizerRoundEditor({
           startsAt: eventStartsAt,
           endsAt: eventEndsAt,
         });
-  const originalRound = controller.seed.rounds.find((candidate) => candidate.id === round.id);
+  const originalRound = controller.seed.sourceRounds?.find(
+    (candidate) => candidate.id === round.id,
+  );
   return (
     <fieldset
       className={`${styles.scoreCard} ${styles.authoringRoundCard}`}
