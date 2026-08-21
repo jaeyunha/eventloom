@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useTheme } from "next-themes";
+import { useTheme } from "@/components/theme-provider";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { LandingIcon } from "./landing-icon";
 
