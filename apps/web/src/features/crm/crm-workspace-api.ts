@@ -13,6 +13,7 @@ import {
   type CrmMergeResult,
   type CrmNote,
   type CrmOutreachCommand,
+  type CrmOutreachRecipientPreview,
   type CrmPipelineEntry,
   type CrmSegment,
 } from "./crm-workspace-model";
@@ -60,6 +61,46 @@ export function idempotencyKey(prefix: string): string {
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `${prefix}-${random}`;
+}
+export type CrmOutreachSendSettlement =
+  | {
+      readonly status: "fulfilled";
+      readonly recipient: CrmOutreachRecipientPreview;
+      readonly receipt: CrmOutreachCommand;
+    }
+  | {
+      readonly status: "rejected";
+      readonly recipient: CrmOutreachRecipientPreview;
+      readonly error: unknown;
+    };
+
+export async function settleCrmOutreachRecipients(
+  recipients: readonly CrmOutreachRecipientPreview[],
+  send: (recipient: CrmOutreachRecipientPreview) => Promise<CrmOutreachCommand>,
+): Promise<readonly CrmOutreachSendSettlement[]> {
+  const settled = await Promise.allSettled(
+    recipients.map((recipient) => Promise.resolve().then(() => send(recipient))),
+  );
+  return settled.map((result, index) => {
+    const recipient = recipients[index];
+    if (recipient === undefined) {
+      throw new Error("The outreach settlement did not preserve recipient order.");
+    }
+    if (result.status === "fulfilled") {
+      const settlement: CrmOutreachSendSettlement = {
+        status: "fulfilled",
+        recipient,
+        receipt: result.value,
+      };
+      return settlement;
+    }
+    const settlement: CrmOutreachSendSettlement = {
+      status: "rejected",
+      recipient,
+      error: result.reason,
+    };
+    return settlement;
+  });
 }
 
 export function createCrmApi(

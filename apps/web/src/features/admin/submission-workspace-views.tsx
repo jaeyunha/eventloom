@@ -1943,8 +1943,9 @@ function DecisionForm({
         variant={status === "rejected" ? "destructive" : "default"}
         disabled={!canSubmit}
       >
-        Save {status === "accepted" ? "accept" : status === "rejected" ? "reject" : "waitlist"}{" "}
-        decision
+        {busy
+          ? "Saving decision…"
+          : `Save ${status === "accepted" ? "accept" : status === "rejected" ? "reject" : "waitlist"} decision`}
       </Button>
     </form>
   );
@@ -1995,9 +1996,10 @@ function DecisionHistory({
         </p>
       ) : notificationState === "queued" ? (
         <p className={styles.successMessage} role="status">
-          Decision notification queued for the all_participants audience.
+          Decision saved. Notification delivery is queued for background processing and is not yet
+          confirmed.
           {status === "accepted"
-            ? " Accepted-speaker onboarding is continuing through the idempotent background handoff."
+            ? " Accepted-speaker onboarding is queued for the idempotent background handoff."
             : " No accepted-speaker handoff is required for this outcome."}
         </p>
       ) : notificationState === "confirmed" ? (

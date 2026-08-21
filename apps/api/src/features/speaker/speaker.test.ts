@@ -1898,8 +1898,11 @@ describe("SpeakerService organizer speaker writes", () => {
     expect(repository.roster).toEqual([
       expect.objectContaining({ participantId: "participant-1", version: 5 }),
     ]);
-    expect(repository.readModelReads).toBe(1);
-    expect(repository.readModelResources).toEqual([{ profiles: true, tasks: true, assets: true }]);
+    expect(repository.readModelReads).toBe(2);
+    expect(repository.readModelResources).toEqual([
+      { profiles: true, tasks: true, assets: true },
+      { profiles: true, tasks: true, assets: true },
+    ]);
     expect(repository.rosterReads).toBe(0);
     expect(repository.profileReads).toBe(0);
   });

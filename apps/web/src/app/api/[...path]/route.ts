@@ -6,21 +6,9 @@ interface ApiProxyContext {
   params: Promise<{ path: string[] }>;
 }
 const API_PROXY_DEADLINE_MS = 15_000;
-const DECISION_MUTATION_DEADLINE_MS = 60_000;
 const CAPABILITY_UPLOAD_DEADLINE_MS = 5 * 60_000;
 
 function proxyDeadlineMs(method: string, path: readonly string[]): number {
-  if (
-    method === "PUT" &&
-    path.length === 7 &&
-    path[0] === "admin" &&
-    path[1] === "evaluations" &&
-    path[2] === "plans" &&
-    path[4] === "submissions" &&
-    path[6] === "decision"
-  ) {
-    return DECISION_MUTATION_DEADLINE_MS;
-  }
   return method === "PUT" &&
     path.length === 6 &&
     path[0] === "speaker" &&

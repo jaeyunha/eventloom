@@ -42,6 +42,7 @@ import {
   mergeProgressSummaries,
   mergeSpeaker,
   normalizeRoster,
+  speakerMutationOutcomeUnknown,
   speakerProgressFor,
   speakerSecondaryLoadKey,
 } from "./speaker-data-logic";
@@ -969,7 +970,7 @@ function profileHeadshotDetailsReducer(
       return {
         ...state,
         profileMutationStatus: "pending",
-        profileMutationMessage: "Profile write accepted. Reloading authoritative speaker data…",
+        profileMutationMessage: "Profile write accepted. Applying authoritative speaker data…",
       };
     case "profile-saved":
       return {
@@ -1272,10 +1273,12 @@ function useSpeakerWorkspaceController({
     dispatchRoster({ type: "progress-load-started" });
     void speakerProgressFor(api, roster.speakers, organizationId, eventId, controller.signal)
       .then((nextProgress) => {
+        settled = true;
         if (!active || requestId !== rosterRequestRef.current) return;
         dispatchRoster({ type: "progress-loaded", progress: nextProgress });
       })
       .catch((reason: unknown) => {
+        settled = true;
         if (!active || requestId !== rosterRequestRef.current) return;
         dispatchRoster({
           type: "progress-load-failed",
@@ -1668,37 +1671,6 @@ function useSpeakerWorkspaceController({
       rosterRequestRef.current = requestId;
       dispatchRoster({ type: "roster-authoritative-applied", roster: normalizedRoster, message });
       dispatchImportTaskInvitation({ type: "invitation-cleared" });
-      if (api !== null) {
-        const progressController = new AbortController();
-        let progressTimedOut = false;
-        const progressTimeout = setTimeout(() => {
-          progressTimedOut = true;
-          progressController.abort();
-        }, ASYNC_ACTION_TIMEOUT_MS);
-        void speakerProgressFor(
-          api,
-          normalizedRoster.speakers,
-          organizationId,
-          eventId,
-          progressController.signal,
-        )
-          .then((nextProgress) => {
-            if (requestId !== rosterRequestRef.current) return;
-            dispatchRoster({ type: "progress-loaded", progress: nextProgress });
-          })
-          .catch((reason: unknown) => {
-            if (requestId !== rosterRequestRef.current) return;
-            dispatchRoster({
-              type: "progress-load-failed",
-              message: progressTimedOut
-                ? "Speaker progress refresh timed out. Try again."
-                : errorMessage(reason),
-            });
-          })
-          .finally(() => {
-            clearTimeout(progressTimeout);
-          });
-      }
     } catch (reason: unknown) {
       dispatchRoster({
         type: "roster-load-failed",
@@ -1732,35 +1704,6 @@ function useSpeakerWorkspaceController({
       if (requestId !== rosterRequestRef.current) return null;
       dispatchRoster({ type: "roster-loaded", roster: nextRoster });
       if (message) dispatchRoster({ type: "notice-set", message });
-      const progressController = new AbortController();
-      let progressTimedOut = false;
-      const progressTimeout = setTimeout(() => {
-        progressTimedOut = true;
-        progressController.abort();
-      }, ASYNC_ACTION_TIMEOUT_MS);
-      void speakerProgressFor(
-        api,
-        nextRoster.speakers,
-        organizationId,
-        eventId,
-        progressController.signal,
-      )
-        .then((nextProgress) => {
-          if (requestId !== rosterRequestRef.current) return;
-          dispatchRoster({ type: "progress-loaded", progress: nextProgress });
-        })
-        .catch((reason: unknown) => {
-          if (requestId !== rosterRequestRef.current) return;
-          dispatchRoster({
-            type: "progress-load-failed",
-            message: progressTimedOut
-              ? "Speaker progress refresh timed out. Try again."
-              : errorMessage(reason),
-          });
-        })
-        .finally(() => {
-          clearTimeout(progressTimeout);
-        });
       return nextRoster;
     } catch (reason: unknown) {
       if (requestId === rosterRequestRef.current) {
@@ -1891,30 +1834,24 @@ function useSpeakerWorkspaceController({
       }
       assertAdvancedSpeakerRevision(updated, participantId, expectedVersion, eventId);
       dispatchProfileHeadshotDetails({ type: "profile-write-accepted" });
-      const reloaded = await reload();
-      const persisted = reloaded?.speakers.find(
-        (speaker) => speaker.participantId === participantId,
-      );
-      if (persisted === undefined) {
-        throw new TypeError("The reloaded speaker is missing from the roster.");
-      }
-      assertAdvancedSpeakerRevision(persisted, participantId, expectedVersion, eventId);
+      applyAuthoritativeRoster(updatedRoster);
       dispatchProfileHeadshotDetails({
         type: "profile-saved",
-        speaker: persisted,
+        speaker: updated,
         ...(eventTemporalContext === undefined
           ? {}
           : { eventTimeZone: eventTemporalContext.timeZone }),
       });
       dispatchRoster({
         type: "notice-set",
-        message: "Speaker profile saved and reloaded from the server.",
+        message: "Speaker profile saved from the server.",
       });
     } catch (reason: unknown) {
       const conflict =
         reason instanceof SpeakerApiError &&
         (reason.status === 409 || reason.code === "CONFLICT" || reason.code === "VERSION_CONFLICT");
-      if (conflict) {
+      const outcomeUnknown = speakerMutationOutcomeUnknown(reason);
+      if (conflict || outcomeUnknown) {
         dispatchProfileHeadshotDetails({ type: "profile-conflict" });
         const reloaded = await reload();
         const current = reloaded?.speakers.find(

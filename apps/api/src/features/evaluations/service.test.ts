@@ -527,6 +527,10 @@ async function fixture(
       { ...submission, id: "submission-2", status: "submitted", title: "Another session" },
     ]);
   const repository = options.repository ?? new InMemoryEvaluationRepository(submissions);
+  Object.defineProperty(repository, "usesDurableDecisionOutbox", {
+    configurable: true,
+    value: true,
+  });
   const service = new EvaluationService(
     repository,
     submissions,
@@ -2764,6 +2768,14 @@ describe("decision outcome projection", () => {
       idempotencyKey: "historical-replay-accepted",
     };
     const accepted = await service.recordDecision(organizer, acceptedInput);
+    await service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      decisionVersion: accepted.version,
+      transitionIdempotencyKey: "historical-replay-accepted",
+    });
     const rejected = await service.recordDecision(organizer, {
       planId: "plan-1",
       submissionId: submission.id,
@@ -2772,8 +2784,26 @@ describe("decision outcome projection", () => {
       idempotencyKey: "historical-replay-rejected",
       expectedVersion: accepted.version,
     });
+    await service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "rejected",
+      decisionVersion: rejected.version,
+      transitionIdempotencyKey: "historical-replay-rejected",
+    });
 
     await expect(service.recordDecision(organizer, acceptedInput)).resolves.toEqual(rejected);
+    await expect(
+      service.replayPersistedDecisionWork({
+        tenantId,
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "accepted",
+        decisionVersion: accepted.version,
+        transitionIdempotencyKey: "historical-replay-accepted",
+      }),
+    ).resolves.toBeUndefined();
     expect(rejected).toMatchObject({ status: "rejected", version: 2 });
     expect(projected.map(({ status, decisionVersion }) => ({ status, decisionVersion }))).toEqual([
       { status: "accepted", decisionVersion: 1 },
@@ -2898,6 +2928,14 @@ describe("decision outcome projection", () => {
       reason: "Accepted for the final program.",
       idempotencyKey: "production-decision-a",
     });
+    await service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      decisionVersion: accepted.version,
+      transitionIdempotencyKey: "production-decision-a",
+    });
     const replay = await service.recordDecision(organizer, {
       planId: "plan-1",
       submissionId: submission.id,
@@ -2911,6 +2949,14 @@ describe("decision outcome projection", () => {
       status: "rejected",
       reason: "The proposal does not fit the final program.",
       idempotencyKey: "production-decision-b",
+    });
+    await service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: "submission-2",
+      status: "rejected",
+      decisionVersion: rejected.version,
+      transitionIdempotencyKey: "production-decision-b",
     });
     const staleResults = await Promise.allSettled([
       service.recordDecision(organizer, {
@@ -2998,6 +3044,14 @@ describe("decision outcome projection", () => {
       reason: "Committee consensus",
       idempotencyKey: "decision-1",
     });
+    await service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      decisionVersion: accepted.version,
+      transitionIdempotencyKey: "decision-1",
+    });
     const replay = await service.recordDecision(organizer, {
       planId: "plan-1",
       submissionId: submission.id,
@@ -3013,6 +3067,14 @@ describe("decision outcome projection", () => {
       idempotencyKey: "decision-2",
       expectedVersion: accepted.version,
     });
+    await service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "waitlisted",
+      decisionVersion: waitlisted.version,
+      transitionIdempotencyKey: "decision-2",
+    });
     const rejected = await service.recordDecision(organizer, {
       planId: "plan-1",
       submissionId: submission.id,
@@ -3020,6 +3082,14 @@ describe("decision outcome projection", () => {
       reason: "Program fit changed",
       idempotencyKey: "decision-3",
       expectedVersion: waitlisted.version,
+    });
+    await service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "rejected",
+      decisionVersion: rejected.version,
+      transitionIdempotencyKey: "decision-3",
     });
 
     expect(replay).toEqual(accepted);
@@ -3055,7 +3125,7 @@ describe("decision outcome projection", () => {
       { status: "rejected", decisionVersion: 3, submissionId: submission.id },
     ]);
   });
-  it("waits for durable decision projection before acceptance onboarding", async () => {
+  it("does not delay decision persistence while projection and handoff remain unresolved", async () => {
     let projectionStarted: (() => void) | undefined;
     const projectionHasStarted = new Promise<void>((resolve) => {
       projectionStarted = resolve;
@@ -3079,21 +3149,41 @@ describe("decision outcome projection", () => {
       },
     });
 
-    const pending = service.recordDecision(organizer, {
+    const decision = await service.recordDecision(organizer, {
       planId: "plan-1",
       submissionId: submission.id,
       status: "accepted",
       reason: "Committee consensus",
       idempotencyKey: "decision-projection-before-acceptance",
     });
+    expect(decision).toMatchObject({ status: "accepted", version: 1 });
+    expect(acceptanceStarted).toBe(false);
+
+    const replay = service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      decisionVersion: decision.version,
+      transitionIdempotencyKey: "decision-projection-before-acceptance",
+    });
     await projectionHasStarted;
+    await expect(
+      service.recordDecision(organizer, {
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "accepted",
+        reason: "Committee consensus",
+        idempotencyKey: "decision-projection-before-acceptance",
+      }),
+    ).resolves.toEqual(decision);
     expect(acceptanceStarted).toBe(false);
     releaseProjection?.();
 
-    await expect(pending).resolves.toMatchObject({ status: "accepted" });
+    await expect(replay).resolves.toBeUndefined();
     expect(acceptanceStarted).toBe(true);
   });
-  it("returns after durable projection while scheduled acceptance onboarding continues", async () => {
+  it("keeps projection-before-handoff ordering in outbox replay", async () => {
     let markAcceptanceStarted: (() => void) | undefined;
     const acceptanceStarted = new Promise<void>((resolve) => {
       markAcceptanceStarted = resolve;
@@ -3102,7 +3192,6 @@ describe("decision outcome projection", () => {
     const acceptanceReleased = new Promise<void>((resolve) => {
       releaseAcceptance = resolve;
     });
-    const scheduled: Promise<void>[] = [];
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async () => undefined,
@@ -3115,31 +3204,37 @@ describe("decision outcome projection", () => {
       },
     });
 
-    const decision = await service.recordDecision(
-      organizer,
-      {
-        planId: "plan-1",
-        submissionId: submission.id,
-        status: "accepted",
-        reason: "Committee consensus",
-        idempotencyKey: "decision-scheduled-acceptance",
-      },
-      (operation) => {
-        scheduled.push(operation);
-        return true;
-      },
-    );
+    const decision = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Committee consensus",
+      idempotencyKey: "decision-outbox-order",
+    });
+    const replay = service.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      decisionVersion: decision.version,
+      transitionIdempotencyKey: "decision-outbox-order",
+    });
 
-    expect(decision.status).toBe("accepted");
     await acceptanceStarted;
-    expect(scheduled).toHaveLength(1);
+    let settled = false;
+    void replay.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
     releaseAcceptance?.();
-    await scheduled[0];
+    await expect(replay).resolves.toBeUndefined();
+    expect(settled).toBe(true);
   });
-  it("does not start handoffs when decision projection fails", async () => {
+  it("does not start handoffs when durable projection replay fails", async () => {
     let acceptanceCalls = 0;
     let reconciliationCalls = 0;
-    let scheduleCalls = 0;
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async () => {
@@ -3156,39 +3251,47 @@ describe("decision outcome projection", () => {
       },
     });
 
+    const accepted = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Committee consensus",
+      idempotencyKey: "projection-failure-accepted",
+    });
+    const waitlisted = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: "submission-2",
+      status: "waitlisted",
+      reason: "Capacity changed",
+      idempotencyKey: "projection-failure-waitlisted",
+    });
+
     await expect(
-      service.recordDecision(
-        organizer,
-        {
-          planId: "plan-1",
-          submissionId: submission.id,
-          status: "accepted",
-          reason: "Committee consensus",
-          idempotencyKey: "projection-failure-accepted",
-        },
-        (operation) => {
-          void operation;
-          scheduleCalls += 1;
-          return true;
-        },
-      ),
+      service.replayPersistedDecisionWork({
+        tenantId,
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "accepted",
+        decisionVersion: accepted.version,
+        transitionIdempotencyKey: "projection-failure-accepted",
+      }),
     ).rejects.toThrow("projection unavailable");
     await expect(
-      service.recordDecision(organizer, {
+      service.replayPersistedDecisionWork({
+        tenantId,
         planId: "plan-1",
         submissionId: "submission-2",
         status: "waitlisted",
-        reason: "Capacity changed",
-        idempotencyKey: "projection-failure-waitlisted",
+        decisionVersion: waitlisted.version,
+        transitionIdempotencyKey: "projection-failure-waitlisted",
       }),
     ).rejects.toThrow("projection unavailable");
 
     expect(acceptanceCalls).toBe(0);
     expect(reconciliationCalls).toBe(0);
-    expect(scheduleCalls).toBe(0);
   });
 
-  it("surfaces projection failures and retries the persisted decision without duplicate success", async () => {
+  it("retries persisted decision work without delaying the decision request", async () => {
     let shouldFail = true;
     let attempts = 0;
     const { service } = await fixture({
@@ -3207,19 +3310,28 @@ describe("decision outcome projection", () => {
       reason: "Capacity changed",
       idempotencyKey: "decision-retry",
     };
-    await expect(service.recordDecision(organizer, input)).rejects.toThrow(
+    const decision = await service.recordDecision(organizer, input);
+    expect(decision).toMatchObject({ status: "waitlisted", version: 1 });
+    expect(attempts).toBe(0);
+
+    const replayInput = {
+      tenantId,
+      planId: input.planId,
+      submissionId: input.submissionId,
+      status: input.status,
+      decisionVersion: decision.version,
+      transitionIdempotencyKey: input.idempotencyKey,
+    };
+    await expect(service.replayPersistedDecisionWork(replayInput)).rejects.toThrow(
       "projection unavailable",
     );
-    expect(await service.getDecision(organizer, input.planId, input.submissionId)).toMatchObject({
-      status: "waitlisted",
-      version: 1,
-    });
+    expect(attempts).toBe(1);
 
     shouldFail = false;
-    await expect(service.recordDecision(organizer, input)).resolves.toMatchObject({
-      status: "waitlisted",
-      version: 1,
-    });
+    await expect(service.replayPersistedDecisionWork(replayInput)).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
+
+    await expect(service.recordDecision(organizer, input)).resolves.toEqual(decision);
     expect(attempts).toBe(2);
   });
 });

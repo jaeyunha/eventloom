@@ -639,9 +639,13 @@ function updateAssignment(database: D1Database, assignment: EvaluationAssignment
 export class D1EvaluationRepository implements EvaluationRepository {
   readonly authority = "transactional" as const;
   readonly supportsAtomicPlanRevisionSync = true;
+  get usesDurableDecisionOutbox(): boolean {
+    return this.deferDecisionWork;
+  }
   constructor(
     private readonly database: D1Database,
     private readonly decisionOutboxQueue?: Queue<CloudflareOutboxMessage>,
+    private readonly deferDecisionWork = decisionOutboxQueue !== undefined,
   ) {}
 
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {

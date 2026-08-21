@@ -2266,7 +2266,7 @@ export class CrmService {
       }
       const saved = await repository.saveOutreach(command);
       assertTenant(saved, organizationId);
-      await repository.appendHistory({
+      const historyEntry: CrmHistoryEntry = {
         id: this.#generateId("history"),
         organizationId,
         contactId,
@@ -2285,7 +2285,8 @@ export class CrmService {
           failedCount: command.failedCount,
           terminal: command.terminal,
         },
-      });
+      };
+      await repository.appendHistory(historyEntry);
       await repository.saveCommandResult(organizationId, "outreach", key, saved);
       return clone(saved);
     });

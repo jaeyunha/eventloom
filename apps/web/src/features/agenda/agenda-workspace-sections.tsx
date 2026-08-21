@@ -149,7 +149,7 @@ function EntryForm({
   const [formState, dispatchForm] = useReducer(entryFormReducer, {
     sessionId: firstSession,
     roomId: entry?.roomId ?? initialPlacement?.roomId ?? rooms[0]?.id ?? "",
-    trackIds: entry?.trackIds ?? (tracks[0] ? [tracks[0].id] : []),
+    trackIds: entry?.trackIds ?? [],
     startsAtLocal: entry?.startsAtLocal ?? initialPlacement?.startsAtLocal ?? `${eventStart}T09:00`,
     endsAtLocal: entry?.endsAtLocal ?? initialPlacement?.endsAtLocal ?? `${eventStart}T10:00`,
   });
@@ -160,6 +160,15 @@ function EntryForm({
     entry?.endDisambiguation,
   );
   const { sessionId, roomId, trackIds, startsAtLocal, endsAtLocal } = formState;
+  const submitDisabledReason = busy
+    ? "Saving…"
+    : !sessionId
+      ? "Choose an accepted session before adding it to the draft."
+      : !roomId
+        ? "Choose a room before adding it to the draft."
+        : endsAtLocal <= startsAtLocal
+          ? "Choose an end time after the start time."
+          : null;
   const trackIdSet = useMemo(() => new Set(trackIds), [trackIds]);
   const [formError, setFormError] = useState<string | null>(null);
   const [roomCreatorOpen, setRoomCreatorOpen] = useState(false);
@@ -311,7 +320,10 @@ function EntryForm({
         </div>
       ) : null}
       <fieldset className={styles.trackOptions}>
-        <legend>Tracks</legend>
+        <legend>Tracks (optional)</legend>
+        <small>
+          Tracks are optional; a known room and valid times are enough to schedule a session.
+        </small>
         {tracks.map((track) => (
           <label key={track.id}>
             <input
@@ -384,6 +396,10 @@ function EntryForm({
         <p className={styles.formError} role="alert">
           {formError}
         </p>
+      ) : submitDisabledReason ? (
+        <p className={styles.formError} role="status">
+          {submitDisabledReason}
+        </p>
       ) : null}
       <div className={styles.formActions}>
         {onCancel ? (
@@ -391,8 +407,12 @@ function EntryForm({
             Cancel
           </button>
         ) : null}
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
-          {busy ? "Saving..." : entry ? "Save changes" : "Add to draft"}
+        <button
+          className={styles.primaryButton}
+          type="submit"
+          disabled={submitDisabledReason !== null}
+        >
+          {busy ? "Saving…" : entry ? "Save changes" : "Add to draft"}
         </button>
       </div>
     </form>
@@ -614,7 +634,6 @@ export function AgendaBoard({
           sessionsHref={sessionsHref}
           showAddForm={showAddForm}
           data={data}
-          settingsHref={settingsHref}
           hasRooms={hasRooms}
           hasScheduleInventory={hasScheduleInventory}
           placementComplete={placementComplete}
@@ -989,7 +1008,6 @@ interface AgendaScheduleBuilderProps {
   data: AgendaWorkspaceData;
   preview: AgendaPreview | null;
   sessionsHref: string;
-  settingsHref: string;
   hasRooms: boolean;
   hasScheduleInventory: boolean;
   placementComplete: boolean;
@@ -1019,7 +1037,6 @@ function AgendaScheduleBuilder({
   data,
   preview,
   sessionsHref,
-  settingsHref,
   hasRooms,
   hasScheduleInventory,
   placementComplete,
@@ -1071,11 +1088,10 @@ function AgendaScheduleBuilder({
             </button>
           ) : null}
         </div>
-        {hasScheduleInventory && !hasRooms ? (
+        {toPlaceCount > 0 && !hasRooms ? (
           <p className={styles.formError} role="status">
-            Scheduling is unavailable until you create a room.{" "}
-            <Link href={settingsHref}>Create a room in Rooms and tracks settings</Link> before
-            scheduling accepted sessions.
+            Scheduling is unavailable until you create a room. Create a room before scheduling
+            accepted sessions.
           </p>
         ) : null}
         {!hasScheduleInventory ? (
@@ -1490,7 +1506,7 @@ function AgendaEditorDialog({
           </div>
           <DialogDescription>
             {showAddForm
-              ? "Choose the room, tracks, and exact local time before adding this session to the private draft."
+              ? "Choose a room and exact local time before adding this session to the private draft. Tracks are optional."
               : "Adjust this session without leaving the timetable. Changes remain private until the agenda is published."}
           </DialogDescription>
         </DialogHeader>

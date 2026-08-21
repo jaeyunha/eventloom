@@ -16,7 +16,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button as UiButton } from "@/components/ui/button";
 import styles from "./crm-workspace.module.css";
-import { createCrmApi, idempotencyKey } from "./crm-workspace-api";
+import { createCrmApi, idempotencyKey, settleCrmOutreachRecipients } from "./crm-workspace-api";
 import {
   type ContactDraft,
   CRM_MERGE_SCALAR_FIELDS,
@@ -80,6 +80,17 @@ type CrmStateUpdate<T> = T | ((current: T) => T);
 
 function resolveCrmStateUpdate<T>(current: T, update: CrmStateUpdate<T>): T {
   return typeof update === "function" ? (update as (current: T) => T)(current) : update;
+}
+export function isCurrentCrmOutreachRefresh(
+  expectedBusyLease: number,
+  currentBusyLease: number,
+  expectedSelectionGeneration: number,
+  currentSelectionGeneration: number,
+): boolean {
+  return (
+    expectedBusyLease === currentBusyLease &&
+    expectedSelectionGeneration === currentSelectionGeneration
+  );
 }
 
 type CrmMergeViewState = {
@@ -3043,6 +3054,7 @@ function useCrmOutreachActions({
   setError,
   setStatusMessage,
   busyLeaseRef,
+  selectionGeneration,
   loadAnalytics,
   setHistory,
 }: {
@@ -3057,6 +3069,7 @@ function useCrmOutreachActions({
   readonly setError: (message: string | null) => void;
   readonly setStatusMessage: (message: string | null) => void;
   readonly busyLeaseRef: MutableRefObject<number>;
+  readonly selectionGeneration: MutableRefObject<number>;
   readonly loadAnalytics: () => Promise<void>;
   readonly setHistory: (value: CrmStateUpdate<readonly CrmHistoryEntry[]>) => void;
 }): {
@@ -3144,12 +3157,16 @@ function useCrmOutreachActions({
       return;
     }
     const busyLease = ++busyLeaseRef.current;
+    const selectionIntent = selectionGeneration.current;
+    const selectedContactId = selectedContact?.id;
+    let busyReleased = false;
     setBusy(true);
     setError(null);
     try {
       const contactsById = new Map(outreachRecipients.map((contact) => [contact.id, contact]));
-      const results = await Promise.all(
-        outreachPreview.recipients.map((recipient) => {
+      const settlements = await settleCrmOutreachRecipients(
+        outreachPreview.recipients,
+        async (recipient) => {
           const contact = contactsById.get(recipient.contactId);
           if (contact === undefined) {
             throw new Error(`Preview recipient ${recipient.contactId} is no longer selected.`);
@@ -3168,27 +3185,82 @@ function useCrmOutreachActions({
             },
             recipient.idempotencyKey,
           );
-        }),
+        },
       );
+      if (
+        !isCurrentCrmOutreachRefresh(
+          busyLease,
+          busyLeaseRef.current,
+          selectionIntent,
+          selectionGeneration.current,
+        )
+      ) {
+        return;
+      }
+      const results = settlements.flatMap((settlement) =>
+        settlement.status === "fulfilled" ? [settlement.receipt] : [],
+      );
+      const unknownCount = settlements.length - results.length;
       dispatchContactSelection({ type: "outreach-results-set", results });
       const queuedCount = results.reduce((count, result) => count + result.queuedCount, 0);
       const sentCount = results.reduce((count, result) => count + result.sentCount, 0);
       const failedCount = results.reduce((count, result) => count + result.failedCount, 0);
-      const terminal = results.every((result) => result.terminal);
+      const terminal = results.length > 0 && results.every((result) => result.terminal);
+      const outcome =
+        unknownCount > 0
+          ? `${unknownCount} request outcome${unknownCount === 1 ? "" : "s"} unknown; retry is safe`
+          : failedCount > 0 && sentCount + queuedCount > 0
+            ? "mixed outcomes"
+            : terminal
+              ? "terminal"
+              : "delivery still in progress";
       setStatusMessage(
-        `Outreach queue result: ${sentCount} sent, ${queuedCount} queued, ${failedCount} failed; ${terminal ? "terminal" : "delivery still in progress"}.`,
+        `Outreach queue result: ${sentCount} sent, ${queuedCount} queued, ${failedCount} failed; ${outcome}.`,
       );
-      const [, historyResult] = await Promise.allSettled([
-        loadAnalytics(),
-        selectedContact ? api.getContactHistory(selectedContact.id) : Promise.resolve(null),
-      ]);
-      if (historyResult.status === "fulfilled" && historyResult.value !== null) {
-        setHistory(historyResult.value);
-      }
-    } catch (reason) {
-      setError(messageFromError(reason));
-    } finally {
       setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
+      busyReleased = true;
+      const analyticsRefresh = Promise.resolve().then(() => loadAnalytics());
+      const historyRefresh =
+        selectedContactId === undefined
+          ? Promise.resolve<readonly CrmHistoryEntry[] | null>(null)
+          : Promise.resolve().then(() => api.getContactHistory(selectedContactId));
+      void Promise.allSettled([analyticsRefresh, historyRefresh] as const).then(
+        ([analyticsResult, historyResult]) => {
+          if (
+            !isCurrentCrmOutreachRefresh(
+              busyLease,
+              busyLeaseRef.current,
+              selectionIntent,
+              selectionGeneration.current,
+            )
+          ) {
+            return;
+          }
+          if (analyticsResult.status === "rejected") {
+            setError(messageFromError(analyticsResult.reason));
+          }
+          if (historyResult.status === "fulfilled" && historyResult.value !== null) {
+            setHistory(historyResult.value);
+          } else if (historyResult.status === "rejected") {
+            setError(messageFromError(historyResult.reason));
+          }
+        },
+      );
+    } catch (reason) {
+      if (
+        isCurrentCrmOutreachRefresh(
+          busyLease,
+          busyLeaseRef.current,
+          selectionIntent,
+          selectionGeneration.current,
+        )
+      ) {
+        setError(messageFromError(reason));
+      }
+    } finally {
+      if (!busyReleased) {
+        setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
+      }
     }
   }
   return { previewOutreach, sendOutreach };
@@ -3295,6 +3367,7 @@ export function useCrmWorkspaceController(
     setError,
     setStatusMessage,
     busyLeaseRef,
+    selectionGeneration,
     loadAnalytics: directory.loadAnalytics,
     setHistory: selection.setHistory,
   });
