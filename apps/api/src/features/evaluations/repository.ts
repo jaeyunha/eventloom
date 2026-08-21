@@ -137,6 +137,7 @@ export type EvaluationReminderPlanSource = Pick<
 export interface EvaluationRepository extends EvaluationProjectionReader {
   readonly supportsAtomicPlanRevisionSync: boolean;
   readonly authority: "transactional";
+  readonly usesDurableDecisionOutbox?: boolean;
   hasPendingPlanLineageRepair(tenantId?: string, eventId?: string): Promise<boolean>;
   putPlan(
     plan: EvaluationPlan,

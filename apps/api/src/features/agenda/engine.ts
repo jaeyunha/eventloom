@@ -9,6 +9,7 @@ import {
 } from "./timezone";
 import type {
   AcceptAgendaSuggestionChangeInput,
+  AgendaCompareAndSwapContext,
   AgendaAuditEntry,
   AgendaCatalog,
   AgendaClock,
@@ -412,6 +413,14 @@ export class AgendaEngine {
       options.suggestionProvider ?? options.agendaSuggestionProvider ?? null;
     this.#eventScheduleForEvent = options.eventScheduleForEvent ?? null;
   }
+  private async compareAndSwap(
+    eventId: string,
+    expectedStateVersion: number | null,
+    nextState: AgendaState,
+    context: AgendaCompareAndSwapContext,
+  ): Promise<void> {
+    await this.repository.compareAndSwap(eventId, expectedStateVersion, nextState, context);
+  }
 
   async createAgenda(input: CreateAgendaInput): Promise<AgendaDraft> {
     return this.mutationLock.runExclusive(input.eventId, async () => {
@@ -452,7 +461,9 @@ export class AgendaEngine {
         audit: [this.audit(input.eventId, input.actorId, "agenda.created", now, {})],
         suggestionRuns: [],
       };
-      await this.repository.compareAndSwap(input.eventId, null, state);
+      await this.compareAndSwap(input.eventId, null, state, {
+        priorState: existing,
+      });
       return structuredClone(draft);
     });
   }
@@ -1308,7 +1319,9 @@ export class AgendaEngine {
       }
       await this.mutationLock.renew?.(eventId);
       try {
-        await this.repository.compareAndSwap(eventId, current.stateVersion, nextState);
+        await this.compareAndSwap(eventId, current.stateVersion, nextState, {
+          priorState: current,
+        });
       } catch (error) {
         if (error instanceof AgendaRepositoryConflictError) {
           throw new AgendaError(

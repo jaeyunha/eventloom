@@ -3279,7 +3279,6 @@ export class EvaluationService {
   async recordDecision(
     actor: EvaluationActor,
     input: RecordDecisionInput,
-    scheduleAcceptance?: (operation: Promise<void>) => boolean,
   ): Promise<EvaluationDecision> {
     const plan = await this.#getPlan(actor.tenantId, input.planId);
     requireHumanOrganizer(actor, plan.eventId);
@@ -3300,17 +3299,16 @@ export class EvaluationService {
       }
       const repeatedVersion =
         current.history.findIndex((transition) => transition.idempotencyKey === idempotencyKey) + 1;
-      if (repeatedVersion !== current.version) {
-        return current;
-      }
-      await this.#runDecisionWork(
-        {
+      if (
+        this.#repository.usesDurableDecisionOutbox !== true &&
+        repeatedVersion === current.version
+      ) {
+        await this.#runDecisionWork({
           decision: current,
           transition: repeatedTransition,
           decisionVersion: repeatedVersion,
-        },
-        scheduleAcceptance,
-      );
+        });
+      }
       return current;
     }
     if (current === null && input.expectedVersion !== undefined) {
@@ -3341,33 +3339,26 @@ export class EvaluationService {
     };
     await this.#requireReviewableSubmission(plan, submissionId);
     await this.#repository.putDecision(decision, current?.version ?? null);
-    await this.#runDecisionWork(
-      {
+    if (this.#repository.usesDurableDecisionOutbox !== true) {
+      await this.#runDecisionWork({
         decision,
         transition,
         decisionVersion: decision.version,
-      },
-      scheduleAcceptance,
-    );
+      });
+    }
     return decision;
   }
-  async #runDecisionWork(
-    input: {
-      readonly decision: EvaluationDecision;
-      readonly transition: EvaluationDecisionTransition;
-      readonly decisionVersion: number;
-    },
-    scheduleAcceptance?: (operation: Promise<void>) => boolean,
-  ): Promise<void> {
+  async #runDecisionWork(input: {
+    readonly decision: EvaluationDecision;
+    readonly transition: EvaluationDecisionTransition;
+    readonly decisionVersion: number;
+  }): Promise<void> {
     await this.#runDecisionProjection(input);
     if (input.transition.to !== "accepted") {
       await this.#runSessionDecisionReconciliation(input);
       return;
     }
     const acceptance = this.#runAcceptanceHandoff(input);
-    if (scheduleAcceptance?.(acceptance) === true) {
-      return;
-    }
     await acceptance;
   }
   async #buildDistributionPreview(

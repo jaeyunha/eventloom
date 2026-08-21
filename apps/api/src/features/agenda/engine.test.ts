@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type AgendaCatalog,
   type AgendaClock,
@@ -386,6 +386,50 @@ describe("agenda validation", () => {
       "warning.overridden",
     );
   });
+});
+it("loads the authoritative aggregate once per mutation", async () => {
+  const repository = new InMemoryAgendaRepository();
+  const loadSpy = vi.spyOn(repository, "load");
+  const engine = new AgendaEngine(repository, new InMemoryAgendaMutationLock(), {
+    eventScheduleForEvent: async () => ({
+      startsAt: "2026-01-01T00:00:00.000Z",
+      endsAt: "2028-01-01T00:00:00.000Z",
+      timeZone: "UTC",
+    }),
+  });
+  await engine.createAgenda({
+    eventId: "event-1",
+    minimumTravelMinutes: 0,
+    actorId: "organizer-1",
+    ...catalog,
+  });
+  loadSpy.mockClear();
+
+  await engine.updateDraft({
+    eventId: "event-1",
+    expectedVersion: 1,
+    actorId: "organizer-1",
+    entries: [entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00")],
+  });
+
+  expect(loadSpy).toHaveBeenCalledTimes(1);
+});
+
+it("accepts a valid trackless placement when the room and times are known", async () => {
+  const engine = createEngine();
+  await initialize(engine);
+
+  const draft = await engine.updateDraft({
+    eventId: "event-1",
+    expectedVersion: 1,
+    actorId: "organizer-1",
+    entries: [
+      entry("entry-trackless", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+    ],
+  });
+
+  expect(draft.entries).toHaveLength(1);
+  expect(draft.entries[0]?.trackIds).toEqual([]);
 });
 
 describe("agenda concurrency and revisions", () => {

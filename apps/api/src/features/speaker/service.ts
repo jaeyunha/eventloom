@@ -1762,18 +1762,44 @@ export class SpeakerService {
         },
       ];
     });
-    const submissionIdsByEvent = new Map<string, Set<string>>();
-    for (const { context, contextSubmissionIds } of candidates) {
-      const ids = submissionIdsByEvent.get(context.eventId) ?? new Set<string>();
+    const portalEventTenantKey = (eventId: string, organizationId: string | undefined): string =>
+      JSON.stringify([organizationId ?? null, eventId]);
+    const submissionIdsByEventTenant = new Map<
+      string,
+      { eventId: string; submissionIds: Set<string> }
+    >();
+    for (const { context, contextSubmissionIds, contextScope } of candidates) {
+      const organizationId = contextScope.tenantId ?? context.organizationId;
+      const key = portalEventTenantKey(context.eventId, organizationId);
+      const batch = submissionIdsByEventTenant.get(key) ?? {
+        eventId: context.eventId,
+        submissionIds: new Set<string>(),
+      };
       for (const submissionId of contextSubmissionIds) {
-        ids.add(submissionId);
+        batch.submissionIds.add(submissionId);
       }
-      submissionIdsByEvent.set(context.eventId, ids);
+      submissionIdsByEventTenant.set(key, batch);
     }
-    const submissionsByEvent = new Map<string, Promise<readonly SpeakerSubmission[]>>();
-    for (const [eventId, submissionIds] of submissionIdsByEvent) {
-      submissionsByEvent.set(eventId, this.repository.listSubmissions(eventId, [...submissionIds]));
+    const submissionsByEventTenant = new Map<string, Promise<readonly SpeakerSubmission[]>>();
+    for (const [key, { eventId, submissionIds }] of submissionIdsByEventTenant) {
+      submissionsByEventTenant.set(
+        key,
+        this.repository.listSubmissions(eventId, [...submissionIds]),
+      );
     }
+    const temporalByEventTenant = new Map<
+      string,
+      Promise<SpeakerEventTemporalContext | undefined>
+    >();
+    for (const { context, contextScope } of candidates) {
+      const organizationId = contextScope.tenantId ?? context.organizationId;
+      if (organizationId === undefined) continue;
+      const key = portalEventTenantKey(context.eventId, organizationId);
+      if (!temporalByEventTenant.has(key)) {
+        temporalByEventTenant.set(key, this.eventTemporalContext(organizationId, context.eventId));
+      }
+    }
+    const visibleSubmissionsByContext = new Map<string, Map<string, SpeakerSubmission[]>>();
     const projected = await Promise.all(
       candidates.map(
         async ({
@@ -1782,16 +1808,35 @@ export class SpeakerService {
           contextScope,
           primaryParticipantId,
         }): Promise<SpeakerPortalContext | undefined> => {
-          const submissions = (await submissionsByEvent.get(context.eventId)) ?? [];
+          const organizationId = contextScope.tenantId ?? context.organizationId;
+          const eventTenantKey = portalEventTenantKey(context.eventId, organizationId);
+          const submissions = (await submissionsByEventTenant.get(eventTenantKey)) ?? [];
+          const submissionIndexKey = JSON.stringify([eventTenantKey, primaryParticipantId ?? null]);
+          let submissionsByCanonicalId = visibleSubmissionsByContext.get(submissionIndexKey);
+          if (submissionsByCanonicalId === undefined) {
+            submissionsByCanonicalId = new Map<string, SpeakerSubmission[]>();
+            for (const submission of submissions) {
+              if (
+                submission.eventId !== context.eventId ||
+                (primaryParticipantId !== undefined &&
+                  !portalSubmissionBelongsToParticipant(submission, primaryParticipantId))
+              ) {
+                continue;
+              }
+              const canonicalId = canonicalSpeakerSubmissionId(submission.id);
+              const matches = submissionsByCanonicalId.get(canonicalId);
+              if (matches === undefined) {
+                submissionsByCanonicalId.set(canonicalId, [submission]);
+              } else {
+                matches.push(submission);
+              }
+            }
+            visibleSubmissionsByContext.set(submissionIndexKey, submissionsByCanonicalId);
+          }
           const visibleById = new Map<string, SpeakerSubmission>();
           for (const requestedId of contextSubmissionIds) {
-            const matches = submissions.filter(
-              (submission) =>
-                submission.eventId === context.eventId &&
-                (primaryParticipantId === undefined ||
-                  portalSubmissionBelongsToParticipant(submission, primaryParticipantId)) &&
-                sameSpeakerSubmission(requestedId, submission.id),
-            );
+            const matches =
+              submissionsByCanonicalId.get(canonicalSpeakerSubmissionId(requestedId)) ?? [];
             const selected =
               matches.find((submission) => submission.id === requestedId) ??
               matches.find(
@@ -1813,11 +1858,10 @@ export class SpeakerService {
             primaryParticipantId === undefined ? [] : [primaryParticipantId],
             visibleSubmissions,
           );
-          const organizationId = contextScope.tenantId ?? context.organizationId;
           const temporalContext =
             organizationId === undefined
               ? undefined
-              : await this.eventTemporalContext(organizationId, context.eventId);
+              : await temporalByEventTenant.get(eventTenantKey);
           return {
             id: context.id,
             eventId: context.eventId,
@@ -1907,6 +1951,10 @@ export class SpeakerService {
     const scope = await this.getScope(eventId, accountId);
     if (scope.submissionIds.length === 0 && scope.participantIds.length === 0) throw notFound();
     const primaryParticipantId = portalPrimaryParticipantId(scope);
+    const temporalContextPromise: Promise<SpeakerEventTemporalContext | undefined> =
+      scope.tenantId === undefined
+        ? Promise.resolve(undefined)
+        : this.eventTemporalContext(scope.tenantId, eventId);
     const listRosterForEvent = this.repository.listRosterForEvent;
     const prefetchedRosterPromise: Promise<readonly SpeakerRosterEntry[] | undefined> =
       primaryParticipantId === undefined || listRosterForEvent === undefined
@@ -1962,6 +2010,7 @@ export class SpeakerService {
       rawResources,
       rawWiki,
       prefetchedRoster,
+      temporalContext,
     ] = await Promise.all([
       rawSubmissionsPromise,
       rawProfilesPromise,
@@ -1971,6 +2020,7 @@ export class SpeakerService {
       resourcesPromise,
       wikiPromise,
       prefetchedRosterPromise,
+      temporalContextPromise,
     ]);
     const submissions = this.projectSubmissions(eventId, scope, rawSubmissions)
       .filter(
@@ -2008,10 +2058,6 @@ export class SpeakerService {
       submissions,
       contexts,
     );
-    const temporalContext =
-      projectedScope.tenantId === undefined
-        ? undefined
-        : await this.eventTemporalContext(projectedScope.tenantId, eventId);
     const context = {
       ...projectedContext,
       ...(temporalContext === undefined ? {} : { temporalContext }),
@@ -3904,12 +3950,13 @@ export class SpeakerService {
     scope: Pick<SpeakerAccessScope, "submissionIds">,
     submissions: readonly SpeakerSubmission[],
   ): SpeakerSubmission[] {
+    const allowedSubmissionIds = new Set(scope.submissionIds.map(canonicalSpeakerSubmissionId));
     const byCanonicalId = new Map<string, SpeakerSubmission>();
     for (const submission of submissions) {
       if (
         submission.eventId !== eventId ||
         submission.status !== "accepted" ||
-        !scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submission.id))
+        !allowedSubmissionIds.has(canonicalSpeakerSubmissionId(submission.id))
       ) {
         continue;
       }
@@ -3935,10 +3982,11 @@ export class SpeakerService {
     participantIds: string[];
     participantNames: ReadonlyMap<string, string>;
   } {
+    const scopeParticipantIds = new Set(scope.participantIds);
     const acceptedParticipantIds = submissions.flatMap((submission) =>
       submission.eventId === eventId
         ? submission.participantIds.filter((participantId) =>
-            scope.participantIds.includes(participantId),
+            scopeParticipantIds.has(participantId),
           )
         : [],
     );
@@ -7045,11 +7093,16 @@ export class SpeakerService {
         "The speaker has changed. Reload it before saving.",
       );
     }
-    this.overlayOrganizerSpeakerMutationProjection(projection, undefined, aggregateResult.value);
+    const refreshedProjection = await this.organizerSpeakerMutationProjection(
+      input.organizationId,
+      input.eventId,
+      input.accountId,
+      input.participantId,
+    );
     return this.materializeOrganizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
-      projection,
+      refreshedProjection,
     );
   }
 
@@ -7664,6 +7717,7 @@ export class SpeakerService {
         candidate.eventId === eventId &&
         profileParticipantIds.has(candidate.participantId),
     );
+    const scopeParticipantIds = new Set(scope.participantIds);
     const acceptedSubmissions = this.acceptedOrganizerSubmissionsFrom(eventId, scope, submissions);
     const rosterProjection = {
       entries: this.organizerRosterEntriesFromReadModel(eventId, scope, roster, profiles),
@@ -7672,9 +7726,7 @@ export class SpeakerService {
 
     const acceptedParticipantIds = new Set(
       acceptedSubmissions.flatMap((submission) =>
-        submission.participantIds.filter((participantId) =>
-          scope.participantIds.includes(participantId),
-        ),
+        submission.participantIds.filter((participantId) => scopeParticipantIds.has(participantId)),
       ),
     );
     const entries = rosterProjection.entries.filter(
@@ -7685,6 +7737,7 @@ export class SpeakerService {
       .filter(isOrganizerManagedRosterEntry)
       .map((entry) => entry.participantId);
     const participantIds = unique([...acceptedParticipantIds, ...organizerParticipantIds]);
+    const participantIdSet = new Set(participantIds);
     const acceptedSubmissionById = new Map(
       acceptedSubmissions.map((submission) => [
         canonicalSpeakerSubmissionId(submission.id),
@@ -7706,7 +7759,7 @@ export class SpeakerService {
       if (
         subject === undefined ||
         task.eventId !== eventId ||
-        !participantIds.includes(task.participantId) ||
+        !participantIdSet.has(task.participantId) ||
         task.owner !== "speaker"
       ) {
         return false;
@@ -7720,7 +7773,7 @@ export class SpeakerService {
     const assets = assetCandidates.filter((asset) => {
       if (
         asset.eventId !== eventId ||
-        !participantIds.includes(asset.participantId) ||
+        !participantIdSet.has(asset.participantId) ||
         (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId)
       ) {
         return false;
@@ -7759,24 +7812,52 @@ export class SpeakerService {
     projection: OrganizerSpeakerMutationProjection,
   ): Promise<SpeakerWorkspaceRoster> {
     const temporalContext = await this.eventTemporalContext(organizationId, eventId);
-    const profileByParticipant = new Map(
-      projection.profiles
-        .filter(
-          (profile) =>
-            profile.eventId === eventId &&
-            projection.entries.some((entry) => entry.participantId === profile.participantId),
-        )
-        .map((profile) => [profile.participantId, profile]),
-    );
+    const entryParticipantIds = new Set(projection.entries.map((entry) => entry.participantId));
+    const profileByParticipant = new Map<string, SpeakerProfile>();
+    for (const profile of projection.profiles) {
+      if (profile.eventId === eventId && entryParticipantIds.has(profile.participantId)) {
+        profileByParticipant.set(profile.participantId, profile);
+      }
+    }
+    const submissionsByParticipant = new Map<string, SpeakerSubmission[]>();
+    for (const submission of projection.acceptedSubmissions) {
+      for (const participantId of new Set(submission.participantIds)) {
+        const participantSubmissions = submissionsByParticipant.get(participantId);
+        if (participantSubmissions === undefined) {
+          submissionsByParticipant.set(participantId, [submission]);
+        } else {
+          participantSubmissions.push(submission);
+        }
+      }
+    }
+    const tasksByParticipant = new Map<string, SpeakerTask[]>();
+    for (const task of projection.tasks) {
+      if (task.eventId !== eventId || task.type !== "action") continue;
+      const participantTasks = tasksByParticipant.get(task.participantId);
+      if (participantTasks === undefined) {
+        tasksByParticipant.set(task.participantId, [task]);
+      } else {
+        participantTasks.push(task);
+      }
+    }
+    const assetsByParticipant = new Map<string, SpeakerAsset[]>();
+    for (const asset of projection.assets) {
+      const participantAssets = assetsByParticipant.get(asset.participantId);
+      if (participantAssets === undefined) {
+        assetsByParticipant.set(asset.participantId, [asset]);
+      } else {
+        participantAssets.push(asset);
+      }
+    }
     const records = projection.entries.map((entry) =>
       this.organizerSpeakerRecord(
         eventId,
         entry.participantId,
         entry,
         profileByParticipant.get(entry.participantId),
-        projection.acceptedSubmissions,
-        projection.tasks,
-        projection.assets,
+        submissionsByParticipant.get(entry.participantId) ?? [],
+        tasksByParticipant.get(entry.participantId) ?? [],
+        assetsByParticipant.get(entry.participantId) ?? [],
         temporalContext?.timeZone,
       ),
     );
@@ -7898,21 +7979,22 @@ export class SpeakerService {
     profiles: readonly SpeakerProfile[],
   ): SpeakerRosterEntry[] {
     const allowedSubmissions = new Set(scope.submissionIds.map(canonicalSpeakerSubmissionId));
+    const scopeParticipantIds = new Set(scope.participantIds);
     const isAllowedSubmission = (submissionId: string | undefined): boolean =>
       submissionId !== undefined &&
-      [...allowedSubmissions].some((allowed) => sameSpeakerSubmission(allowed, submissionId));
+      allowedSubmissions.has(canonicalSpeakerSubmissionId(submissionId));
     const entries = roster.filter(
       (entry) =>
         entry.eventId === eventId &&
         (isAllowedSubmission(entry.submissionId) || isOrganizerManagedRosterEntry(entry)) &&
-        (scope.participantIds.includes(entry.participantId) ||
-          isOrganizerManagedRosterEntry(entry)),
+        (scopeParticipantIds.has(entry.participantId) || isOrganizerManagedRosterEntry(entry)),
     );
+    const entryParticipantIds = new Set(entries.map((entry) => entry.participantId));
     for (const profile of profiles) {
       if (
         profile.eventId !== eventId ||
-        !scope.participantIds.includes(profile.participantId) ||
-        entries.some((entry) => entry.participantId === profile.participantId)
+        !scopeParticipantIds.has(profile.participantId) ||
+        entryParticipantIds.has(profile.participantId)
       ) {
         continue;
       }
@@ -7947,6 +8029,7 @@ export class SpeakerService {
         createdAt: profile.updatedAt,
         updatedAt: profile.updatedAt,
       });
+      entryParticipantIds.add(profile.participantId);
     }
     const byParticipant = new Map<string, SpeakerRosterEntry>();
     for (const entry of entries) {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { AgendaRepositoryConflictError } from "../../../features/agenda/infrastructure";
-import type { AgendaState } from "../../../features/agenda/types";
+import type { AgendaState, AgendaSuggestionRun } from "../../../features/agenda/types";
 import { D1AgendaRepository } from "./agenda";
 
 function statement(query: string, agendaState: Record<string, unknown> | null = null) {
@@ -75,6 +75,46 @@ function agendaState(stateVersion: number, updatedAt: string, updatedBy: string)
     outbox: [],
     audit: [],
     suggestionRuns: [],
+  };
+}
+function suggestionRun(id: string): AgendaSuggestionRun {
+  const criteria = {
+    dates: ["2026-08-13"],
+    eligibleStatuses: ["accepted"],
+    roomIds: [],
+    rooms: [],
+    dayWindows: [],
+    orderedRules: [],
+    ignoreExistingTimes: false,
+    ignoreExistingRooms: false,
+    ignoreExistingSchedule: { times: false, rooms: false },
+  } as const;
+  return {
+    id,
+    eventId: "event-1",
+    version: 1,
+    status: "pending",
+    baseDraftVersion: 1,
+    baseDraftRevision: 1,
+    baseEntries: [],
+    criteria,
+    criteriaSnapshot: criteria,
+    placements: [],
+    proposedEntries: [],
+    diff: {
+      summary: "No agenda changes were proposed.",
+      description: "No agenda changes were proposed.",
+      changes: [],
+      addedEntryIds: [],
+      removedEntryIds: [],
+      changedEntryIds: [],
+    },
+    candidateDiagnostics: { conflicts: [], warnings: [] },
+    generatedAt: "2026-08-13T12:00:00.000Z",
+    generatedBy: "organizer-1",
+    regenerationOfRunId: null,
+    acceptedChangeIds: [],
+    appliedChangeIds: [],
   };
 }
 
@@ -216,5 +256,57 @@ describe("D1 agenda repository commands", () => {
       "CASE WHEN NULLIF(TRIM(display_name),'') IS NULL OR TRIM(display_name)=speaker_id THEN 'Speaker' ELSE display_name END",
     );
     expect(speakerProjection?.bound.query).not.toContain("COALESCE(display_name,speaker_id)");
+  });
+  it("uses the loaded aggregate and avoids rewriting unchanged suggestion history", async () => {
+    const db = database();
+    const repository = new D1AgendaRepository(db, "org-1");
+    const draftEntry = {
+      id: "entry-1",
+      sessionId: "session-1",
+      roomId: "room-1",
+      trackIds: [],
+      startsAt: "2026-08-13T09:00:00.000Z",
+      endsAt: "2026-08-13T10:00:00.000Z",
+      startsAtLocal: "2026-08-13T09:00",
+      endsAtLocal: "2026-08-13T10:00",
+      timeZone: "UTC",
+    };
+    const current: AgendaState = {
+      ...agendaState(1, "2026-08-13T12:00:00.000Z", "user-1"),
+      draft: {
+        ...agendaState(1, "2026-08-13T12:00:00.000Z", "user-1").draft,
+        entries: [draftEntry],
+      },
+      suggestionRuns: Array.from({ length: 200 }, (_, index) => suggestionRun(`run-${index}`)),
+    };
+    const next: AgendaState = {
+      ...current,
+      stateVersion: 2,
+      draft: {
+        ...current.draft,
+        version: 2,
+        updatedAt: "2026-08-13T12:01:00.000Z",
+        entries: [
+          {
+            ...draftEntry,
+            startsAt: "2026-08-13T10:00:00.000Z",
+            endsAt: "2026-08-13T11:00:00.000Z",
+            startsAtLocal: "2026-08-13T10:00",
+            endsAtLocal: "2026-08-13T11:00",
+          },
+        ],
+      },
+    };
+    const loadSpy = vi.spyOn(repository, "load");
+
+    await repository.compareAndSwap("event-1", 1, next, {
+      priorState: current,
+    });
+
+    expect(loadSpy).not.toHaveBeenCalled();
+    expect(
+      db.statements.filter((item) => item.bound.query.includes("UPDATE agenda_suggestion_runs")),
+    ).toHaveLength(0);
+    expect(db.statements.length).toBeLessThan(30);
   });
 });

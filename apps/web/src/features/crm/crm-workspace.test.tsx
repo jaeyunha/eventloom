@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { CrmWorkspaceView } from "./crm-workspace";
-import { createCrmApi } from "./crm-workspace-api";
+import { createCrmApi, settleCrmOutreachRecipients } from "./crm-workspace-api";
 import {
   type CrmAnalytics,
   type CrmApi,
@@ -17,6 +17,7 @@ import {
   refreshCrmEventMembershipAfterSave,
   refreshSelectedContactAfterCollectionReload,
 } from "./crm-workspace-model";
+import { isCurrentCrmOutreachRefresh } from "./crm-workspace-views";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -148,6 +149,63 @@ const analytics: CrmAnalytics = {
 };
 
 describe("organization CRM workspace", () => {
+  it("settles outreach receipts in stable preview order without discarding failures", async () => {
+    const recipients = [
+      {
+        contactId: "contact-1",
+        email: "ada@example.test",
+        displayName: "Ada Lovelace",
+        subject: "Hello Ada",
+        body: "Hi Ada",
+        unknownTags: [],
+        idempotencyKey: "outreach-ada",
+      },
+      {
+        contactId: "contact-2",
+        email: "grace@example.test",
+        displayName: "Grace Hopper",
+        subject: "Hello Grace",
+        body: "Hi Grace",
+        unknownTags: [],
+        idempotencyKey: "outreach-grace",
+      },
+    ] as const;
+    const settlements = await settleCrmOutreachRecipients(recipients, async (recipient) => {
+      if (recipient.contactId === "contact-2") throw new Error("recipient queue failed");
+      return {
+        id: `queue-${recipient.idempotencyKey}`,
+        contactId: recipient.contactId,
+        recipientEmail: recipient.email,
+        subject: recipient.subject,
+        renderedBody: recipient.body,
+        status: "queued" as const,
+        queuedCount: 1,
+        sentCount: 0,
+        failedCount: 0,
+        terminal: false,
+        failureReason: null,
+      };
+    });
+
+    expect(settlements.map((settlement) => settlement.recipient.idempotencyKey)).toEqual([
+      "outreach-ada",
+      "outreach-grace",
+    ]);
+    expect(settlements[0]).toMatchObject({
+      status: "fulfilled",
+      receipt: { id: "queue-outreach-ada", contactId: "contact-1" },
+    });
+    expect(settlements[1]).toMatchObject({
+      status: "rejected",
+      error: expect.objectContaining({ message: "recipient queue failed" }),
+    });
+  });
+
+  it("fences stale outreach refreshes by busy lease and selection generation", () => {
+    expect(isCurrentCrmOutreachRefresh(2, 2, 4, 4)).toBe(true);
+    expect(isCurrentCrmOutreachRefresh(2, 3, 4, 4)).toBe(false);
+    expect(isCurrentCrmOutreachRefresh(2, 2, 4, 5)).toBe(false);
+  });
   it("renders directory, detail, segments, pipeline, outreach, and analytics controls", () => {
     const onMerge = vi.fn(async () => undefined);
     const markup = renderToStaticMarkup(
@@ -326,6 +384,19 @@ describe("organization CRM workspace", () => {
             terminal: true,
             failureReason: null,
           },
+          {
+            id: "outreach-failed-outreach-grace",
+            contactId: "contact-2",
+            recipientEmail: "grace@example.test",
+            subject: "Hello Grace",
+            renderedBody: "Hi Grace",
+            status: "failed",
+            queuedCount: 0,
+            sentCount: 0,
+            failedCount: 1,
+            terminal: true,
+            failureReason: "Recipient queue failed.",
+          },
         ],
         onCreateSegment: vi.fn(async () => undefined),
         onSelectSegment: vi.fn(),
@@ -361,6 +432,12 @@ describe("organization CRM workspace", () => {
     expect(markup).toContain("Hello Ada");
     expect(markup).toContain("Outreach queue result");
     expect(markup).toContain("1 sent");
+    expect(markup).toContain("1 failed");
+    expect(markup).toContain("Recipient queue failed.");
+    expect(markup.indexOf("ada@example.test")).toBeLessThan(markup.indexOf("grace@example.test"));
+    expect(markup.indexOf("queue send-1")).toBeLessThan(
+      markup.indexOf("queue outreach-failed-outreach-grace"),
+    );
     expect(markup).not.toContain("Send Now");
     expect(markup).toContain("Queue outreach for delivery");
     expect(markup).toContain("Qualified speakers");
@@ -729,6 +806,31 @@ describe("organization CRM workspace", () => {
       },
       customFieldWinners: { region: contact.id },
     });
+  });
+  it("renders durable 202 outreach receipts without polling", async () => {
+    const receipt = {
+      id: "outreach-202",
+      contactId: contact.id,
+      recipientEmail: contact.email,
+      subject: "Hello Ada",
+      renderedBody: "Hi Ada",
+      status: "queued" as const,
+      queuedCount: 1,
+      sentCount: 0,
+      failedCount: 0,
+      terminal: false,
+      failureReason: null,
+    };
+    const fetcher = vi.fn<TestFetcher>(async () => response(receipt, 202));
+    const api = createCrmApi("https://api.example.test", "org/one", fetcher);
+
+    await expect(
+      api.sendOutreach(
+        { contactId: contact.id, subject: "Hello Ada", body: "Hi Ada" },
+        "outreach-202-key",
+      ),
+    ).resolves.toEqual(receipt);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
   it("uses authoritative organization CRM and event envelopes with credentials and no-store", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];

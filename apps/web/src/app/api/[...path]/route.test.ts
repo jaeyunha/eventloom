@@ -189,17 +189,18 @@ describe("same-origin API proxy", () => {
     await expect(pending).resolves.toHaveProperty("status", 201);
   });
 
-  it("allows evaluation decision PUTs beyond the ordinary request deadline", async () => {
+  it("uses the ordinary gateway deadline for evaluation decision PUTs", async () => {
     vi.useFakeTimers();
-    let resolveUpstream: ((response: Response) => void) | undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        () =>
-          new Promise<Response>((resolve) => {
-            resolveUpstream = resolve;
-          }),
-      ),
+      vi.fn((_target: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        });
+      }),
     );
 
     const pending = PUT(
@@ -222,14 +223,14 @@ describe("same-origin API proxy", () => {
       },
     );
     await vi.advanceTimersByTimeAsync(15_000);
-    let settled = false;
-    void pending.finally(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
+    const response = await pending;
+    const body = (await response.json()) as {
+      error: { code: string; message: string };
+    };
 
-    resolveUpstream?.(Response.json({ status: "accepted" }));
-    await expect(pending).resolves.toHaveProperty("status", 200);
+    expect(response.status).toBe(504);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(body.error.code).toBe("INTEGRATION_UNAVAILABLE");
+    expect(body.error.message).toContain("gateway deadline");
   });
 });

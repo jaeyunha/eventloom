@@ -160,6 +160,42 @@ class CountingDelayedCrmRepository extends InMemoryCrmRepository {
     );
   }
 }
+class DelayedOutreachPersistenceRepository extends InMemoryCrmRepository {
+  readonly started: string[] = [];
+  activeWrites = 0;
+  maxConcurrentWrites = 0;
+
+  constructor(private readonly delayMs = 5) {
+    super();
+  }
+
+  private async tracked<T>(kind: string, work: () => Promise<T>): Promise<T> {
+    this.started.push(kind);
+    this.activeWrites += 1;
+    this.maxConcurrentWrites = Math.max(this.maxConcurrentWrites, this.activeWrites);
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
+      return await work();
+    } finally {
+      this.activeWrites -= 1;
+    }
+  }
+
+  override appendHistory(entry: Parameters<InMemoryCrmRepository["appendHistory"]>[0]) {
+    return this.tracked("history", () => super.appendHistory(entry));
+  }
+
+  override saveCommandResult<T>(
+    organizationId: string,
+    command: string,
+    key: string,
+    value: T,
+  ): Promise<void> {
+    return this.tracked("command-result", () =>
+      super.saveCommandResult(organizationId, command, key, value),
+    );
+  }
+}
 
 describe("CrmService", () => {
   it("serializes competing contact updates and returns authoritative conflict state", async () => {
@@ -973,6 +1009,44 @@ describe("CrmService", () => {
         idempotencyKey: "outreach-unknown",
       }),
     ).rejects.toMatchObject({ code: "CRM_INVALID_INPUT" });
+  });
+  it("persists outreach history before the idempotent command result", async () => {
+    const repository = new DelayedOutreachPersistenceRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      {
+        repository,
+        outreach: {
+          async send(command) {
+            return { ...command, status: "queued" };
+          },
+        },
+      },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const contact = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Parallel Persistence",
+      email: "parallel@example.com",
+    });
+
+    const result = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: contact.id,
+      subject: "Queue",
+      body: "Hello",
+      idempotencyKey: "outreach-parallel-persistence",
+    });
+
+    expect(result.status).toBe("queued");
+    expect(repository.started).toEqual(["history", "command-result"]);
+    expect(repository.maxConcurrentWrites).toBe(1);
+    await expect(
+      repository.getCommandResult("org-a", "outreach", "outreach-parallel-persistence"),
+    ).resolves.toEqual(result);
   });
   it("keeps built-in outreach merge tags server-owned with deterministic name fallback", async () => {
     const repository = new InMemoryCrmRepository();

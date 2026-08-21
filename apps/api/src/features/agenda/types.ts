@@ -395,12 +395,17 @@ export interface AcceptAgendaSuggestionChangeInput {
   changeId: string;
   expectedDraftVersion?: number;
 }
+export interface AgendaCompareAndSwapContext {
+  readonly priorState?: AgendaState | null;
+}
+
 export interface AgendaRepository {
   load(eventId: string): Promise<AgendaState | null>;
   compareAndSwap(
     eventId: string,
     expectedStateVersion: number | null,
     nextState: AgendaState,
+    context?: AgendaCompareAndSwapContext,
   ): Promise<void>;
 }
 

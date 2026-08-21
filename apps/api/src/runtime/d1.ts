@@ -1,4 +1,8 @@
-import type { AgendaRepository, AgendaState } from "../features/agenda/types";
+import type {
+  AgendaCompareAndSwapContext,
+  AgendaRepository,
+  AgendaState,
+} from "../features/agenda/types";
 import { EventRoleInvitationService } from "../features/event-invitations/service";
 import type {
   EventRoleInvitationRepository,
@@ -160,12 +164,13 @@ export function createD1BusinessRepositories(input: {
   database: D1Database;
   webhookSecretCipher: WebhookSecretCipher;
   outboxQueue?: Queue<CloudflareOutboxMessage>;
+  deferDecisionWork?: boolean;
 }): D1BusinessRepositoryBundle {
   const { database } = input;
   return {
     events: new D1EventRepository(database),
     cfp: new D1CfpRepository(database),
-    evaluations: new D1EvaluationRepository(database, input.outboxQueue),
+    evaluations: new D1EvaluationRepository(database, input.outboxQueue, input.deferDecisionWork),
     sessions: new D1SessionRepository(database),
     speaker: new D1SpeakerRepository(database),
     agendaForOrganization: (organizationId) => new D1AgendaRepository(database, organizationId),
@@ -227,6 +232,7 @@ export class D1RuntimeAgendaRepository implements AgendaRepository {
     eventId: string,
     expectedVersion: number | null,
     nextState: AgendaState,
+    context?: AgendaCompareAndSwapContext,
   ): Promise<void> {
     const organizationId = await this.resolveOrganizationId(eventId);
     if (organizationId === null) {
@@ -236,6 +242,7 @@ export class D1RuntimeAgendaRepository implements AgendaRepository {
       eventId,
       expectedVersion,
       nextState,
+      context,
     );
   }
 }
@@ -304,11 +311,13 @@ const identityWebhookSecretCipher: WebhookSecretCipher = {
 
 export function createD1RuntimeDependencies(
   bindings: Pick<CloudflareBindings, "DB"> & Partial<Pick<CloudflareBindings, "OUTBOX_QUEUE">>,
+  options: { readonly deferDecisionWork?: boolean } = {},
 ): D1RuntimeDependencies {
   const repositories = createD1BusinessRepositories({
     database: bindings.DB,
     webhookSecretCipher: identityWebhookSecretCipher,
     ...(bindings.OUTBOX_QUEUE === undefined ? {} : { outboxQueue: bindings.OUTBOX_QUEUE }),
+    deferDecisionWork: options.deferDecisionWork ?? false,
   });
   return {
     events: repositories.events,

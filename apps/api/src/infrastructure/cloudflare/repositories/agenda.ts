@@ -2,6 +2,7 @@ import { AgendaRepositoryConflictError } from "../../../features/agenda/infrastr
 import { disambiguationForInstant } from "../../../features/agenda/timezone";
 import type {
   AgendaAuditEntry,
+  AgendaCompareAndSwapContext,
   AgendaEntry,
   AgendaRepository,
   AgendaState,
@@ -82,6 +83,38 @@ function stateEntries(state: AgendaState): readonly AgendaEntry[] {
       ]),
     ]),
   ];
+}
+function suggestionRunPersistenceChanged(
+  previous: AgendaSuggestionRun,
+  next: AgendaSuggestionRun,
+): boolean {
+  return (
+    previous.status !== next.status ||
+    !sameStringArray(previous.acceptedChangeIds, next.acceptedChangeIds) ||
+    !sameStringArray(previous.appliedChangeIds, next.appliedChangeIds) ||
+    (previous.rejectedAt ?? null) !== (next.rejectedAt ?? null) ||
+    (previous.rejectedBy ?? null) !== (next.rejectedBy ?? null) ||
+    (previous.supersededAt ?? null) !== (next.supersededAt ?? null) ||
+    (previous.appliedAt ?? null) !== (next.appliedAt ?? null) ||
+    (previous.appliedBy ?? null) !== (next.appliedBy ?? null)
+  );
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+function agendaEntriesEqualForPersistence(left: AgendaEntry, right: AgendaEntry): boolean {
+  return (
+    left.id === right.id &&
+    left.sessionId === right.sessionId &&
+    left.roomId === right.roomId &&
+    left.startsAt === right.startsAt &&
+    left.endsAt === right.endsAt &&
+    left.startsAtLocal === right.startsAtLocal &&
+    left.endsAtLocal === right.endsAtLocal &&
+    left.timeZone === right.timeZone &&
+    sameStringArray(left.trackIds, right.trackIds)
+  );
 }
 
 function entryFrom(row: Row, tracks: readonly string[]): AgendaEntry {
@@ -429,11 +462,13 @@ export class D1AgendaRepository implements AgendaRepository {
     eventId: string,
     expectedStateVersion: number | null,
     next: AgendaState,
+    context?: AgendaCompareAndSwapContext,
   ): Promise<void> {
     if (next.eventId !== eventId || next.stateVersion !== (expectedStateVersion ?? 0) + 1)
       throw new AgendaRepositoryConflictError(eventId);
     assertValidationMarker(next);
-    const current = await this.load(eventId);
+    const priorState = context?.priorState;
+    const current = priorState === undefined ? await this.load(eventId) : priorState;
     if ((current?.stateVersion ?? null) !== expectedStateVersion)
       throw new AgendaRepositoryConflictError(eventId);
     const eventRow = await this.db
@@ -482,6 +517,27 @@ export class D1AgendaRepository implements AgendaRepository {
     }
     const token = crypto.randomUUID();
     const statements: D1PreparedStatement[] = [];
+    const previousDraftEntries = current?.draft.entries ?? [];
+    const previousDraftById = new Map(previousDraftEntries.map((entry) => [entry.id, entry]));
+    const draftEntriesToPersist =
+      expectedStateVersion === null
+        ? [...next.draft.entries]
+        : next.draft.entries.filter((entry) => {
+            const previous = previousDraftById.get(entry.id);
+            return previous === undefined || !agendaEntriesEqualForPersistence(previous, entry);
+          });
+    const draftEntryIdsToDelete =
+      expectedStateVersion === null
+        ? []
+        : previousDraftEntries
+            .filter(
+              (entry) =>
+                !next.draft.entries.some(
+                  (candidate) =>
+                    candidate.id === entry.id && agendaEntriesEqualForPersistence(candidate, entry),
+                ),
+            )
+            .map((entry) => entry.id);
     if (expectedStateVersion === null) {
       statements.push(
         statement(
@@ -542,20 +598,40 @@ export class D1AgendaRepository implements AgendaRepository {
           ],
         ),
       );
-      statements.push(
-        statement(
-          this.db,
-          `DELETE FROM agenda_entry_tracks WHERE organization_id=? AND event_id=? AND container_type='draft' AND EXISTS (SELECT 1 FROM agenda_states WHERE organization_id=? AND event_id=? AND state_version=? AND updated_at=?)`,
-          [this.organizationId, eventId, this.organizationId, eventId, next.stateVersion, token],
-        ),
-      );
-      statements.push(
-        statement(
-          this.db,
-          `DELETE FROM agenda_entries WHERE organization_id=? AND event_id=? AND container_type='draft' AND EXISTS (SELECT 1 FROM agenda_states WHERE organization_id=? AND event_id=? AND state_version=? AND updated_at=?)`,
-          [this.organizationId, eventId, this.organizationId, eventId, next.stateVersion, token],
-        ),
-      );
+      for (const entryId of draftEntryIdsToDelete) {
+        statements.push(
+          statement(
+            this.db,
+            `DELETE FROM agenda_entry_tracks WHERE organization_id=? AND event_id=? AND container_type='draft' AND container_id=? AND entry_id=? AND EXISTS (SELECT 1 FROM agenda_states WHERE organization_id=? AND event_id=? AND state_version=? AND updated_at=?)`,
+            [
+              this.organizationId,
+              eventId,
+              eventId,
+              entryId,
+              this.organizationId,
+              eventId,
+              next.stateVersion,
+              token,
+            ],
+          ),
+        );
+        statements.push(
+          statement(
+            this.db,
+            `DELETE FROM agenda_entries WHERE organization_id=? AND event_id=? AND container_type='draft' AND container_id=? AND id=? AND EXISTS (SELECT 1 FROM agenda_states WHERE organization_id=? AND event_id=? AND state_version=? AND updated_at=?)`,
+            [
+              this.organizationId,
+              eventId,
+              eventId,
+              entryId,
+              this.organizationId,
+              eventId,
+              next.stateVersion,
+              token,
+            ],
+          ),
+        );
+      }
       statements.push(
         statement(
           this.db,
@@ -588,7 +664,7 @@ export class D1AgendaRepository implements AgendaRepository {
       eventId,
       "draft",
       eventId,
-      next.draft.entries,
+      draftEntriesToPersist,
       token,
     ))
       statements.push(prepared);
@@ -651,9 +727,10 @@ export class D1AgendaRepository implements AgendaRepository {
         ))
           statements.push(entryStatement);
       }
-    const oldRunIds = new Set(current?.suggestionRuns.map((item) => item.id) ?? []);
+    const oldRunsById = new Map((current?.suggestionRuns ?? []).map((item) => [item.id, item]));
     for (const run of next.suggestionRuns) {
-      if (oldRunIds.has(run.id))
+      const previous = oldRunsById.get(run.id);
+      if (previous !== undefined && suggestionRunPersistenceChanged(previous, run))
         statements.push(
           statement(
             this.db,
@@ -677,7 +754,7 @@ export class D1AgendaRepository implements AgendaRepository {
             ],
           ),
         );
-      else {
+      else if (previous === undefined) {
         statements.push(
           statement(
             this.db,
