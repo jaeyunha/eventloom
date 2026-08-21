@@ -48,6 +48,7 @@ describe("same-origin API proxy", () => {
     expect(headers.get("cookie")).toBe("session=opaque");
     expect(headers.get("x-forwarded-host")).toBe("web.example.test");
     expect(headers.get("x-forwarded-proto")).toBe("https");
+    expect(headers.get("origin")).toBe("https://web.example.test");
     expect(await response.text()).toBe("proxied");
     expect(response.headers.get("content-encoding")).toBeNull();
     expect(response.headers.get("content-length")).toBeNull();
