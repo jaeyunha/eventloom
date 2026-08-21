@@ -263,6 +263,68 @@ export function decisionNotificationSummary(
     .filter((value): value is string => value !== undefined)
     .join(" · ");
 }
+export interface EvaluationDecisionAttempt {
+  readonly status: EvaluationDecisionStatus;
+  readonly reason: string;
+  readonly idempotencyKey: string;
+}
+
+export function decisionAttemptMatches(
+  attempt: EvaluationDecisionAttempt | null | undefined,
+  status: EvaluationDecisionStatus,
+  reason: string,
+): attempt is EvaluationDecisionAttempt {
+  return attempt?.status === status && attempt.reason === reason.trim();
+}
+
+export function createEvaluationDecisionAttempt(
+  status: EvaluationDecisionStatus,
+  reason: string,
+  current?: EvaluationDecisionAttempt | null,
+): EvaluationDecisionAttempt {
+  const normalizedReason = reason.trim();
+  if (decisionAttemptMatches(current, status, normalizedReason)) return current;
+  return {
+    status,
+    reason: normalizedReason,
+    idempotencyKey: `web-decision-${crypto.randomUUID()}`,
+  };
+}
+
+export function findDecisionTransitionForAttempt(
+  decision: EvaluationDecisionRecord | undefined,
+  attempt: EvaluationDecisionAttempt,
+): EvaluationDecisionTransition | undefined {
+  return decision?.history.find(
+    (transition) =>
+      transition.idempotencyKey === attempt.idempotencyKey &&
+      transition.to === attempt.status &&
+      transition.reason === attempt.reason,
+  );
+}
+export const DECISION_COMMITTED_WITHOUT_DELIVERY_MESSAGE =
+  "Decision committed, but notification/session delivery was not confirmed.";
+
+export function reconcileEvaluationDecisionFailure(
+  decision: EvaluationDecisionRecord | undefined,
+  attempt: EvaluationDecisionAttempt,
+  originalError: string,
+):
+  | {
+      readonly status: "committed";
+      readonly decision: EvaluationDecisionRecord;
+      readonly message: typeof DECISION_COMMITTED_WITHOUT_DELIVERY_MESSAGE;
+    }
+  | { readonly status: "retry"; readonly error: string } {
+  if (decision !== undefined && findDecisionTransitionForAttempt(decision, attempt) !== undefined) {
+    return {
+      status: "committed",
+      decision,
+      message: DECISION_COMMITTED_WITHOUT_DELIVERY_MESSAGE,
+    };
+  }
+  return { status: "retry", error: originalError };
+}
 
 export interface OrganizerEvaluationWorkspace {
   readonly plan: {

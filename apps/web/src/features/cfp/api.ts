@@ -335,6 +335,53 @@ const formSchema = z
   .loose();
 export type CfpEventConfiguration = z.infer<typeof eventSchema>;
 export type CfpFormConfiguration = z.infer<typeof formSchema>;
+type CfpWireFormField = Omit<CfpFormField, "fieldRef" | "fieldVersion"> & {
+  fieldRef?: Exclude<CfpFormField["fieldRef"], string>;
+};
+
+type CfpWireFormConfiguration = Omit<
+  CfpFormConfiguration,
+  "participantFields" | "submissionFields"
+> & {
+  participantFields: CfpWireFormField[];
+  submissionFields: CfpWireFormField[];
+};
+
+function normalizeCfpFormField(
+  field: CfpFormField,
+  collection: "participantFields" | "submissionFields",
+  index: number,
+): CfpWireFormField {
+  const { fieldRef, fieldVersion, ...fieldWithoutLegacyVersion } = field;
+  if (typeof fieldRef === "string") {
+    if (typeof fieldVersion !== "number" || !Number.isInteger(fieldVersion) || fieldVersion <= 0) {
+      throw new CfpApiError(
+        "CFP_INVALID_FIELD_REFERENCE",
+        `Reusable field reference at ${collection}[${index}] requires a positive integer fieldVersion.`,
+        400,
+      );
+    }
+    return {
+      ...fieldWithoutLegacyVersion,
+      fieldRef: { id: fieldRef, version: fieldVersion },
+    };
+  }
+  return fieldRef === undefined
+    ? fieldWithoutLegacyVersion
+    : { ...fieldWithoutLegacyVersion, fieldRef };
+}
+
+function normalizeCfpFormPayload(form: CfpFormConfiguration): CfpWireFormConfiguration {
+  return {
+    ...form,
+    participantFields: form.participantFields.map((field, index) =>
+      normalizeCfpFormField(field, "participantFields", index),
+    ),
+    submissionFields: form.submissionFields.map((field, index) =>
+      normalizeCfpFormField(field, "submissionFields", index),
+    ),
+  };
+}
 
 export interface CfpOrganizationMembership {
   organizationId: string;
@@ -1132,25 +1179,27 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
       );
     },
 
-    saveForm(input) {
+    async saveForm(input) {
+      const form = normalizeCfpFormPayload(input.form);
       return request(
         `${apiBase}${resourcePath(input.organizationId, input.eventId)}/forms/${segment(input.form.id)}`,
         formSchema,
         {
           method: "PUT",
           headers: { "idempotency-key": key("cfp-form-save", input.idempotencyKey) },
-          body: JSON.stringify({ form: input.form, expectedVersion: input.expectedVersion }),
+          body: JSON.stringify({ form, expectedVersion: input.expectedVersion }),
         },
       );
     },
-    createForm(input) {
+    async createForm(input) {
+      const form = normalizeCfpFormPayload(input.form);
       return request(
         `${apiBase}${resourcePath(input.organizationId, input.eventId)}/forms`,
         formSchema,
         {
           method: "POST",
           headers: { "idempotency-key": key("cfp-form-create", input.idempotencyKey) },
-          body: JSON.stringify({ form: input.form }),
+          body: JSON.stringify({ form }),
         },
       );
     },
