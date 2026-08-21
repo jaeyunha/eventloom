@@ -30,7 +30,11 @@ export function OrganizerDraftPlan({
     busy,
     status,
   } = controller;
-  const { eventTimeZone, eventStartsAt, eventEndsAt } = controller.seed;
+  const { eventTimeZone, eventStartsAt, eventEndsAt, sourceClosesAt } = controller.seed;
+  const unchangedPlanClosesAt =
+    eventTimeZone === undefined || typeof sourceClosesAt !== "string" || sourceClosesAt === ""
+      ? undefined
+      : [reviewLocalValue(sourceClosesAt, eventTimeZone)];
   const constraints =
     eventTimeZone === undefined || eventStartsAt === undefined || eventEndsAt === undefined
       ? undefined
@@ -85,11 +89,7 @@ export function OrganizerDraftPlan({
               description="Choose the final deadline reviewers should work toward."
               minimumDateTime={constraints?.minimum}
               maximumDateTime={constraints?.maximum}
-              unchangedValues={
-                eventTimeZone === undefined || controller.seed.closesAt === ""
-                  ? undefined
-                  : [reviewLocalValue(controller.seed.closesAt, eventTimeZone)]
-              }
+              unchangedValues={unchangedPlanClosesAt}
               clearable
               onChange={setPlanClosesAt}
               onValidityChange={(isValid) =>
