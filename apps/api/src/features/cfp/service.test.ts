@@ -1455,6 +1455,73 @@ describe("CFP submission lifecycle", () => {
     expect(edited.completedSteps).toEqual(submitted.submission.completedSteps);
     expect(edited.participants).toEqual(submitted.submission.participants);
   });
+
+  it("requires explicit reopening before a decided proposal can be edited after close", async () => {
+    const { service, repository, clock } = createFixture();
+    const ready = await completeValidDraft(service, "decided-edit");
+    const submitted = await service.submit({
+      tenantId: "tenant_1",
+      submissionId: ready.id,
+      ownerAccountId: "account_1",
+      expectedVersion: ready.version,
+      idempotencyKey: "decided-submit",
+    });
+    const decided = {
+      ...submitted.submission,
+      finalDecisionAt: "2026-08-09T10:00:00.000Z",
+    };
+    repository.submissions.set(decided.id, structuredClone(decided));
+    const before = await repository.getSubmission("tenant_1", decided.id);
+    const versionCount = repository.versions.length;
+    const auditCount = repository.audits.length;
+    clock.current = new Date("2026-08-11T12:00:00.000Z");
+
+    await expect(
+      service.saveDraft({
+        tenantId: "tenant_1",
+        submissionId: decided.id,
+        ownerAccountId: "account_1",
+        expectedVersion: decided.version,
+        idempotencyKey: "decided-edit-save",
+        answers: { ...decided.answers, title: "Changed after decision" },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+    expect(await repository.getSubmission("tenant_1", decided.id)).toEqual(before);
+    expect(repository.versions).toHaveLength(versionCount);
+    expect(repository.audits).toHaveLength(auditCount);
+
+    const reopened = await service.reopen({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: decided.id,
+      organizerId: "organizer_1",
+      expectedVersion: decided.version,
+      reason: "Approved post-decision correction",
+      idempotencyKey: "reopen-decided",
+    });
+    expect(reopened).toMatchObject({
+      status: "reopened",
+      finalDecisionAt: decided.finalDecisionAt,
+    });
+    expect(repository.audits.at(-1)).toMatchObject({
+      action: "submission_reopened",
+      reason: "Approved post-decision correction",
+    });
+
+    const edited = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: reopened.id,
+      ownerAccountId: "account_1",
+      expectedVersion: reopened.version,
+      idempotencyKey: "edit-reopened-decision",
+      answers: { ...reopened.answers, title: "Approved correction" },
+    });
+    expect(edited).toMatchObject({
+      status: "reopened",
+      finalDecisionAt: decided.finalDecisionAt,
+      answers: expect.objectContaining({ title: "Approved correction" }),
+    });
+  });
   it("requires audited reopening for post-close edits and allows pre-decision withdrawal", async () => {
     const { service, repository, clock } = createFixture();
     const ready = await completeValidDraft(service, "closed-flow");
@@ -1514,6 +1581,23 @@ describe("CFP submission lifecycle", () => {
     });
     expect(withdrawn.status).toBe("withdrawn");
     expect(repository.audits.at(-1)).toMatchObject({ action: "submission_withdrawn" });
+    const withdrawnBeforeEdit = await repository.getSubmission("tenant_1", ready.id);
+    const withdrawnVersionCountBeforeEdit = repository.versions.length;
+    const withdrawnAuditCountBeforeEdit = repository.audits.length;
+    await expect(
+      service.saveDraft({
+        tenantId: "tenant_1",
+        submissionId: ready.id,
+        ownerAccountId: "account_1",
+        expectedVersion: withdrawn.version,
+        idempotencyKey: "withdrawn-edit",
+        answers: { ...withdrawn.answers, title: "Should not save" },
+        participants: [],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+    expect(await repository.getSubmission("tenant_1", ready.id)).toEqual(withdrawnBeforeEdit);
+    expect(repository.versions).toHaveLength(withdrawnVersionCountBeforeEdit);
+    expect(repository.audits).toHaveLength(withdrawnAuditCountBeforeEdit);
   });
   it("does not let an event organizer reopen a submission from another event", async () => {
     const repository = new MemoryRepository();

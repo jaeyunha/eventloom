@@ -542,9 +542,9 @@ describe("speaker portal view model", () => {
         formId: "devflow-conf-2027-cfp",
       },
     });
-    expect(portalSubmissionActionTargets(context, { ...submission, status: "accepted" })).toEqual(
-      portalSubmissionActionTargets(context, submission),
-    );
+    expect(
+      portalSubmissionActionTargets(context, { ...submission, status: "accepted" }),
+    ).toBeNull();
     expect(
       portalSubmissionActionTargets(context, {
         ...submission,
@@ -553,6 +553,14 @@ describe("speaker portal view model", () => {
     ).toBeNull();
     expect(portalSubmissionActionTargets(context, { ...submission, formId: " " })).toBeNull();
     expect(portalSubmissionEditTarget(context, { ...submission, status: "accepted" })).toBeNull();
+    expect(
+      portalSubmissionEditTarget(context, { ...submission, status: "submitted" }),
+    ).not.toBeNull();
+    expect(
+      portalSubmissionEditTarget(context, { ...submission, status: "under_review" }),
+    ).not.toBeNull();
+    expect(portalSubmissionEditTarget(context, { ...submission, status: "declined" })).toBeNull();
+    expect(portalSubmissionEditTarget(context, { ...submission, status: "withdrawn" })).toBeNull();
   });
 
   it("normalizes biographies and enforces the API text policy", () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { useOrganizerPlanActions } from "./organizer-authoring-plan-actions";
 import type { OrganizerRoundActions } from "./organizer-authoring-round-actions";
+import {
+  prefersAuthoritativePlan,
+  shouldApplyAuthoritativePlan,
+} from "./organizer-organizer-workspace";
 import { reviewPlanClosesAtField } from "./review-temporal-policy";
 
 function unresolvedPlanScope(
@@ -59,4 +63,111 @@ describe("review authoring temporal integrity", () => {
       );
     },
   );
+});
+
+describe("review authoring authoritative identity", () => {
+  it("adopts a lower-version revision while rejecting a stale same-plan seed", () => {
+    expect(
+      prefersAuthoritativePlan(
+        { planId: "plan-original", version: 2 },
+        { planId: "plan-revision", version: 1 },
+      ),
+    ).toBe(true);
+    expect(
+      prefersAuthoritativePlan(
+        { planId: "plan-original", version: 2 },
+        { planId: "plan-original", version: 1 },
+      ),
+    ).toBe(false);
+    expect(
+      shouldApplyAuthoritativePlan({ planId: "plan-revision", version: 1 }, "plan-original", {
+        planId: "plan-original",
+        version: 3,
+      }),
+    ).toBe(false);
+    expect(
+      shouldApplyAuthoritativePlan({ planId: "plan-revision", version: 2 }, "plan-revision", {
+        planId: "plan-revision",
+        version: 1,
+      }),
+    ).toBe(false);
+  });
+});
+describe("review authoring plan identity", () => {
+  it("saves a newly activated draft revision with its own version and scorecards", async () => {
+    const setRounds = vi.fn();
+    const onAuthoritativePlan = vi.fn();
+    const rounds = [
+      {
+        id: "round-first",
+        name: "First round",
+        sequence: 1,
+        opensAt: null,
+        closesAt: null,
+        blindReview: false,
+        rubric: {
+          id: "rubric-first",
+          name: "First rubric",
+          criteria: [{ id: "first-score", label: "First Score", minimum: 1, maximum: 5 }],
+        },
+      },
+      {
+        id: "round-final",
+        name: "Final round",
+        sequence: 2,
+        opensAt: null,
+        closesAt: null,
+        blindReview: false,
+        rubric: {
+          id: "rubric-final",
+          name: "Final rubric",
+          criteria: [{ id: "final-score", label: "Final Score", minimum: 1, maximum: 10 }],
+        },
+      },
+    ];
+    const updated = {
+      id: "plan-revision",
+      eventId: "event-test",
+      name: "Revision",
+      status: "draft",
+      blindReview: false,
+      closesAt: null,
+      assignmentRule: { reviewsPerSubmission: 2, maxAssignmentsPerReviewer: 6 },
+      reviewerProjection: { fieldIds: [], fileIds: [] },
+      rounds,
+      version: 2,
+      createdAt: "2026-08-13T00:00:00.000Z",
+      updatedAt: "2026-08-13T12:00:00.000Z",
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ data: updated }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const actions = useOrganizerPlanActions({
+      ...unresolvedPlanScope(vi.fn()),
+      seed: { planId: "plan-revision" },
+      version: 1,
+      rounds,
+      unresolvedTemporalFields: new Set(),
+      setRounds,
+      onAuthoritativePlan,
+    } as unknown as OrganizerRoundActions);
+
+    await actions.saveDraft();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/admin/evaluations/plans/plan-revision");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      expectedVersion: 1,
+      rounds: [
+        { rubric: { criteria: [{ label: "First Score", minimum: 1, maximum: 5 }] } },
+        { rubric: { criteria: [{ label: "Final Score", minimum: 1, maximum: 10 }] } },
+      ],
+    });
+    expect(setRounds).toHaveBeenCalledWith(rounds);
+    expect(onAuthoritativePlan).toHaveBeenCalledWith(updated);
+    fetchMock.mockRestore();
+  });
 });

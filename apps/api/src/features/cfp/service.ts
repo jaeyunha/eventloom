@@ -2105,11 +2105,20 @@ export class CfpService {
   }
 
   #ensureEditable(submission: Submission, event: EventCfp): void {
-    if (submission.status === "withdrawn") {
-      throw new CfpError("INVALID_TRANSITION", "A withdrawn submission cannot be edited.");
-    }
     if (submission.status === "reopened") {
       return;
+    }
+    if (submission.finalDecisionAt !== undefined) {
+      throw new CfpError(
+        "INVALID_TRANSITION",
+        "A decided submission must be explicitly reopened before it can be edited.",
+      );
+    }
+    if (submission.status !== "draft" && submission.status !== "submitted") {
+      throw new CfpError(
+        "INVALID_TRANSITION",
+        "Only draft, submitted, or explicitly reopened submissions can be edited.",
+      );
     }
     ensureOpen(event, this.#clock.now());
   }

@@ -25,10 +25,10 @@ export function ReviewerQueueRows({
   if (inboxItems.length === 0)
     return (
       <div className={styles.empty} role="status">
-        <h3>No assigned reviews yet</h3>
+        <h3>No active reviews</h3>
         <p>
-          This queue is assignment-driven. An organizer must assign a submission before it appears
-          here.
+          Assignments that remain open for reviewer action appear here. Completed or decided work
+          remains available to organizers in review results.
         </p>
       </div>
     );
