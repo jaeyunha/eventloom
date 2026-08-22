@@ -115,11 +115,7 @@ export function portalSubmissionActionTargets(
     const closeTime = Date.parse(closeAt);
     if (!Number.isFinite(closeTime) || closeTime <= Date.now()) return null;
   }
-  const editableSubmission =
-    submission.status === "accepted"
-      ? { ...submission, status: "submitted" as const, formId }
-      : { ...submission, formId };
-  const editTarget = portalSubmissionEditTarget(context, editableSubmission);
+  const editTarget = portalSubmissionEditTarget(context, { ...submission, formId });
   if (editTarget === null) return null;
   const eventSlug = context.slug?.trim() || context.eventId.trim();
   const organizationId = context.organizationId?.trim() || context.id.split(":")[1]?.trim() || "";

@@ -1873,8 +1873,8 @@ describe("review workspace", () => {
 
     expect(scorecardMarkup).toContain("Assignment abstained");
     expect(scorecardMarkup).not.toContain("Score this submission");
-    expect(queueMarkup).toContain("No assigned reviews yet");
-    expect(queueMarkup).toContain("assignment-driven");
+    expect(queueMarkup).toContain("No active reviews");
+    expect(queueMarkup).toContain("open for reviewer action");
     expect(queueMarkup).not.toContain("Return to organizer workspace");
     expect(queueMarkup).not.toContain("Start review");
   });

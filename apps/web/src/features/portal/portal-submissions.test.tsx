@@ -60,7 +60,7 @@ describe("participant submission regressions", () => {
     expect(markup).not.toContain("550e8400-e29b-41d4-a716-446655440000</h3>");
   });
 
-  it("retains status-appropriate actions after the draft continuation", () => {
+  it("retains submitted editing while keeping accepted proposals read-only", () => {
     const submittedMarkup = renderToStaticMarkup(
       <PortalSubmissionCard
         canEdit
