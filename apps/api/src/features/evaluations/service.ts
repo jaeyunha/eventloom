@@ -1292,8 +1292,28 @@ export class EvaluationService {
       normalizedPreferredPlanId === undefined
         ? undefined
         : plans.find((plan) => plan.id === normalizedPreferredPlanId);
+    const planIdsWithSuccessor = new Set(
+      plans
+        .map((candidate) => candidate.predecessorPlanId)
+        .filter((planId): planId is string => planId != null),
+    );
+    const resumableDraft =
+      normalizedPreferredPlanId === undefined
+        ? [...plans]
+            .filter(
+              (candidate) =>
+                candidate.status === "draft" &&
+                candidate.predecessorPlanId != null &&
+                !planIdsWithSuccessor.has(candidate.id),
+            )
+            .sort(
+              (left, right) =>
+                right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id),
+            )[0]
+        : undefined;
     const plan =
       preferredPlan ??
+      resumableDraft ??
       [...plans].sort(
         (left, right) =>
           (right.status === "open" ? 1 : 0) - (left.status === "open" ? 1 : 0) ||

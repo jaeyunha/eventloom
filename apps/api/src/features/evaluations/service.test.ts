@@ -3542,6 +3542,37 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       version: 2,
       name: "Editable grading revision",
     });
+    await expect(service.getOrganizerWorkspace(organizer, eventId)).resolves.toMatchObject({
+      plan: {
+        id: edited.id,
+        name: "Editable grading revision",
+        status: "draft",
+        version: 2,
+      },
+    });
+    await expect(
+      service.getOrganizerWorkspace(organizer, eventId, reopened.id),
+    ).resolves.toMatchObject({
+      plan: { id: reopened.id, status: "open" },
+    });
+    const leafRevision = {
+      ...edited,
+      id: `${edited.id}-leaf`,
+      predecessorPlanId: edited.id,
+      name: "Leaf grading revision",
+      version: 1,
+      createdAt: "2026-08-10T13:00:00.000Z",
+      updatedAt: "2026-08-10T13:00:00.000Z",
+    };
+    await repository.putPlan(leafRevision, null);
+    await expect(service.getOrganizerWorkspace(organizer, eventId)).resolves.toMatchObject({
+      plan: { id: leafRevision.id, name: "Leaf grading revision", status: "draft", version: 1 },
+    });
+    await expect(
+      service.getOrganizerWorkspace(organizer, eventId, edited.id),
+    ).resolves.toMatchObject({
+      plan: { id: edited.id, name: "Editable grading revision", version: 2 },
+    });
 
     expect(await repository.getPlan(tenantId, reopened.id)).toEqual(reopened);
     expect(await repository.getAssignment(tenantId, assignment.id)).toEqual({
