@@ -63,6 +63,19 @@ export function LoginForm({
   const [magicLinkSent, setMagicLinkSent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const submissionGenerationRef = useRef(0);
+  const submissionBusyRef = useRef(false);
+  function beginSubmission(): number | null {
+    if (submissionBusyRef.current) return null;
+    submissionBusyRef.current = true;
+    const generation = ++submissionGenerationRef.current;
+    setSubmitting(true);
+    return generation;
+  }
+  function finishSubmission(generation: number): void {
+    if (generation !== submissionGenerationRef.current) return;
+    submissionBusyRef.current = false;
+    setSubmitting(false);
+  }
 
   useEffect(() => {
     if (error !== null) errorSummary.current?.focus();
@@ -133,12 +146,13 @@ export function LoginForm({
 
   async function submitOrganizerSignup(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    if (submissionBusyRef.current) return;
     const credentials = validateOrganizerSignup();
     if (credentials === null) return;
 
     clearErrors();
-    const submissionGeneration = ++submissionGenerationRef.current;
-    setSubmitting(true);
+    const submissionGeneration = beginSubmission();
+    if (submissionGeneration === null) return;
     try {
       const signup = await api.signUpWithEmail(credentials);
       setPassword("");
@@ -158,18 +172,19 @@ export function LoginForm({
         setError({ kind: requestError.kind, message: requestError.message });
       }
     } finally {
-      if (submissionGeneration === submissionGenerationRef.current) setSubmitting(false);
+      finishSubmission(submissionGeneration);
     }
   }
 
   async function submitCredentials(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    if (submissionBusyRef.current) return;
     const credentials = validateCredentials();
     if (credentials === null) return;
 
     clearErrors();
-    const submissionGeneration = ++submissionGenerationRef.current;
-    setSubmitting(true);
+    const submissionGeneration = beginSubmission();
+    if (submissionGeneration === null) return;
     try {
       await signInAndRedirect({
         api,
@@ -182,17 +197,18 @@ export function LoginForm({
       setError({ kind: requestError.kind, message: requestError.message });
       return;
     } finally {
-      if (submissionGeneration === submissionGenerationRef.current) setSubmitting(false);
+      finishSubmission(submissionGeneration);
     }
   }
 
   async function submitMagicLink(): Promise<void> {
+    if (submissionBusyRef.current) return;
     const normalizedEmail = validateMagicLinkEmail();
     if (normalizedEmail === null) return;
 
     clearErrors();
-    const submissionGeneration = ++submissionGenerationRef.current;
-    setSubmitting(true);
+    const submissionGeneration = beginSubmission();
+    if (submissionGeneration === null) return;
     try {
       await api.requestMagicLink({
         email: normalizedEmail,
@@ -204,7 +220,7 @@ export function LoginForm({
       setError({ kind: requestError.kind, message: requestError.message });
       return;
     } finally {
-      if (submissionGeneration === submissionGenerationRef.current) setSubmitting(false);
+      finishSubmission(submissionGeneration);
     }
   }
   const isSignup = mode === "sign-up";

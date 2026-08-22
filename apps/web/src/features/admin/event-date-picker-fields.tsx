@@ -192,7 +192,12 @@ function nextModeSelection({
   };
 }
 
-function nextRangeSelection({
+export interface RangeSelectionTransition {
+  readonly selection: EventDateSelectionValue;
+  readonly nextBoundary: "start" | "end";
+}
+
+export function nextRangeSelection({
   activeBoundary,
   date,
   mode,
@@ -214,22 +219,32 @@ function nextRangeSelection({
   readonly dateOnly: boolean;
   readonly defaultStartTime: string;
   readonly defaultEndTime: string;
-}): EventDateSelectionValue {
-  if (activeBoundary === "start") {
-    const nextEndDate = endDate && date <= endDate ? endDate : date;
-    return {
-      mode,
-      startsAt: selectionDateTime(date, timePart(startsAt, defaultStartTime), dateOnly),
-      endsAt: selectionDateTime(nextEndDate, timePart(endsAt, defaultEndTime), dateOnly),
-      scheduleDates: [],
-    };
-  }
-  const nextStartDate = startDate && date >= startDate ? startDate : date;
+}): RangeSelectionTransition {
+  const selection =
+    activeBoundary === "start"
+      ? {
+          mode,
+          startsAt: selectionDateTime(date, timePart(startsAt, defaultStartTime), dateOnly),
+          endsAt: selectionDateTime(
+            endDate && date <= endDate ? endDate : date,
+            timePart(endsAt, defaultEndTime),
+            dateOnly,
+          ),
+          scheduleDates: [],
+        }
+      : {
+          mode,
+          startsAt: selectionDateTime(
+            startDate && date >= startDate ? startDate : date,
+            timePart(startsAt, defaultStartTime),
+            dateOnly,
+          ),
+          endsAt: selectionDateTime(date, timePart(endsAt, defaultEndTime), dateOnly),
+          scheduleDates: [],
+        };
   return {
-    mode,
-    startsAt: selectionDateTime(nextStartDate, timePart(startsAt, defaultStartTime), dateOnly),
-    endsAt: selectionDateTime(date, timePart(endsAt, defaultEndTime), dateOnly),
-    scheduleDates: [],
+    selection,
+    nextBoundary: activeBoundary === "start" ? "end" : "start",
   };
 }
 
@@ -692,6 +707,7 @@ export function EventDatePickerFields({
   function changeMode(nextMode: EventDateMode): void {
     if (nextMode === mode) return;
     resetDisambiguation();
+    setActiveBoundary("start");
     onChange(
       nextModeSelection({
         nextMode,
@@ -744,21 +760,20 @@ export function EventDatePickerFields({
       });
       return;
     }
-    onChange(
-      nextRangeSelection({
-        activeBoundary,
-        date,
-        mode,
-        startsAt,
-        endsAt,
-        startDate,
-        endDate,
-        dateOnly,
-        defaultStartTime,
-        defaultEndTime,
-      }),
-    );
-    setActiveBoundary((boundary) => (boundary === "start" ? "end" : "start"));
+    const nextSelection = nextRangeSelection({
+      activeBoundary,
+      date,
+      mode,
+      startsAt,
+      endsAt,
+      startDate,
+      endDate,
+      dateOnly,
+      defaultStartTime,
+      defaultEndTime,
+    });
+    setActiveBoundary(nextSelection.nextBoundary);
+    onChange(nextSelection.selection);
   }
 
   function updateTime(boundary: "start" | "end", time: string): void {

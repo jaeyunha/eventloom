@@ -9,6 +9,7 @@ export function OrganizerReadonlyPlan({
   controller,
 }: Readonly<{ controller: OrganizerAuthoringController }>) {
   const { name, planClosesAt, rounds, criterionCount, reviewerIdSet } = controller;
+  const { eventTimeZone } = controller.seed;
   return (
     <div className={styles.authoringReadOnly}>
       <section className={styles.authoringPanel} aria-labelledby="plan-overview-heading">
@@ -26,7 +27,7 @@ export function OrganizerReadonlyPlan({
           </div>
           <div>
             <dt>Overall review deadline</dt>
-            <dd>{authoringDateLabel(planClosesAt)}</dd>
+            <dd>{authoringDateLabel(planClosesAt, eventTimeZone)}</dd>
           </div>
           <div>
             <dt>Rounds</dt>
@@ -76,11 +77,11 @@ export function OrganizerReadonlyPlan({
                 <dl className={styles.readOnlyRoundStats}>
                   <div>
                     <dt>Opens</dt>
-                    <dd>{authoringDateLabel(round.opensAt)}</dd>
+                    <dd>{authoringDateLabel(round.opensAt, eventTimeZone)}</dd>
                   </div>
                   <div>
                     <dt>Deadline</dt>
-                    <dd>{authoringDateLabel(round.closesAt)}</dd>
+                    <dd>{authoringDateLabel(round.closesAt, eventTimeZone)}</dd>
                   </div>
                   <div>
                     <dt>Reviewers</dt>

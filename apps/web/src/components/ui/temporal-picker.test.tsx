@@ -97,4 +97,21 @@ describe("TemporalPicker", () => {
     expect(markup).toContain('value="later"');
     expect(markup).toContain('aria-pressed="true"');
   });
+
+  it("keeps the configured timezone date in both the field and summary", () => {
+    const markup = renderToStaticMarkup(
+      createElement(TemporalPicker, {
+        id: "review-local-deadline",
+        mode: "single",
+        precision: "date-time",
+        value: "2026-12-01T07:30:00.000Z",
+        label: "Review deadline",
+        valueTimeZone: "America/Los_Angeles",
+        onChange: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain('value="23:30"');
+    expect(markup).toMatch(/Review deadline<\/span><strong>Nov 30<\/strong>/u);
+  });
 });
