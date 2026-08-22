@@ -66,7 +66,7 @@ export function OrganizerPlanActionsView({
           </div>
           <div>
             <dt>Review deadline</dt>
-            <dd>{authoringDateLabel(planClosesAt)}</dd>
+            <dd>{authoringDateLabel(planClosesAt, eventTimeZone)}</dd>
           </div>
         </dl>
         {status === "open" ? (

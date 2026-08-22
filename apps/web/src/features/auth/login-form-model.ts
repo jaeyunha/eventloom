@@ -10,6 +10,12 @@ const UNVERIFIED_EMAIL_MESSAGE =
 const SERVER_ERROR_MESSAGE = "We couldn't sign you in right now. Try again in a moment.";
 const MAGIC_LINK_ERROR_MESSAGE =
   "We couldn't send a sign-in link right now. Try again in a moment.";
+const RATE_LIMIT_MESSAGE = "Too many sign-in attempts. Wait a moment and try again.";
+const TIMEOUT_MESSAGE =
+  "The sign-in service took too long to respond. Check your connection and try again.";
+const UNEXPECTED_RESPONSE_MESSAGE =
+  "The sign-in service returned an unexpected response. Try again. If it continues, contact an administrator.";
+export const LOGIN_REQUEST_TIMEOUT_MS = 15_000;
 export const ORGANIZER_DOMAIN_ERROR_MESSAGE = "Enter a valid email address.";
 export const SIGNUP_PASSWORD_POLICY_MESSAGE =
   "Use 8–128 characters with an uppercase letter, a number, and a symbol.";
@@ -29,7 +35,10 @@ export type LoginErrorKind =
   | "network"
   | "organization-domain"
   | "invalid-password"
-  | "authentication";
+  | "authentication"
+  | "rate-limit"
+  | "timeout"
+  | "unexpected-response";
 
 export interface LoginEnvironment {
   readonly apiBaseUrl?: string | undefined;
@@ -300,7 +309,55 @@ async function responseBody(response: Response): Promise<unknown> {
   return response.json().catch(() => undefined);
 }
 
+function classifyRequestFailure(
+  response: Response,
+  payload: unknown,
+  fallbackKind: LoginErrorKind,
+  fallbackMessage: string,
+): LoginRequestError {
+  const fields = responseFields(payload);
+  const code = fields.code?.toUpperCase() ?? "";
+  const message = fields.message?.toLowerCase() ?? "";
+  const rateLimited =
+    response.status === 429 ||
+    code.includes("RATE_LIMIT") ||
+    code.includes("TOO_MANY_REQUESTS") ||
+    message.includes("rate limit") ||
+    message.includes("too many request");
+  if (rateLimited) {
+    return new LoginRequestError("rate-limit", RATE_LIMIT_MESSAGE, {
+      status: response.status,
+      code: fields.code,
+    });
+  }
+
+  const timedOut =
+    response.status === 408 ||
+    response.status === 504 ||
+    code.includes("TIMEOUT") ||
+    message.includes("timed out") ||
+    message.includes("gateway deadline");
+  if (timedOut) {
+    return new LoginRequestError("timeout", TIMEOUT_MESSAGE, {
+      status: response.status,
+      code: fields.code,
+    });
+  }
+
+  return new LoginRequestError(fallbackKind, fallbackMessage, {
+    status: response.status,
+    code: fields.code,
+  });
+}
+
 function classifyEmailFailure(response: Response, payload: unknown): LoginRequestError {
+  const transportFailure = classifyRequestFailure(
+    response,
+    payload,
+    "server",
+    SERVER_ERROR_MESSAGE,
+  );
+  if (transportFailure.kind !== "server") return transportFailure;
   const fields = responseFields(payload);
   const code = fields.code?.toUpperCase() ?? "";
   const message = fields.message?.toLowerCase() ?? "";
@@ -326,18 +383,11 @@ function classifyEmailFailure(response: Response, payload: unknown): LoginReques
     });
   }
 
-  return new LoginRequestError("server", SERVER_ERROR_MESSAGE, {
-    status: response.status,
-    code: fields.code,
-  });
+  return classifyRequestFailure(response, payload, "server", SERVER_ERROR_MESSAGE);
 }
 
 function classifyMagicLinkFailure(response: Response, payload: unknown): LoginRequestError {
-  const fields = responseFields(payload);
-  return new LoginRequestError("server", MAGIC_LINK_ERROR_MESSAGE, {
-    status: response.status,
-    code: fields.code,
-  });
+  return classifyRequestFailure(response, payload, "server", MAGIC_LINK_ERROR_MESSAGE);
 }
 
 function hasAuthSession(payload: unknown): boolean {
@@ -355,6 +405,48 @@ function authEndpoint(apiBaseUrl: string): string {
   const normalized = trimTrailingSlash(apiBaseUrl.trim());
   return normalized.endsWith(AUTH_PATH) ? normalized : `${normalized}${AUTH_PATH}`;
 }
+interface LoginResponsePayload {
+  readonly response: Response;
+  readonly payload: unknown;
+}
+
+function loginTimeoutError(): LoginRequestError {
+  return new LoginRequestError("timeout", TIMEOUT_MESSAGE, {
+    status: 504,
+    code: "LOGIN_REQUEST_TIMEOUT",
+  });
+}
+
+async function requestLoginResponse(
+  fetcher: LoginFetcher,
+  input: RequestInfo | URL,
+  init: RequestInit,
+): Promise<LoginResponsePayload> {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeout!: ReturnType<typeof setTimeout>;
+  const request = Promise.resolve().then(async () => {
+    const response = await fetcher(input, { ...init, signal: controller.signal });
+    return { response, payload: await responseBody(response) };
+  });
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(loginTimeoutError());
+    }, LOGIN_REQUEST_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([request, deadline]);
+  } catch (error) {
+    if (timedOut) throw loginTimeoutError();
+    if (error instanceof LoginRequestError) throw error;
+    throw new LoginRequestError("network", NETWORK_ERROR_MESSAGE);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 export function createLoginApi(
   apiBaseUrl: string,
@@ -363,65 +455,54 @@ export function createLoginApi(
   const endpoint = authEndpoint(apiBaseUrl);
   return {
     async signInWithEmail(input) {
-      let response: Response;
-      try {
-        response = await fetcher(`${endpoint}/sign-in/email`, {
+      const { response, payload } = await requestLoginResponse(
+        fetcher,
+        `${endpoint}/sign-in/email`,
+        {
           method: "POST",
           credentials: "include",
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({ email: input.email, password: input.password }),
-        });
-      } catch {
-        throw new LoginRequestError("network", NETWORK_ERROR_MESSAGE);
-      }
-
-      const payload = await responseBody(response);
+        },
+      );
       if (!response.ok) throw classifyEmailFailure(response, payload);
       if (!hasAuthSession(payload)) {
-        throw new LoginRequestError("authentication", AUTHENTICATION_ERROR_MESSAGE, {
+        throw new LoginRequestError("unexpected-response", UNEXPECTED_RESPONSE_MESSAGE, {
           status: response.status,
         });
       }
     },
     async requestMagicLink(input) {
-      let response: Response;
-      try {
-        response = await fetcher(`${endpoint}/sign-in/magic-link`, {
+      const { response, payload } = await requestLoginResponse(
+        fetcher,
+        `${endpoint}/sign-in/magic-link`,
+        {
           method: "POST",
           credentials: "include",
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({ email: input.email, callbackURL: input.callbackURL }),
-        });
-      } catch {
-        throw new LoginRequestError("network", NETWORK_ERROR_MESSAGE);
-      }
-
-      const payload = await responseBody(response);
+        },
+      );
       if (!response.ok) throw classifyMagicLinkFailure(response, payload);
     },
     async getSession() {
-      let response: Response;
-      try {
-        response = await fetcher(`${endpoint}/get-session`, {
-          method: "GET",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-        });
-      } catch {
-        throw new LoginRequestError("network", NETWORK_ERROR_MESSAGE);
-      }
-
-      const payload = await responseBody(response);
+      const { response, payload } = await requestLoginResponse(fetcher, `${endpoint}/get-session`, {
+        method: "GET",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
       if (!response.ok) {
-        throw new LoginRequestError("authentication", AUTHENTICATION_ERROR_MESSAGE, {
-          status: response.status,
-          code: responseFields(payload).code,
-        });
+        throw classifyRequestFailure(
+          response,
+          payload,
+          "authentication",
+          AUTHENTICATION_ERROR_MESSAGE,
+        );
       }
       const session = parseLoginSession(payload);
       if (session === null) {
-        throw new LoginRequestError("authentication", AUTHENTICATION_ERROR_MESSAGE, {
+        throw new LoginRequestError("unexpected-response", UNEXPECTED_RESPONSE_MESSAGE, {
           status: response.status,
         });
       }
@@ -437,19 +518,16 @@ export function createLoginApi(
         throw new LoginRequestError("invalid-password", passwordError);
       }
 
-      let response: Response;
-      try {
-        response = await fetcher(`${endpoint}/sign-up/email`, {
+      const { response, payload } = await requestLoginResponse(
+        fetcher,
+        `${endpoint}/sign-up/email`,
+        {
           method: "POST",
           credentials: "include",
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({ name: input.name, email, password: input.password }),
-        });
-      } catch {
-        throw new LoginRequestError("network", NETWORK_ERROR_MESSAGE);
-      }
-
-      const payload = await responseBody(response);
+        },
+      );
       if (!response.ok) throw classifyEmailFailure(response, payload);
       // A server may issue a session directly on sign-up (local development
       // does); skip the verification interstitial in that case.
@@ -457,7 +535,6 @@ export function createLoginApi(
     },
   };
 }
-
 export function getLoginCallbackUrl(origin: string, returnTo?: string): string {
   return `${trimTrailingSlash(origin.trim())}${explicitSafeLoginReturnTo(returnTo) ?? ADMIN_PATH}`;
 }
@@ -480,5 +557,11 @@ export function failureFromUnknown(
 ): LoginRequestError {
   if (error instanceof LoginRequestError) return error;
   if (error instanceof TypeError) return new LoginRequestError("network", NETWORK_ERROR_MESSAGE);
+  if (
+    (error instanceof DOMException && error.name === "TimeoutError") ||
+    (error instanceof Error && error.name === "TimeoutError")
+  ) {
+    return loginTimeoutError();
+  }
   return new LoginRequestError(fallbackKind, SERVER_ERROR_MESSAGE);
 }

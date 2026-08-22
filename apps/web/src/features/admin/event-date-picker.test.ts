@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { EventDatePicker } from "./event-date-picker";
+import { nextRangeSelection } from "./event-date-picker-fields";
 import { eventDatesBetween, isEventDateDisabled, toggleEventDate } from "./event-date-picker-model";
 
 describe("event date selection", () => {
@@ -80,5 +81,71 @@ describe("event date selection", () => {
     expect(isEventDateDisabled("2026-08-20", "2026-08-16", "2026-08-20", "end")).toBe(true);
     expect(isEventDateDisabled("2026-08-21", "2026-08-16", "2026-08-20", "end")).toBe(false);
     expect(isEventDateDisabled("2026-08-20", "2026-08-16", "2026-08-20", "start")).toBe(false);
+  });
+  it("keeps distinct range endpoints across the controlled selection transition", () => {
+    const first = nextRangeSelection({
+      activeBoundary: "start",
+      date: "2026-11-30",
+      mode: "range",
+      startsAt: "",
+      endsAt: "",
+      startDate: "",
+      endDate: "",
+      dateOnly: false,
+      defaultStartTime: "09:00",
+      defaultEndTime: "17:00",
+    });
+    expect(first.nextBoundary).toBe("end");
+    expect(first.selection.startsAt).toBe("2026-11-30T09:00");
+    expect(first.selection.endsAt).toBe("2026-11-30T17:00");
+
+    const controlledRerender = first.selection;
+    const second = nextRangeSelection({
+      activeBoundary: first.nextBoundary,
+      date: "2026-12-01",
+      mode: controlledRerender.mode,
+      startsAt: controlledRerender.startsAt,
+      endsAt: controlledRerender.endsAt,
+      startDate: controlledRerender.startsAt.slice(0, 10),
+      endDate: controlledRerender.endsAt.slice(0, 10),
+      dateOnly: false,
+      defaultStartTime: "09:00",
+      defaultEndTime: "17:00",
+    });
+    expect(second.selection.startsAt).toBe("2026-11-30T09:00");
+    expect(second.selection.endsAt).toBe("2026-12-01T17:00");
+    expect(second.nextBoundary).toBe("start");
+  });
+
+  it("preserves the opposite endpoint when editing an existing range", () => {
+    const nextStart = nextRangeSelection({
+      activeBoundary: "start",
+      date: "2026-08-21",
+      mode: "range",
+      startsAt: "2026-08-20T09:00",
+      endsAt: "2026-08-24T17:00",
+      startDate: "2026-08-20",
+      endDate: "2026-08-24",
+      dateOnly: false,
+      defaultStartTime: "09:00",
+      defaultEndTime: "17:00",
+    });
+    expect(nextStart.selection.startsAt).toBe("2026-08-21T09:00");
+    expect(nextStart.selection.endsAt).toBe("2026-08-24T17:00");
+
+    const nextEnd = nextRangeSelection({
+      activeBoundary: "end",
+      date: "2026-08-26",
+      mode: "range",
+      startsAt: nextStart.selection.startsAt,
+      endsAt: nextStart.selection.endsAt,
+      startDate: "2026-08-21",
+      endDate: "2026-08-24",
+      dateOnly: false,
+      defaultStartTime: "09:00",
+      defaultEndTime: "17:00",
+    });
+    expect(nextEnd.selection.startsAt).toBe("2026-08-21T09:00");
+    expect(nextEnd.selection.endsAt).toBe("2026-08-26T17:00");
   });
 });

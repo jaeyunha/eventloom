@@ -39,6 +39,7 @@ import {
   reviseEvaluationPlan,
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
+import { authoringDateLabel } from "./workspace/model-authoring-date-label";
 import { ReviewNavigation } from "./workspace/evaluator-queue-review-navigation";
 
 const organizerEventWorkspace = vi.hoisted(() => ({
@@ -56,6 +57,11 @@ vi.mock("@/features/admin/organizer-event-workspace", () => ({
   useOrganizerEventWorkspace: () => organizerEventWorkspace.current,
 }));
 
+it("formats review authoring summaries in the configured event timezone", () => {
+  const localLabel = authoringDateLabel("2026-12-01T07:30:00.000Z", "America/Los_Angeles");
+  expect(localLabel).toContain("Nov 30");
+  expect(localLabel).not.toContain("Dec 1");
+});
 it("derives an active plan closing date from its final round", () => {
   expect(
     effectiveReviewClosesAt({

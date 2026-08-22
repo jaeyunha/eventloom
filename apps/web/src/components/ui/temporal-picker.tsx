@@ -1,7 +1,8 @@
 "use client";
 
-import type { TimeDisambiguation } from "@eventloom/contracts";
+import { formatInstantInTimeZone, type TimeDisambiguation } from "@eventloom/contracts";
 import { EventDatePicker, type EventDateSelectionValue } from "@/features/admin/event-date-picker";
+import { useEffect, useRef } from "react";
 import { useZonedTemporalRange, useZonedTemporalValue } from "./zoned-temporal-value";
 
 interface TemporalPickerBaseProps {
@@ -59,6 +60,9 @@ function pickerDescription(props: TemporalPickerProps): string {
   return props.mode === "single"
     ? "Choose the date and time without leaving this form."
     : "Choose the opening and closing dates, then set their times.";
+}
+function localDateTimeFromInstant(value: string, timeZone: string): string {
+  return value === "" ? "" : formatInstantInTimeZone(value, timeZone).slice(0, 16);
 }
 
 export function TemporalPicker(props: TemporalPickerProps) {
@@ -167,10 +171,26 @@ function ZonedSingleTemporalPicker(
     onChange: props.onChange,
     onValidityChange: props.onValidityChange,
   });
+  const previousExternalValue = useRef({
+    value: props.value,
+    valueTimeZone: props.valueTimeZone,
+  });
+  const externalValueChanged =
+    previousExternalValue.current.value !== props.value ||
+    previousExternalValue.current.valueTimeZone !== props.valueTimeZone;
+  const localValue = externalValueChanged
+    ? localDateTimeFromInstant(props.value, props.valueTimeZone)
+    : zoned.localValue;
+  useEffect(() => {
+    previousExternalValue.current = {
+      value: props.value,
+      valueTimeZone: props.valueTimeZone,
+    };
+  }, [props.value, props.valueTimeZone]);
   return (
     <LocalTemporalPicker
       {...props}
-      value={zoned.localValue}
+      value={localValue}
       timeZone={props.valueTimeZone}
       disambiguation={zoned.disambiguation}
       onChange={zoned.updateDraft}
@@ -190,11 +210,33 @@ function ZonedRangeTemporalPicker(
     onChange: props.onChange,
     onValidityChange: props.onValidityChange,
   });
+  const previousExternalValues = useRef({
+    startValue: props.startValue,
+    endValue: props.endValue,
+    valueTimeZone: props.valueTimeZone,
+  });
+  const externalValuesChanged =
+    previousExternalValues.current.startValue !== props.startValue ||
+    previousExternalValues.current.endValue !== props.endValue ||
+    previousExternalValues.current.valueTimeZone !== props.valueTimeZone;
+  const localValues = externalValuesChanged
+    ? {
+        start: localDateTimeFromInstant(props.startValue, props.valueTimeZone),
+        end: localDateTimeFromInstant(props.endValue, props.valueTimeZone),
+      }
+    : { start: zoned.startLocal, end: zoned.endLocal };
+  useEffect(() => {
+    previousExternalValues.current = {
+      startValue: props.startValue,
+      endValue: props.endValue,
+      valueTimeZone: props.valueTimeZone,
+    };
+  }, [props.startValue, props.endValue, props.valueTimeZone]);
   return (
     <LocalTemporalPicker
       {...props}
-      startValue={zoned.startLocal}
-      endValue={zoned.endLocal}
+      startValue={localValues.start}
+      endValue={localValues.end}
       timeZone={props.valueTimeZone}
       startDisambiguation={zoned.startDisambiguation}
       endDisambiguation={zoned.endDisambiguation}

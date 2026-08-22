@@ -6,6 +6,7 @@ import {
   createLoginApi,
   getLoginCallbackUrl,
   LoginRequestError,
+  LOGIN_REQUEST_TIMEOUT_MS,
   resolveLoginConfig,
   resolveLoginWorkspace,
   safeLoginLandingRoute,
@@ -236,6 +237,70 @@ describe("organizer login", () => {
       expect(failure).toMatchObject({ kind: testCase.kind });
       expect((failure as Error).message.toLowerCase()).toContain(testCase.message);
     }
+  });
+  it("surfaces an unexpected successful response instead of remaining silent", async () => {
+    const api = createLoginApi(API_ORIGIN, (async () =>
+      response(200, { status: true })) as typeof fetch);
+
+    await expect(
+      api.signInWithEmail({ email: "organizer@example.com", password: "Passw0rd!" }),
+    ).rejects.toMatchObject({
+      kind: "unexpected-response",
+      message: expect.stringContaining("unexpected"),
+    });
+  });
+
+  it("surfaces rejected sign-in requests without exposing credentials", async () => {
+    const api = createLoginApi(API_ORIGIN, (async () => {
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch);
+
+    const failure = await api
+      .signInWithEmail({ email: "organizer@example.com", password: "Passw0rd!" })
+      .catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ kind: "network" });
+    expect((failure as Error).message).not.toContain("Passw0rd!");
+  });
+
+  it("surfaces gateway and client deadlines as actionable timeout failures", async () => {
+    const gatewayApi = createLoginApi(API_ORIGIN, (async () =>
+      response(504, { code: "INTEGRATION_UNAVAILABLE" })) as typeof fetch);
+    await expect(
+      gatewayApi.signInWithEmail({ email: "organizer@example.com", password: "Passw0rd!" }),
+    ).rejects.toMatchObject({ kind: "timeout" });
+
+    vi.useFakeTimers();
+    try {
+      const pendingApi = createLoginApi(
+        API_ORIGIN,
+        (() => new Promise<Response>(() => undefined)) as typeof fetch,
+      );
+      const pending = pendingApi.signInWithEmail({
+        email: "organizer@example.com",
+        password: "Passw0rd!",
+      });
+      const failure = expect(pending).rejects.toMatchObject({
+        kind: "timeout",
+        code: "LOGIN_REQUEST_TIMEOUT",
+      });
+      await vi.advanceTimersByTimeAsync(LOGIN_REQUEST_TIMEOUT_MS);
+      await failure;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces rate limits with retry guidance", async () => {
+    const api = createLoginApi(API_ORIGIN, (async () =>
+      response(429, { code: "RATE_LIMITED" })) as typeof fetch);
+
+    await expect(
+      api.signInWithEmail({ email: "organizer@example.com", password: "Passw0rd!" }),
+    ).rejects.toMatchObject({
+      kind: "rate-limit",
+      message: expect.stringContaining("try again"),
+    });
   });
 
   it("redirects only after a credential session is created", async () => {

@@ -22,6 +22,7 @@ type LoginFieldErrors = {
 };
 
 type LoginError = Readonly<{
+  kind: string;
   message: string;
 }>;
 
@@ -256,7 +257,13 @@ function LoginFormFields({
   onPasswordChange,
 }: LoginFormFieldsProps) {
   return (
-    <form className={styles.form} method="post" onSubmit={onSubmit} noValidate>
+    <form
+      className={styles.form}
+      method="post"
+      onSubmit={onSubmit}
+      noValidate
+      aria-busy={submitting}
+    >
       {isSignup ? (
         <div className={styles.field}>
           <Label htmlFor="login-name">Name</Label>
@@ -338,6 +345,7 @@ function LoginFormFields({
         <div
           className={styles.alert}
           id="login-error"
+          data-login-error-kind={error.kind}
           role="alert"
           aria-live="assertive"
           tabIndex={-1}
@@ -348,6 +356,16 @@ function LoginFormFields({
             <AlertDescription>{error.message}</AlertDescription>
           </Alert>
         </div>
+      ) : null}
+      {submitting ? (
+        <p
+          className={styles.fieldHint}
+          data-login-status="pending"
+          role="status"
+          aria-live="polite"
+        >
+          {isSignup ? "Creating your account…" : "Signing you in…"}
+        </p>
       ) : null}
 
       <Button
